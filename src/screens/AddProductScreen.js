@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image } from 'react-native';
 import { supabase } from '../services/supabase';
+import * as ImagePicker from 'expo-image-picker';
 
 export default function AddProductScreen({ navigation, route }) {
     const productToEdit = route.params?.product;
 
     const [loading, setLoading] = useState(false);
+    const [image, setImage] = useState(null);
     const [formData, setFormData] = useState({
         name: '',
         description: '',
@@ -50,6 +52,9 @@ export default function AddProductScreen({ navigation, route }) {
                 current_stock: productToEdit.current_stock?.toString() || '',
                 defect_notes: productToEdit.defect_notes || ''
             });
+            if (productToEdit.image_url) {
+                setImage(productToEdit.image_url);
+            }
         }
     }, [productToEdit]);
 
@@ -57,14 +62,100 @@ export default function AddProductScreen({ navigation, route }) {
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
+    const pickImage = async () => {
+        let result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [4, 3],
+            quality: 0.5,
+        });
+
+        if (!result.canceled) {
+            setImage(result.assets[0].uri);
+        }
+    };
+
+    const uploadImage = async (uri) => {
+        try {
+            const filename = uri.split('/').pop();
+            const ext = filename.split('.').pop();
+            const path = `${Date.now()}.${ext}`;
+
+            const formData = new FormData();
+            formData.append('file', {
+                uri,
+                name: filename,
+                type: `image/${ext}`
+            });
+
+            // 1. Attempt Upload
+            let { data, error } = await supabase.storage
+                .from('product-images')
+                .upload(path, formData, {
+                    contentType: `image/${ext}`,
+                });
+
+            // 2. If Bucket not found, Try to Create it
+            if (error && error.message.includes('Bucket not found')) {
+                console.log('Bucket missing. Attempting to create "product-images"...');
+                const { error: createError } = await supabase.storage.createBucket('product-images', { public: true });
+
+                if (createError) {
+                    console.log('Failed to auto-create bucket:', createError);
+                    throw new Error('No existe el bucket "product-images" y no tengo permisos para crearlo. Ejecuta el script SQL.');
+                }
+
+                // Retry Upload
+                const retry = await supabase.storage
+                    .from('product-images')
+                    .upload(path, formData, {
+                        contentType: `image/${ext}`,
+                    });
+                data = retry.data;
+                error = retry.error;
+            }
+
+            if (error) {
+                console.log('Upload final error:', error);
+                throw new Error(error.message || 'Error al subir imagen');
+            }
+
+            const { data: publicUrlData } = supabase.storage
+                .from('product-images')
+                .getPublicUrl(path);
+
+            return publicUrlData.publicUrl;
+        } catch (error) {
+            console.log('Image upload failed:', error);
+            Alert.alert('Error Subida', error.message);
+            return null;
+        }
+    };
+
     const saveProduct = async () => {
         if (!formData.name || !formData.sale_price) {
-            Alert.alert('Eror', 'El nombre y el precio de venta son obligatorios.');
+            Alert.alert('Error', 'El nombre y el precio de venta son obligatorios.');
             return;
         }
 
         setLoading(true);
         try {
+            let finalImageUrl = image;
+
+            // If image is local URI (not http), upload it
+            if (image && !image.startsWith('http')) {
+                const uploadedUrl = await uploadImage(image);
+                if (uploadedUrl) {
+                    finalImageUrl = uploadedUrl;
+                } else {
+                    Alert.alert('Advertencia', 'No se pudo subir la imagen. Se guardará sin foto nueva.');
+                    // If we were editing and had an old image, decide whether to keep it or null. 
+                    // If image is local uri and upload fail, we probably shouldn't save the local uri to DB.
+                    // For now, let's just keep the old one if exists or null.
+                    finalImageUrl = productToEdit?.image_url || null;
+                }
+            }
+
             const productPayload = {
                 name: formData.name,
                 description: formData.description,
@@ -73,7 +164,8 @@ export default function AddProductScreen({ navigation, route }) {
                 profit_margin_percent: parseFloat(formData.profit_margin_percent) || 0,
                 sale_price: parseFloat(formData.sale_price) || 0,
                 current_stock: parseInt(formData.current_stock) || 0,
-                defect_notes: formData.defect_notes
+                defect_notes: formData.defect_notes,
+                image_url: finalImageUrl
             };
 
             let error;
@@ -99,15 +191,83 @@ export default function AddProductScreen({ navigation, route }) {
         } catch (err) {
             console.log('Error saving product:', err);
             // Fallback for development (If no Supabase keys)
-            Alert.alert('Info', 'Modo offline simulado: Producto validado (Falta conexión real)');
-            navigation.goBack();
+            Alert.alert('Error', 'Hubo un error al guardar. Revisa la consola/conexión.');
+            // navigation.goBack(); // Don't go back on error
         } finally {
             setLoading(false);
         }
     };
 
+    const handleDelete = async () => {
+        Alert.alert(
+            'Eliminar Producto',
+            '¿Estás seguro de que quieres eliminar este producto? Esta acción no se puede deshacer.',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Eliminar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            // 1. Try Hard Delete (Cleanest, if no history)
+                            const { error: deleteError } = await supabase
+                                .from('products')
+                                .delete()
+                                .eq('id', productToEdit.id);
+
+                            if (deleteError) {
+                                // 2. If Foreign Key Constraint (Has sales history), fallback to Soft Delete (Archive)
+                                if (deleteError.message.includes('foreign key constraint')) {
+                                    console.log('Product has history, attempting soft delete (archive)...');
+
+                                    const { error: softError } = await supabase
+                                        .from('products')
+                                        .update({ active: false })
+                                        .eq('id', productToEdit.id);
+
+                                    if (softError) {
+                                        // If soft delete fails (e.g. column missing), throw original or new error
+                                        if (softError.message.includes('column "active" does not exist')) {
+                                            throw new Error('Falta ejecutar el script de migración MIGRATE_SOFT_DELETE.sql para habilitar el archivado.');
+                                        }
+                                        throw softError;
+                                    }
+
+                                    Alert.alert('Archivado', 'El producto tiene ventas registradas, así que se ha archivado para conservar el historial.');
+                                } else {
+                                    throw deleteError;
+                                }
+                            } else {
+                                Alert.alert('Éxito', 'Producto eliminado correctamente');
+                            }
+
+                            navigation.goBack();
+                        } catch (err) {
+                            console.log('Error deleting product:', err);
+                            Alert.alert('Error', 'No se pudo eliminar: ' + (err.message || err.toString()));
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     return (
         <ScrollView style={styles.container}>
+            {/* ... existing fields ... */}
+            <TouchableOpacity onPress={pickImage} style={styles.imagePicker}>
+                {image ? (
+                    <Image source={{ uri: image }} style={styles.imagePreview} />
+                ) : (
+                    <View style={styles.imagePlaceholder}>
+                        <Text style={styles.imagePlaceholderText}>+ FOTO</Text>
+                    </View>
+                )}
+            </TouchableOpacity>
+
             <Text style={styles.label}>Nombre del Producto *</Text>
             <TextInput
                 style={styles.input}
@@ -143,7 +303,7 @@ export default function AddProductScreen({ navigation, route }) {
             <TextInput
                 style={[styles.input, styles.readOnly]}
                 value={formData.sale_price}
-                editable={false} // User can override if needed? For now, auto-calc strictly.
+                editable={false}
                 placeholder="0.00"
             />
 
@@ -197,9 +357,19 @@ export default function AddProductScreen({ navigation, route }) {
                 {loading ? (
                     <ActivityIndicator color="white" />
                 ) : (
-                    <Text style={styles.saveButtonText}>Guardar Producto</Text>
+                    <Text style={styles.saveButtonText}>{productToEdit ? 'Actualizar Producto' : 'Guardar Producto'}</Text>
                 )}
             </TouchableOpacity>
+
+            {productToEdit && (
+                <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={handleDelete}
+                    disabled={loading}
+                >
+                    <Text style={styles.deleteButtonText}>Eliminar Producto</Text>
+                </TouchableOpacity>
+            )}
         </ScrollView>
     );
 }
@@ -238,4 +408,43 @@ const styles = StyleSheet.create({
         elevation: 3,
     },
     saveButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
+
+    // Image Picker Styles
+    imagePicker: {
+        alignSelf: 'center',
+        width: 120,
+        height: 120,
+        backgroundColor: '#e1e1e1',
+        borderRadius: 60,
+        justifyContent: 'center',
+        alignItems: 'center',
+        overflow: 'hidden',
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#ccc'
+    },
+    imagePreview: {
+        width: '100%',
+        height: '100%',
+    },
+    imagePlaceholder: {
+        justifyContent: 'center',
+        alignItems: 'center'
+    },
+    imagePlaceholderText: {
+        color: '#666',
+        fontWeight: 'bold'
+    },
+    deleteButton: {
+        backgroundColor: '#e74c3c', // Red
+        padding: 15,
+        borderRadius: 8,
+        alignItems: 'center',
+        marginBottom: 80, // Extra space at bottom
+        shadowColor: '#000',
+        shadowOpacity: 0.2,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 3,
+    },
+    deleteButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' }
 });

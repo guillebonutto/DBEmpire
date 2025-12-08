@@ -5,19 +5,22 @@ import { supabase } from '../services/supabase';
 
 export default function ClientsScreen() {
     const [clients, setClients] = useState([]);
+    const [filteredClients, setFilteredClients] = useState([]);
     const [loading, setLoading] = useState(false);
     const [modalVisible, setModalVisible] = useState(false);
     const [newClient, setNewClient] = useState({ name: '', phone: '', notes: '' });
+    const [searchQuery, setSearchQuery] = useState('');
 
     const fetchClients = async () => {
         setLoading(true);
-        // Mock data for dev if no keys
-        // setClients([{ id: 1, name: 'Juan Perez', phone: '555-1234', notes: 'Cliente frecuente' }]); 
 
         try {
             const { data, error } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
             if (error) throw error;
-            if (data) setClients(data);
+            if (data) {
+                setClients(data);
+                setFilteredClients(data);
+            }
         } catch (err) {
             console.log('Error fetching clients:', err);
         } finally {
@@ -44,15 +47,42 @@ export default function ClientsScreen() {
         fetchClients();
     }, []);
 
+    // Filter logic
+    useEffect(() => {
+        if (searchQuery) {
+            const filtered = clients.filter(c =>
+                c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                (c.phone && c.phone.includes(searchQuery))
+            );
+            setFilteredClients(filtered);
+        } else {
+            setFilteredClients(clients);
+        }
+    }, [searchQuery, clients]);
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
-            <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
-                <Text style={styles.addButtonText}>+ Agregar Cliente</Text>
-            </TouchableOpacity>
+            <View style={styles.header}>
+                <Text style={styles.title}>CLIENTES</Text>
+                <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
+                    <Text style={styles.addButtonText}>+ AGREGAR</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Search Bar */}
+            <View style={styles.searchContainer}>
+                <TextInput
+                    style={styles.searchInput}
+                    placeholder="Buscar cliente (Nombre/Tel)..."
+                    placeholderTextColor="#888"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                />
+            </View>
 
             <FlatList
-                data={clients}
+                data={filteredClients}
                 keyExtractor={(item) => item.id.toString()}
                 renderItem={({ item }) => (
                     <View style={styles.card}>
@@ -61,7 +91,7 @@ export default function ClientsScreen() {
                         <Text style={styles.notes}>{item.notes}</Text>
                     </View>
                 )}
-                ListEmptyComponent={<Text style={styles.empty}>No hay clientes registrados.</Text>}
+                ListEmptyComponent={<Text style={styles.empty}>{searchQuery ? 'Sin resultados.' : 'No hay clientes registrados.'}</Text>}
             />
 
             <Modal visible={modalVisible} animationType="slide" transparent>
@@ -70,18 +100,21 @@ export default function ClientsScreen() {
                     <TextInput
                         style={styles.input}
                         placeholder="Nombre"
+                        placeholderTextColor="#666"
                         value={newClient.name}
                         onChangeText={(t) => setNewClient({ ...newClient, name: t })}
                     />
                     <TextInput
                         style={styles.input}
                         placeholder="Teléfono"
+                        placeholderTextColor="#666"
                         value={newClient.phone}
                         onChangeText={(t) => setNewClient({ ...newClient, phone: t })}
                     />
                     <TextInput
                         style={styles.input}
                         placeholder="Notas (Preferencias, etc)"
+                        placeholderTextColor="#666"
                         value={newClient.notes}
                         onChangeText={(t) => setNewClient({ ...newClient, notes: t })}
                     />
@@ -96,12 +129,17 @@ export default function ClientsScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, padding: 20, backgroundColor: '#000000' },
+    container: { flex: 1, backgroundColor: '#000000' },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20 },
+    title: { fontSize: 20, fontWeight: 'bold', color: '#d4af37' },
 
-    addButton: { backgroundColor: '#d4af37', padding: 15, borderRadius: 12, alignItems: 'center', marginBottom: 20, shadowColor: '#d4af37', shadowOpacity: 0.3, elevation: 5 },
-    addButtonText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
+    addButton: { backgroundColor: '#d4af37', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
+    addButtonText: { color: 'black', fontWeight: '900', fontSize: 14, letterSpacing: 1 },
 
-    card: { backgroundColor: '#1e1e1e', padding: 20, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
+    searchContainer: { paddingHorizontal: 20, paddingBottom: 10 },
+    searchInput: { backgroundColor: '#222', color: '#fff', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#333' },
+
+    card: { backgroundColor: '#1e1e1e', padding: 20, marginHorizontal: 20, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
     name: { fontSize: 18, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
     info: { color: '#d4af37', fontWeight: '600' },
     notes: { fontStyle: 'italic', color: '#888', marginTop: 8, fontSize: 12 },

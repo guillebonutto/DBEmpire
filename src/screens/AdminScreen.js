@@ -13,7 +13,14 @@ export default function AdminScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
     const [salesData, setSalesData] = useState({ labels: [], data: [] });
     const [productData, setProductData] = useState([]);
-    const [stats, setStats] = useState({ totalSales: 0, totalProfit: 0, totalCommissions: 0, sellerCount: 0 });
+    const [stats, setStats] = useState({
+        totalSales: 0,
+        totalProfit: 0,
+        totalCommissions: 0,
+        totalExpenses: 0,
+        netProfit: 0,
+        sellerCount: 0
+    });
     const [dateFilter, setDateFilter] = useState('month'); // 'week', 'month', 'year'
 
     useEffect(() => {
@@ -53,23 +60,26 @@ export default function AdminScreen({ navigation }) {
                 .gte('created_at', startDate.toISOString())
                 .order('created_at', { ascending: false });
 
-            // Fetch sale items with products for pie chart
-            // Get sale IDs from filtered sales
-            const saleIds = sales?.map(s => s.id) || [];
+            // Fetch expenses with date filter
+            const { data: expenses } = await supabase
+                .from('expenses')
+                .select('amount, created_at')
+                .gte('date', startDate.toISOString());
 
+            // Fetch sale items with products for pie chart
+            const saleIds = sales?.map(s => s.id) || [];
             let saleItems = [];
             if (saleIds.length > 0) {
                 const { data } = await supabase
                     .from('sale_items')
                     .select('quantity, products(name)')
                     .in('sale_id', saleIds);
-
                 saleItems = data || [];
             }
 
             if (sales) {
                 processChartData(sales);
-                calculateStats(sales);
+                calculateStats(sales, expenses || []);
             }
 
             if (saleItems.length > 0) {
@@ -113,12 +123,23 @@ export default function AdminScreen({ navigation }) {
         });
     };
 
-    const calculateStats = (sales) => {
+    const calculateStats = (sales, expenses) => {
         const totalSales = sales.reduce((sum, s) => sum + s.total_amount, 0);
-        const totalProfit = sales.reduce((sum, s) => sum + s.profit_generated, 0);
+        const grossProfit = sales.reduce((sum, s) => sum + s.profit_generated, 0);
         const totalCommissions = sales.reduce((sum, s) => sum + (s.commission_amount || 0), 0);
+        const totalExpenses = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
 
-        setStats({ totalSales, totalProfit, totalCommissions, sellerCount: 1 }); // Placeholder seller count
+        // Net Profit = Gross Profit - Commissions - Expenses
+        const netProfit = grossProfit - totalCommissions - totalExpenses;
+
+        setStats({
+            totalSales,
+            totalProfit: grossProfit,
+            totalCommissions,
+            totalExpenses,
+            netProfit,
+            sellerCount: 1
+        });
     };
 
     const processProductData = (saleItems) => {
@@ -189,7 +210,9 @@ export default function AdminScreen({ navigation }) {
                         <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>PANEL DE CONTROL</Text>
-                    <View style={{ width: 40 }} />
+                    <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={styles.expenseBtn}>
+                        <MaterialCommunityIcons name="cash-minus" size={24} color="#d4af37" />
+                    </TouchableOpacity>
                 </View>
             </LinearGradient>
 
@@ -219,27 +242,29 @@ export default function AdminScreen({ navigation }) {
                 {/* Stats Cards */}
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="cash-multiple" size={32} color="#d4af37" />
+                        <MaterialCommunityIcons name="cash-multiple" size={28} color="#d4af37" />
                         <Text style={styles.statValue}>${stats.totalSales.toFixed(0)}</Text>
-                        <Text style={styles.statLabel}>Ventas Totales</Text>
+                        <Text style={styles.statLabel}>Ventas</Text>
                     </View>
                     <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="trending-up" size={32} color="#2ecc71" />
+                        <MaterialCommunityIcons name="currency-usd" size={28} color="#2ecc71" />
                         <Text style={styles.statValue}>${stats.totalProfit.toFixed(0)}</Text>
-                        <Text style={styles.statLabel}>Ganancia Total</Text>
+                        <Text style={styles.statLabel}>Ganancia Bruta</Text>
                     </View>
                 </View>
 
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="account-cash" size={32} color="#e74c3c" />
-                        <Text style={styles.statValue}>${stats.totalCommissions.toFixed(0)}</Text>
-                        <Text style={styles.statLabel}>Comisiones Pagadas</Text>
+                        <MaterialCommunityIcons name="cash-minus" size={28} color="#e74c3c" />
+                        <Text style={styles.statValue}>${stats.totalExpenses.toFixed(0)}</Text>
+                        <Text style={styles.statLabel}>Gastos Operativos</Text>
                     </View>
-                    <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="account-group" size={32} color="#a29bfe" />
-                        <Text style={styles.statValue}>{stats.sellerCount}</Text>
-                        <Text style={styles.statLabel}>Vendedores</Text>
+                    <View style={[styles.statCard, { borderColor: '#d4af37' }]}>
+                        <MaterialCommunityIcons name="scale-balance" size={28} color="#fff" />
+                        <Text style={[styles.statValue, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
+                            ${stats.netProfit.toFixed(0)}
+                        </Text>
+                        <Text style={styles.statLabel}>Ganancia Neta</Text>
                     </View>
                 </View>
 
@@ -326,23 +351,6 @@ export default function AdminScreen({ navigation }) {
                     </TouchableOpacity>
                 </View>
 
-                {/* Team Info */}
-                <View style={styles.teamCard}>
-                    <Text style={styles.sectionTitle}>EQUIPO DE VENTAS</Text>
-                    <View style={styles.teamMember}>
-                        <View style={styles.avatar}>
-                            <MaterialCommunityIcons name="account" size={24} color="black" />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.memberName}>NICO A LA ALIANZA</Text>
-                            <Text style={styles.memberRole}>Vendedor Principal</Text>
-                        </View>
-                        <View style={styles.memberStats}>
-                            <Text style={styles.memberSales}>${stats.totalSales.toFixed(0)}</Text>
-                            <Text style={styles.memberLabel}>en ventas</Text>
-                        </View>
-                    </View>
-                </View>
             </ScrollView>
         </SafeAreaView>
     );
@@ -355,6 +363,7 @@ const styles = StyleSheet.create({
     headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     headerTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 2 },
     backBtn: { padding: 5 },
+    expenseBtn: { padding: 5 },
 
     scrollView: { flex: 1 },
     content: { padding: 20, paddingBottom: 40 },
@@ -382,13 +391,4 @@ const styles = StyleSheet.create({
     inputSuffix: { fontSize: 24, fontWeight: 'bold', color: '#d4af37', marginLeft: 10 },
     saveButton: { backgroundColor: '#d4af37', padding: 18, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
     saveButtonText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
-
-    teamCard: { backgroundColor: '#1e1e1e', padding: 20, borderRadius: 15, borderWidth: 1, borderColor: '#333' },
-    teamMember: { flexDirection: 'row', alignItems: 'center', gap: 15 },
-    avatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center' },
-    memberName: { fontSize: 16, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
-    memberRole: { fontSize: 12, color: '#888' },
-    memberStats: { alignItems: 'flex-end' },
-    memberSales: { fontSize: 18, fontWeight: 'bold', color: '#2ecc71' },
-    memberLabel: { fontSize: 10, color: '#666', marginTop: 2 }
 });

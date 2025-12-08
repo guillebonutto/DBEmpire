@@ -10,6 +10,7 @@ import NewSaleScreen from '../screens/NewSaleScreen';
 import PromotionsScreen from '../screens/PromotionsScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import AdminScreen from '../screens/AdminScreen';
+import ExpensesScreen from '../screens/ExpensesScreen';
 
 const Stack = createStackNavigator();
 
@@ -64,6 +65,11 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="Admin"
                 component={AdminScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Expenses"
+                component={ExpensesScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>
