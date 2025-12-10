@@ -201,7 +201,7 @@ export default function AddProductScreen({ navigation, route }) {
     const handleDelete = async () => {
         Alert.alert(
             'Eliminar Producto',
-            '¿Estás seguro de que quieres eliminar este producto? Esta acción no se puede deshacer.',
+            '¿Estás seguro de que quieres eliminar este producto?',
             [
                 { text: 'Cancelar', style: 'cancel' },
                 {
@@ -210,42 +210,40 @@ export default function AddProductScreen({ navigation, route }) {
                     onPress: async () => {
                         setLoading(true);
                         try {
-                            // 1. Try Hard Delete (Cleanest, if no history)
                             const { error: deleteError } = await supabase
                                 .from('products')
                                 .delete()
                                 .eq('id', productToEdit.id);
 
                             if (deleteError) {
-                                // 2. If Foreign Key Constraint (Has sales history), fallback to Soft Delete (Archive)
-                                if (deleteError.message.includes('foreign key constraint')) {
-                                    console.log('Product has history, attempting soft delete (archive)...');
-
-                                    const { error: softError } = await supabase
+                                // If product has sales history, archive it instead
+                                if (deleteError.message.includes('foreign key constraint') ||
+                                    deleteError.code === '23503') {
+                                    const { error: archiveError } = await supabase
                                         .from('products')
                                         .update({ active: false })
                                         .eq('id', productToEdit.id);
 
-                                    if (softError) {
-                                        // If soft delete fails (e.g. column missing), throw original or new error
-                                        if (softError.message.includes('column "active" does not exist')) {
-                                            throw new Error('Falta ejecutar el script de migración MIGRATE_SOFT_DELETE.sql para habilitar el archivado.');
-                                        }
-                                        throw softError;
+                                    if (archiveError) {
+                                        throw archiveError;
                                     }
 
-                                    Alert.alert('Archivado', 'El producto tiene ventas registradas, así que se ha archivado para conservar el historial.');
+                                    Alert.alert(
+                                        'Producto Archivado',
+                                        'Este producto tiene ventas registradas, por lo que se ha archivado para mantener el historial. Ya no aparecerá en el inventario.',
+                                        [{ text: 'Entendido' }]
+                                    );
+                                    navigation.goBack();
                                 } else {
                                     throw deleteError;
                                 }
                             } else {
                                 Alert.alert('Éxito', 'Producto eliminado correctamente');
+                                navigation.goBack();
                             }
-
-                            navigation.goBack();
                         } catch (err) {
                             console.log('Error deleting product:', err);
-                            Alert.alert('Error', 'No se pudo eliminar: ' + (err.message || err.toString()));
+                            Alert.alert('Error', 'No se pudo eliminar el producto');
                         } finally {
                             setLoading(false);
                         }
@@ -361,15 +359,6 @@ export default function AddProductScreen({ navigation, route }) {
                 )}
             </TouchableOpacity>
 
-            {productToEdit && (
-                <TouchableOpacity
-                    style={styles.deleteButton}
-                    onPress={handleDelete}
-                    disabled={loading}
-                >
-                    <Text style={styles.deleteButtonText}>Eliminar Producto</Text>
-                </TouchableOpacity>
-            )}
         </ScrollView>
     );
 }

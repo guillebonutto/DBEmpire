@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, StatusBar, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
-// import { Ionicons } from '@expo/vector-icons'; // Unused, removing to prevent issues
 
-const EXPENSE_CATEGORIES = ['General', 'Rent', 'Utilities', 'Marketing', 'Inventory', 'Salaries', 'Other'];
+const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Otro'];
 
 export default function ExpensesScreen({ navigation }) {
     const [expenses, setExpenses] = useState([]);
@@ -23,14 +24,13 @@ export default function ExpensesScreen({ navigation }) {
             const { data, error } = await supabase
                 .from('expenses')
                 .select('*')
-                .order('date', { ascending: false })
+                .order('created_at', { ascending: false })
                 .limit(50);
 
             if (error) throw error;
             setExpenses(data || []);
         } catch (error) {
-            console.log('Error fetching expenses:', error.message);
-            // Alert.alert('Error', 'Could not fetch expenses.');
+            console.log('Error al cargar gastos:', error.message);
         } finally {
             setLoading(false);
         }
@@ -44,7 +44,13 @@ export default function ExpensesScreen({ navigation }) {
 
     const handleAddExpense = async () => {
         if (!description || !amount) {
-            Alert.alert('Error', 'Description and Amount are required.');
+            Alert.alert('Error', 'La descripción y el monto son obligatorios');
+            return;
+        }
+
+        const numAmount = parseFloat(amount);
+        if (isNaN(numAmount) || numAmount <= 0) {
+            Alert.alert('Error', 'Ingresa un monto válido');
             return;
         }
 
@@ -52,23 +58,22 @@ export default function ExpensesScreen({ navigation }) {
         try {
             const { error } = await supabase
                 .from('expenses')
-                .insert([{
-                    description,
-                    amount: parseFloat(amount),
-                    category,
-                    date: new Date().toISOString()
-                }]);
+                .insert({
+                    description: description.trim(),
+                    amount: numAmount,
+                    category
+                });
 
             if (error) throw error;
 
-            Alert.alert('Success', 'Expense registered.');
+            Alert.alert('✅ Éxito', 'Gasto registrado correctamente');
             setDescription('');
             setAmount('');
             setCategory('General');
-            fetchExpenses(); // Refresh list
+            fetchExpenses();
         } catch (error) {
-            console.log('Error adding expense:', error);
-            Alert.alert('Error', 'Could not save expense.');
+            console.log('Error al agregar gasto:', error);
+            Alert.alert('Error', 'No se pudo guardar el gasto: ' + error.message);
         } finally {
             setAdding(false);
         }
@@ -76,12 +81,12 @@ export default function ExpensesScreen({ navigation }) {
 
     const handleDelete = async (id) => {
         Alert.alert(
-            'Confirm Delete',
-            'Are you sure you want to delete this expense?',
+            'Confirmar Eliminación',
+            '¿Estás seguro de que quieres eliminar este gasto?',
             [
-                { text: 'Cancel', style: 'cancel' },
+                { text: 'Cancelar', style: 'cancel' },
                 {
-                    text: 'Delete',
+                    text: 'Eliminar',
                     style: 'destructive',
                     onPress: async () => {
                         try {
@@ -89,7 +94,7 @@ export default function ExpensesScreen({ navigation }) {
                             if (error) throw error;
                             fetchExpenses();
                         } catch (err) {
-                            Alert.alert('Error', 'Could not delete expense');
+                            Alert.alert('Error', 'No se pudo eliminar el gasto');
                         }
                     }
                 }
@@ -101,14 +106,16 @@ export default function ExpensesScreen({ navigation }) {
         <View style={styles.card}>
             <View style={styles.cardHeader}>
                 <Text style={styles.categoryBadge}>{item.category}</Text>
-                <Text style={styles.dateText}>{new Date(item.date).toLocaleDateString()}</Text>
+                <Text style={styles.dateText}>
+                    {new Date(item.created_at).toLocaleDateString('es-ES')}
+                </Text>
             </View>
             <View style={styles.cardBody}>
                 <Text style={styles.description}>{item.description}</Text>
-                <Text style={styles.amount}>- ${parseFloat(item.amount).toFixed(2)}</Text>
+                <Text style={styles.amount}>-${parseFloat(item.amount).toFixed(2)}</Text>
             </View>
             <TouchableOpacity style={styles.deleteButton} onPress={() => handleDelete(item.id)}>
-                <Text style={styles.deleteText}>Delete</Text>
+                <Text style={styles.deleteText}>Eliminar</Text>
             </TouchableOpacity>
         </View>
     );
@@ -116,18 +123,21 @@ export default function ExpensesScreen({ navigation }) {
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
-            <View style={styles.header}>
+
+            {/* Header */}
+            <LinearGradient colors={['#000000', '#1a1a1a']} style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                    <Text style={styles.backButtonText}>← Back</Text>
+                    <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>EXPENSES</Text>
-            </View>
+                <Text style={styles.headerTitle}>GASTOS</Text>
+                <View style={{ width: 40 }} />
+            </LinearGradient>
 
             <View style={styles.formContainer}>
-                <Text style={styles.sectionTitle}>New Expense</Text>
+                <Text style={styles.sectionTitle}>Nuevo Gasto</Text>
                 <TextInput
                     style={styles.input}
-                    placeholder="Description (e.g. Internet Bill)"
+                    placeholder="Descripción (ej. Factura de Internet)"
                     placeholderTextColor="#666"
                     value={description}
                     onChangeText={setDescription}
@@ -135,20 +145,20 @@ export default function ExpensesScreen({ navigation }) {
                 <View style={styles.row}>
                     <TextInput
                         style={[styles.input, { flex: 1, marginRight: 10 }]}
-                        placeholder="Amount ($)"
+                        placeholder="Monto ($)"
                         placeholderTextColor="#666"
                         keyboardType="numeric"
                         value={amount}
                         onChangeText={setAmount}
                     />
-                    {/* Simple Category Selector for now */}
                     <TouchableOpacity style={styles.categorySelector}>
                         <Text style={styles.categoryText}>{category}</Text>
                     </TouchableOpacity>
                 </View>
+
                 {/* Category Pills */}
                 <View style={styles.categoryList}>
-                    {EXPENSE_CATEGORIES.map(cat => (
+                    {CATEGORIAS_GASTOS.map(cat => (
                         <TouchableOpacity
                             key={cat}
                             style={[styles.catPill, category === cat && styles.catPillActive]}
@@ -164,7 +174,7 @@ export default function ExpensesScreen({ navigation }) {
                     onPress={handleAddExpense}
                     disabled={adding}
                 >
-                    {adding ? <ActivityIndicator color="#000" /> : <Text style={styles.addButtonText}>ADD EXPENSE</Text>}
+                    {adding ? <ActivityIndicator color="#000" /> : <Text style={styles.addButtonText}>AGREGAR GASTO</Text>}
                 </TouchableOpacity>
             </View>
 
@@ -173,7 +183,8 @@ export default function ExpensesScreen({ navigation }) {
                 keyExtractor={item => item.id}
                 renderItem={renderItem}
                 contentContainerStyle={styles.listContent}
-                ListHeaderComponent={<Text style={styles.listTitle}>Recent History</Text>}
+                ListHeaderComponent={<Text style={styles.listTitle}>Historial Reciente</Text>}
+                ListEmptyComponent={<Text style={styles.emptyText}>No hay gastos registrados</Text>}
                 refreshControl={
                     <RefreshControl refreshing={loading} onRefresh={fetchExpenses} tintColor="#d4af37" colors={['#d4af37']} />
                 }
@@ -187,61 +198,65 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
         padding: 20,
-        backgroundColor: '#1a1a1a',
+        paddingTop: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#333',
     },
-    backButton: { marginRight: 15 },
-    backButtonText: { color: '#d4af37', fontSize: 16 },
-    headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#d4af37' },
+    backButton: { padding: 5 },
+    headerTitle: { fontSize: 18, fontWeight: '900', color: '#d4af37', letterSpacing: 2 },
 
     formContainer: {
-        padding: 15,
+        padding: 20,
         backgroundColor: '#111',
         borderBottomWidth: 1,
         borderBottomColor: '#333'
     },
-    sectionTitle: { color: '#fff', fontSize: 16, marginBottom: 10, fontWeight: '600' },
+    sectionTitle: { color: '#d4af37', fontSize: 14, marginBottom: 15, fontWeight: '900', letterSpacing: 1 },
     input: {
         backgroundColor: '#222',
         color: '#fff',
-        padding: 12,
-        borderRadius: 8,
+        padding: 15,
+        borderRadius: 12,
         marginBottom: 10,
         borderWidth: 1,
-        borderColor: '#444'
+        borderColor: '#333',
+        fontSize: 16
     },
     row: { flexDirection: 'row', alignItems: 'center' },
     categoryList: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 15 },
     catPill: {
         paddingHorizontal: 12,
-        paddingVertical: 6,
+        paddingVertical: 8,
         borderRadius: 20,
-        backgroundColor: '#333',
+        backgroundColor: '#1e1e1e',
         marginRight: 8,
-        marginBottom: 8
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#333'
     },
-    catPillActive: { backgroundColor: '#d4af37' },
-    catPillText: { color: '#aaa', fontSize: 12 },
-    catPillTextActive: { color: '#000', fontWeight: 'bold' },
+    catPillActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    catPillText: { color: '#888', fontSize: 12, fontWeight: '600' },
+    catPillTextActive: { color: '#000', fontWeight: '900' },
 
     addButton: {
         backgroundColor: '#d4af37',
-        padding: 15,
-        borderRadius: 8,
+        padding: 18,
+        borderRadius: 12,
         alignItems: 'center',
     },
-    addButtonText: { color: '#000', fontWeight: 'bold', fontSize: 16 },
+    addButtonText: { color: '#000', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
 
-    // Missing styles added
     categorySelector: {
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 15,
-        backgroundColor: '#333',
-        borderRadius: 8,
-        height: 50 // Match input height roughly
+        backgroundColor: '#1e1e1e',
+        borderRadius: 12,
+        height: 52,
+        borderWidth: 1,
+        borderColor: '#333'
     },
     categoryText: {
         color: '#d4af37',
@@ -249,23 +264,24 @@ const styles = StyleSheet.create({
         fontSize: 14
     },
 
-    listContent: { padding: 15 },
-    listTitle: { color: '#888', marginBottom: 10, fontSize: 14, textTransform: 'uppercase' },
+    listContent: { padding: 20 },
+    listTitle: { color: '#888', marginBottom: 15, fontSize: 12, textTransform: 'uppercase', fontWeight: '900', letterSpacing: 1 },
+    emptyText: { textAlign: 'center', color: '#666', marginTop: 50, fontStyle: 'italic' },
 
     card: {
         backgroundColor: '#1e1e1e',
-        borderRadius: 10,
-        padding: 15,
-        marginBottom: 10,
+        borderRadius: 15,
+        padding: 20,
+        marginBottom: 15,
         borderWidth: 1,
         borderColor: '#333'
     },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
-    categoryBadge: { color: '#d4af37', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase' },
+    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+    categoryBadge: { color: '#d4af37', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1 },
     dateText: { color: '#666', fontSize: 12 },
-    cardBody: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    description: { color: '#fff', fontSize: 16, fontWeight: '500' },
-    amount: { color: '#e74c3c', fontSize: 18, fontWeight: 'bold' },
-    deleteButton: { marginTop: 10, alignSelf: 'flex-end' },
-    deleteText: { color: '#555', fontSize: 12 }
+    cardBody: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+    description: { color: '#fff', fontSize: 16, fontWeight: '600', flex: 1 },
+    amount: { color: '#e74c3c', fontSize: 20, fontWeight: '900' },
+    deleteButton: { alignSelf: 'flex-end' },
+    deleteText: { color: '#666', fontSize: 13, fontWeight: '600' }
 });

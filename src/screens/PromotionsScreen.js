@@ -53,7 +53,7 @@ export default function PromotionsScreen({ navigation }) {
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
                     <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>OFERTAS DEL IMPERIO</Text>
+                <Text style={styles.headerTitle}>OFERTAS</Text>
                 <View style={{ width: 40 }} />
             </View>
         </LinearGradient>
@@ -88,7 +88,7 @@ export default function PromotionsScreen({ navigation }) {
                         </TouchableOpacity>
                     </View>
                 )}
-                ListEmptyComponent={<Text style={styles.empty}>No hay estrategias activas.</Text>}
+                ListEmptyComponent={<Text style={styles.empty}>No hay promociones activas.</Text>}
             />
 
             <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)}>
@@ -97,7 +97,7 @@ export default function PromotionsScreen({ navigation }) {
 
             <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
                 <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Nueva Estrategia</Text>
+                    <Text style={styles.modalTitle}>Nueva Promo</Text>
 
                     <TextInput
                         style={styles.input}

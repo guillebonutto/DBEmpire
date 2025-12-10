@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons'; // Assuming Ionicons is available or use text
@@ -38,6 +39,61 @@ export default function StockScreen({ navigation }) {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleDelete = async (product) => {
+        Alert.alert(
+            'Eliminar Producto',
+            `¿Estás seguro de que quieres eliminar "${product.name}"?`,
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Eliminar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            const { error: deleteError } = await supabase
+                                .from('products')
+                                .delete()
+                                .eq('id', product.id);
+
+                            if (deleteError) {
+                                // If product has sales history, archive it
+                                if (deleteError.message.includes('foreign key constraint') ||
+                                    deleteError.code === '23503') {
+                                    const { error: archiveError } = await supabase
+                                        .from('products')
+                                        .update({ active: false })
+                                        .eq('id', product.id);
+
+                                    if (archiveError) {
+                                        throw archiveError;
+                                    }
+
+                                    Alert.alert(
+                                        'Producto Archivado',
+                                        'Este producto tiene ventas registradas y se ha archivado para mantener el historial.',
+                                        [{ text: 'Entendido' }]
+                                    );
+                                } else {
+                                    throw deleteError;
+                                }
+                            } else {
+                                Alert.alert('✅ Eliminado', 'Producto eliminado correctamente');
+                            }
+
+                            fetchProducts(); // Refresh list
+                        } catch (err) {
+                            console.log('Error deleting product:', err);
+                            Alert.alert('Error', 'No se pudo eliminar el producto');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     // Filter logic
@@ -79,15 +135,28 @@ export default function StockScreen({ navigation }) {
 
                 {/* Details */}
                 <View style={styles.detailsContainer}>
-                    <View style={styles.cardHeader}>
-                        <Text style={styles.productName}>{item.name}</Text>
-                        <Text style={styles.priceTag}>${item.sale_price}</Text>
-                    </View>
-                    <View style={styles.detailsRow}>
-                        <Text style={[styles.stockBadge, item.current_stock < 5 ? styles.lowStock : styles.goodStock]}>
-                            Stock: {item.current_stock}
-                        </Text>
-                        <Text style={styles.subtext}>Costo: ${item.cost_price} | Margen: {item.profit_margin_percent}%</Text>
+                    <View style={styles.contentRow}>
+                        {/* Info Column (Left) */}
+                        <View style={styles.infoColumn}>
+                            <Text style={styles.productName}>{item.name}</Text>
+                            <View style={styles.detailsRow}>
+                                <Text style={[styles.stockBadge, item.current_stock < 5 ? styles.lowStock : styles.goodStock]}>
+                                    Stock: {item.current_stock}
+                                </Text>
+                                <Text style={styles.subtext}>Costo: ${item.cost_price} | Margen: {item.profit_margin_percent}%</Text>
+                            </View>
+                        </View>
+
+                        {/* Price Column (Right) */}
+                        <View style={styles.priceColumn}>
+                            <Text style={styles.priceTag}>${item.sale_price}</Text>
+                            <TouchableOpacity
+                                onPress={() => handleDelete(item)}
+                                style={styles.deleteIcon}
+                            >
+                                <MaterialCommunityIcons name="delete" size={20} color="#e74c3c" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </View>
             </View>
@@ -183,15 +252,14 @@ const styles = StyleSheet.create({
     placeholderText: { color: '#666', fontSize: 10 },
 
     detailsContainer: { flex: 1 },
-    cardHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    productName: { fontSize: 16, fontWeight: 'bold', color: '#fff', flex: 1 },
+    contentRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+    infoColumn: { flex: 1, marginRight: 10 },
+    productName: { fontSize: 16, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
+    priceColumn: { alignItems: 'flex-end', gap: 4 },
+    deleteIcon: { padding: 4 },
     priceTag: { fontSize: 18, fontWeight: 'bold', color: '#2ecc71' },
-    detailsRow: { flexDirection: 'column', gap: 5 },
-    stockBadge: { fontWeight: '600', fontSize: 14 },
+    detailsRow: { flexDirection: 'column', gap: 2 },
+    stockBadge: { fontWeight: '600', fontSize: 13 },
     lowStock: { color: '#e74c3c' },
     goodStock: { color: '#888' },
     subtext: { color: '#666', fontSize: 12 },
