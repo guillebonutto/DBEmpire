@@ -10,6 +10,7 @@ const screenWidth = Dimensions.get('window').width;
 
 export default function AdminScreen({ navigation }) {
     const [commissionRate, setCommissionRate] = useState('10');
+    const [transportRate, setTransportRate] = useState('0');
     const [loading, setLoading] = useState(false);
     const [salesData, setSalesData] = useState({ labels: [], data: [] });
     const [productData, setProductData] = useState([]);
@@ -39,6 +40,17 @@ export default function AdminScreen({ navigation }) {
 
             if (settingsData) {
                 setCommissionRate((parseFloat(settingsData.value) * 100).toString());
+            }
+
+            // Fetch transport rate from settings
+            const { data: transportData } = await supabase
+                .from('settings')
+                .select('value')
+                .eq('key', 'transport_rate')
+                .single();
+
+            if (transportData) {
+                setTransportRate((parseFloat(transportData.value) * 100).toString());
             }
 
             // Calculate date range based on filter
@@ -199,6 +211,33 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
+    const updateTransportRate = async () => {
+        const rate = parseFloat(transportRate);
+        if (isNaN(rate) || rate < 0 || rate > 100) {
+            Alert.alert('Error', 'Ingresa un porcentaje válido entre 0 y 100');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const { error } = await supabase
+                .from('settings')
+                .upsert(
+                    { key: 'transport_rate', value: (rate / 100).toString() },
+                    { onConflict: 'key' }
+                );
+
+            if (error) throw error;
+
+            Alert.alert('✅ Actualizado', `El costo de transporte ahora es del ${rate}%`);
+        } catch (error) {
+            Alert.alert('Error', 'No se pudo actualizar el costo de transporte');
+            console.log(error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
@@ -344,6 +383,35 @@ export default function AdminScreen({ navigation }) {
                     <TouchableOpacity
                         style={styles.saveButton}
                         onPress={updateCommissionRate}
+                        disabled={loading}
+                    >
+                        <MaterialCommunityIcons name="content-save" size={20} color="black" />
+                        <Text style={styles.saveButtonText}>GUARDAR CAMBIOS</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* Transport Cost Settings */}
+                <View style={styles.settingsCard}>
+                    <Text style={styles.sectionTitle}>COSTO DE TRANSPORTE (GLOBAL)</Text>
+                    <Text style={styles.settingsDesc}>
+                        Porcentaje adicional que se sumará al costo de cada producto para cubrir transporte/envíos.
+                    </Text>
+
+                    <View style={styles.inputContainer}>
+                        <TextInput
+                            style={styles.input}
+                            value={transportRate}
+                            onChangeText={setTransportRate}
+                            keyboardType="numeric"
+                            placeholder="0"
+                            placeholderTextColor="#666"
+                        />
+                        <Text style={styles.inputSuffix}>%</Text>
+                    </View>
+
+                    <TouchableOpacity
+                        style={styles.saveButton}
+                        onPress={updateTransportRate}
                         disabled={loading}
                     >
                         <MaterialCommunityIcons name="content-save" size={20} color="black" />

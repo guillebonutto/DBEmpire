@@ -8,6 +8,8 @@ export default function AddProductScreen({ navigation, route }) {
 
     const [loading, setLoading] = useState(false);
     const [image, setImage] = useState(null);
+    const [transportRate, setTransportRate] = useState(0); // Global transport rate %
+    const [calculatedTransportCost, setCalculatedTransportCost] = useState(0);
     const [formData, setFormData] = useState({
         name: '',
         description: '',
@@ -19,6 +21,21 @@ export default function AddProductScreen({ navigation, route }) {
         defect_notes: ''
     });
 
+    // Fetch Transport Rate on Mount
+    useEffect(() => {
+        const fetchSettings = async () => {
+            const { data } = await supabase
+                .from('settings')
+                .select('value')
+                .eq('key', 'transport_rate')
+                .single();
+            if (data) {
+                setTransportRate(parseFloat(data.value) || 0);
+            }
+        };
+        fetchSettings();
+    }, []);
+
     // Calculate Sale Price automatically when Cost or Margin changes
     useEffect(() => {
         if (formData.cost_price && formData.profit_margin_percent) {
@@ -26,9 +43,16 @@ export default function AddProductScreen({ navigation, route }) {
             const margin = parseFloat(formData.profit_margin_percent);
 
             if (!isNaN(cost) && !isNaN(margin)) {
-                // Formula: Sale Price = Cost + (Cost * Margin / 100)
-                // Or simply: Cost * (1 + Margin/100)
-                const calculatedPrice = cost + (cost * (margin / 100));
+                // Formula: 
+                // 1. Calculate Transport Cost = Cost * TransportRate
+                // 2. Final Cost = Cost + Transport Cost
+                // 3. Sale Price = Final Cost * (1 + Margin/100)
+
+                const transportCost = cost * transportRate;
+                setCalculatedTransportCost(transportCost);
+
+                const finalCost = cost + transportCost;
+                const calculatedPrice = finalCost * (1 + (margin / 100));
 
                 // Update sale price state without triggering infinite loop if handled correctly
                 setFormData(prev => ({
@@ -37,7 +61,7 @@ export default function AddProductScreen({ navigation, route }) {
                 }));
             }
         }
-    }, [formData.cost_price, formData.profit_margin_percent]);
+    }, [formData.cost_price, formData.profit_margin_percent, transportRate]);
 
     // Load data if editing
     useEffect(() => {
@@ -293,6 +317,26 @@ export default function AddProductScreen({ navigation, route }) {
                         onChangeText={(text) => handleChange('profit_margin_percent', text)}
                         keyboardType="numeric"
                         placeholder="30"
+                    />
+                </View>
+            </View>
+
+            {/* Transport Cost Display */}
+            <View style={styles.row}>
+                <View style={styles.halfInput}>
+                    <Text style={[styles.label, { fontSize: 12, color: '#888' }]}>+ Transp. ({(transportRate * 100).toFixed(0)}%)</Text>
+                    <TextInput
+                        style={[styles.input, styles.readOnly, { fontSize: 14 }]}
+                        value={`$${calculatedTransportCost.toFixed(2)}`}
+                        editable={false}
+                    />
+                </View>
+                <View style={styles.halfInput}>
+                    <Text style={[styles.label, { fontSize: 12, color: '#888' }]}>= Costo Final</Text>
+                    <TextInput
+                        style={[styles.input, styles.readOnly, { fontSize: 14 }]}
+                        value={`$${(parseFloat(formData.cost_price || 0) + calculatedTransportCost).toFixed(2)}`}
+                        editable={false}
                     />
                 </View>
             </View>
