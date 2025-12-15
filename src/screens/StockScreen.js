@@ -4,17 +4,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons'; // Assuming Ionicons is available or use text
+import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
-export default function StockScreen({ navigation }) {
+export default function StockScreen({ navigation, route }) {
     const [products, setProducts] = useState([]);
     const [filteredProducts, setFilteredProducts] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [showHiddenStock, setShowHiddenStock] = useState(false); // New state for toggling
+
 
     // Function to fetch products
     const fetchProducts = async () => {
         setLoading(true);
+        // ... (rest is same, no need to replace all)
         try {
             // 1. Try to fetch from Supabase
             const { data, error } = await supabase
@@ -25,9 +30,18 @@ export default function StockScreen({ navigation }) {
             if (error) throw error;
 
             if (data && data.length > 0) {
-                // Client-side filtering for 'active' to be safe if column doesn't exist yet (treated as true/null)
-                // We only hide if active === false.
-                const validProducts = data.filter(p => p.active !== false);
+                // Determine which products to show
+                const validProducts = data.filter(p => {
+                    // Always hide archived/deleted (active === false)
+                    if (p.active === false) return false;
+
+                    // If showHiddenStock is TRUE, show everything active
+                    if (showHiddenStock) return true;
+
+                    // If showHiddenStock is FALSE, hide items with stock <= 0
+                    return (p.current_stock || 0) > 0;
+                });
+
                 setProducts(validProducts);
                 setFilteredProducts(validProducts);
             } else {
@@ -109,11 +123,11 @@ export default function StockScreen({ navigation }) {
         }
     }, [searchQuery, products]);
 
-    // Fetch when screen comes into focus
+    // Fetch when screen comes into focus or toggle changes
     useFocusEffect(
         useCallback(() => {
             fetchProducts();
-        }, [])
+        }, [route.params?.refresh, showHiddenStock])
     );
 
     const renderProductItem = ({ item }) => (
@@ -140,7 +154,7 @@ export default function StockScreen({ navigation }) {
                         <View style={styles.infoColumn}>
                             <Text style={styles.productName}>{item.name}</Text>
                             <View style={styles.detailsRow}>
-                                <Text style={[styles.stockBadge, item.current_stock < 5 ? styles.lowStock : styles.goodStock]}>
+                                <Text style={[styles.stockBadge, (parseInt(item.current_stock) || 0) <= 0 ? styles.lowStock : styles.goodStock]}>
                                     Stock: {item.current_stock}
                                 </Text>
                                 <Text style={styles.subtext}>Costo: ${item.cost_price} | Margen: {item.profit_margin_percent}%</Text>
@@ -163,17 +177,279 @@ export default function StockScreen({ navigation }) {
         </TouchableOpacity>
     );
 
+    const exportToPDF = async () => {
+        setLoading(true);
+        try {
+
+            const htmlContent = `
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    
+
+                    html, body {
+                        margin: 0;
+                        padding: 0;
+                        height: 100%;
+                        width: 100%;
+                        background: #000;
+                        color: #fff;
+                        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                        -webkit-print-color-adjust: exact;
+                        print-color-adjust: exact;
+                    }
+                    @page {
+                        size: A4 portrait;
+                        margin: 0;
+                    }
+
+                    /* PORTADA ÉPICA */
+                    .cover {
+                        height: 100vh;
+                        width: 100vw;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        background: linear-gradient(135deg, #0f0f0f 0%, #1a0a00 50%, #000 100%);
+                        text-align: center;
+                        position: relative;
+                        overflow: hidden;
+                        page-break-after: always;
+                    }
+                    .cover::before {
+                        content: '';
+                        position: absolute;
+                        top: 0; left: 0; right: 0; bottom: 0;
+                        background: radial-gradient(circle at center, rgba(212,175,55,0.15) 0%, transparent 70%);
+                        pointer-events: none;
+                    }
+                    .cover-logo {
+                        font-size: 80px;
+                        font-weight: 900;
+                        color: #d4af37;
+                        letter-spacing: 15px;
+                        text-shadow: 0 0 40px rgba(212,175,55,0.6), 0 10px 20px rgba(0,0,0,0.8);
+                        margin-bottom: 20px;
+                    }
+                    .cover-subtitle {
+                        font-size: 28px;
+                        color: #aaa;
+                        letter-spacing: 12px;
+                        text-transform: uppercase;
+                        font-weight: 300;
+                        margin-bottom: 60px;
+                    }
+                    .exclusive-badge {
+                        background: linear-gradient(90deg, #d4af37, #ffd700);
+                        color: #000;
+                        padding: 12px 40px;
+                        font-size: 20px;
+                        font-weight: 700;
+                        letter-spacing: 6px;
+                        text-transform: uppercase;
+                        border-radius: 50px;
+                        box-shadow: 0 0 30px rgba(212,175,55,0.5);
+                    }
+
+                    /* PÁGINA DE PRODUCTO */
+                    .product-page {
+                        height: 100vh;
+                        width: 100vw;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        padding: 40px;
+                        box-sizing: border-box;
+                        page-break-after: always;
+                        position: relative;
+                    }
+                    .product-card {
+                        width: 100%;
+                        max-width: 700px;
+                        background: rgba(15,15,15,0.9);
+                        border: 2px solid #d4af37;
+                        border-radius: 20px;
+                        overflow: hidden;
+                        box-shadow: 0 20px 60px rgba(212,175,55,0.2), 0 0 40px rgba(0,0,0,0.8);
+                    }
+                    .image-container {
+                        width: 100%;
+                        height: 450px;
+                        background: #111;
+                        overflow: hidden;
+                        position: relative;
+                    }
+                    .prod-img {
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                        transition: transform 0.5s;
+                    }
+                    .no-img {
+                        height: 100%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 36px;
+                        color: #444;
+                        letter-spacing: 5px;
+                        background: #0a0a0a;
+                    }
+                    .overlay-badge {
+                        position: absolute;
+                        top: 20px;
+                        right: 20px;
+                        background: rgba(212,175,55,0.9);
+                        color: #000;
+                        padding: 10px 20px;
+                        font-weight: 700;
+                        border-radius: 30px;
+                        font-size: 14px;
+                        letter-spacing: 2px;
+                    }
+
+                    .card-body {
+                        padding: 40px;
+                        text-align: center;
+                    }
+                    .prod-title {
+                        font-size: 42px;
+                        color: #d4af37;
+                        margin-bottom: 20px;
+                        letter-spacing: 3px;
+                    }
+                    .prod-desc {
+                        font-size: 18px;
+                        color: #ccc;
+                        line-height: 1.6;
+                        margin-bottom: 30px;
+                        max-width: 600px;
+                        margin-left: auto;
+                        margin-right: auto;
+                    }
+                    .highlight {
+                        color: #d4af37;
+                        font-weight: 700;
+                    }
+                    .price-box {
+                        margin: 30px 0;
+                    }
+                    .old-price {
+                        font-size: 24px;
+                        color: #666;
+                        text-decoration: line-through;
+                        margin-right: 15px;
+                    }
+                    .price {
+                        font-size: 60px;
+                        font-weight: 900;
+                        color: #d4af37;
+                        letter-spacing: -2px;
+                        text-shadow: 0 0 20px rgba(212,175,55,0.4);
+                    }
+                    .cta {
+                        font-size: 22px;
+                        color: #fff;
+                        margin-top: 20px;
+                        font-weight: 600;
+                        letter-spacing: 2px;
+                    }
+                </style>
+            </head>
+            <body>
+
+                <!-- PORTADA -->
+                <div class="cover">
+                    <div class="cover-logo">DIGITAL BOOST<br>EMPIRE</div>
+                    <div class="cover-subtitle">Catálogo Exclusivo</div>
+                    <div class="exclusive-badge">ACCESO LIMITADO</div>
+                </div>
+
+                <!-- PRODUCTOS -->
+                ${products.map(p => {
+                const hasDiscount = p.original_price && p.original_price > p.sale_price;
+                const discountPercent = hasDiscount
+                    ? Math.round(((p.original_price - p.sale_price) / p.original_price) * 100)
+                    : 0;
+
+                return `
+                    <div class="product-page">
+                        <div class="product-card">
+                            <div class="image-container">
+                                ${p.image_url
+                        ? `<img src="${p.image_url}" class="prod-img" alt="${p.name}" />`
+                        : `<div class="no-img">DIGITAL BOOST EMPIRE</div>`
+                    }
+                                ${discountPercent > 0 ? `<div class="overlay-badge">-${discountPercent}% OFF</div>` : ''}
+                            </div>
+                            <div class="card-body">
+                                <div class="prod-title">${p.name.toUpperCase()}</div>
+                                <div class="prod-desc">
+                                    ${p.description
+                        ? p.description
+                        : '<span class="highlight">Producto premium</span> de edición limitada. Máxima calidad garantizada. Ideal para quienes buscan <span class="highlight">resultados reales</span> y <span class="highlight">exclusividad absoluta</span>.'
+                    }
+                                </div>
+                                <div class="price-box">
+                                    ${hasDiscount ? `<span class="old-price">$${p.original_price}</span>` : ''}
+                                    <div class="price">$${p.sale_price}</div>
+                                </div>
+                                <div class="cta">DISPONIBILIDAD LIMITADA • COMPRA AHORA</div>
+                            </div>
+                        </div>
+                    </div>
+                    `;
+            }).join('')}
+
+            </body>
+            </html>
+        `;
+
+            const { uri } = await Print.printToFileAsync({
+                html: htmlContent,
+                width: 595,
+                height: 842,
+                margins: { top: 0, bottom: 0, left: 0, right: 0 }
+            });
+
+            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf' });
+        } catch (error) {
+            Alert.alert('Error', 'No se pudo generar el PDF: ' + error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
             <View style={styles.header}>
                 <Text style={styles.title}>INVENTARIO ({products.length})</Text>
-                <TouchableOpacity
-                    style={styles.addButton}
-                    onPress={() => navigation.navigate('AddProduct')}
-                >
-                    <Text style={styles.addButtonText}>+ NUEVO</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <TouchableOpacity
+                        style={[styles.addButton, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: showHiddenStock ? '#d4af37' : '#333', paddingHorizontal: 15 }]}
+                        onPress={() => setShowHiddenStock(!showHiddenStock)}
+                    >
+                        <MaterialCommunityIcons name={showHiddenStock ? "eye" : "eye-off"} size={24} color={showHiddenStock ? "#d4af37" : "#666"} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.addButton, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37', paddingHorizontal: 15 }]}
+                        onPress={exportToPDF}
+                    >
+                        <MaterialCommunityIcons name="file-pdf-box" size={24} color="#d4af37" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.addButton}
+                        onPress={() => navigation.navigate('AddProduct')}
+                    >
+                        <Text style={styles.addButtonText}>+ NUEVO</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Search Bar */}

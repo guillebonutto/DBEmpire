@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     statusText: { fontSize: 10, fontWeight: '900', letterSpacing: 1 },
     empty: { textAlign: 'center', marginTop: 50, color: '#444', fontStyle: 'italic' },
 
-    fab: { position: 'absolute', bottom: 30, right: 30, width: 65, height: 65, borderRadius: 35, backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 10, elevation: 10 },
+    fab: { position: 'absolute', bottom: 70, right: 30, width: 65, height: 65, borderRadius: 35, backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 10, elevation: 10 },
 
     // Modal styles
     modalContent: { flex: 1, padding: 30, backgroundColor: '#121212', marginTop: 0 },

@@ -15,11 +15,31 @@ export default function ClientsScreen() {
         setLoading(true);
 
         try {
-            const { data, error } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
-            if (error) throw error;
-            if (data) {
-                setClients(data);
-                setFilteredClients(data);
+            // Get Clients
+            const { data: clientsData, error: clientsError } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
+            if (clientsError) throw clientsError;
+
+            // Get Completed Sales to calculate total spent
+            const { data: salesData, error: salesError } = await supabase
+                .from('sales')
+                .select('client_id, total_amount')
+                .eq('status', 'completed');
+
+            if (salesError) throw salesError;
+
+            if (clientsData) {
+                // Calculate Totals
+                const clientMap = clientsData.map(client => {
+                    const clientSales = salesData ? salesData.filter(s => s.client_id === client.id) : [];
+                    const totalSpent = clientSales.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
+                    return { ...client, totalSpent };
+                });
+
+                // Sort by Total Spent (Ranking)
+                const sortedClients = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
+
+                setClients(sortedClients);
+                setFilteredClients(sortedClients);
             }
         } catch (err) {
             console.log('Error fetching clients:', err);
@@ -84,13 +104,37 @@ export default function ClientsScreen() {
             <FlatList
                 data={filteredClients}
                 keyExtractor={(item) => item.id.toString()}
-                renderItem={({ item }) => (
-                    <View style={styles.card}>
-                        <Text style={styles.name}>{item.name}</Text>
-                        <Text style={styles.info}>{item.phone}</Text>
-                        <Text style={styles.notes}>{item.notes}</Text>
-                    </View>
-                )}
+                renderItem={({ item, index }) => {
+                    // Determine Rank Badge
+                    let badge = null;
+                    // Only rank if they have spent something
+                    if (item.totalSpent > 0 && !searchQuery) {
+                        if (index === 0) badge = "👑 #1 CLIENTE VIP";
+                        else if (index === 1) badge = "🥈 #2";
+                        else if (index === 2) badge = "🥉 #3";
+                    }
+
+                    return (
+                        <View style={[
+                            styles.card,
+                            index === 0 && !searchQuery && item.totalSpent > 0 && { borderColor: '#ffd700', borderWidth: 2 } // Gold border for #1
+                        ]}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                <View>
+                                    <Text style={styles.name}>{item.name}</Text>
+                                    <Text style={styles.info}>{item.phone}</Text>
+                                </View>
+                                <View style={{ alignItems: 'flex-end' }}>
+                                    <Text style={[styles.spentAmount, index === 0 && !searchQuery && item.totalSpent > 0 && { color: '#ffd700', fontSize: 18 }]}>
+                                        ${item.totalSpent?.toFixed(2)}
+                                    </Text>
+                                    {badge && <Text style={{ color: '#d4af37', fontWeight: 'bold', fontSize: 10, marginTop: 4 }}>{badge}</Text>}
+                                </View>
+                            </View>
+                            <Text style={styles.notes}>{item.notes}</Text>
+                        </View>
+                    );
+                }}
                 ListEmptyComponent={<Text style={styles.empty}>{searchQuery ? 'Sin resultados.' : 'No hay clientes registrados.'}</Text>}
             />
 
@@ -142,6 +186,7 @@ const styles = StyleSheet.create({
     card: { backgroundColor: '#1e1e1e', padding: 20, marginHorizontal: 20, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
     name: { fontSize: 18, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
     info: { color: '#d4af37', fontWeight: '600' },
+    spentAmount: { color: '#2ecc71', fontWeight: '900', fontSize: 16 },
     notes: { fontStyle: 'italic', color: '#888', marginTop: 8, fontSize: 12 },
 
     empty: { textAlign: 'center', marginTop: 50, color: '#444', fontStyle: 'italic' },

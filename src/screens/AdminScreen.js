@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,6 +13,7 @@ export default function AdminScreen({ navigation }) {
     const [transportRate, setTransportRate] = useState('0');
     const [loading, setLoading] = useState(false);
     const [salesData, setSalesData] = useState({ labels: [], data: [] });
+    const [progressData, setProgressData] = useState({ labels: [], datasets: [] });
     const [productData, setProductData] = useState([]);
     const [stats, setStats] = useState({
         totalSales: 0,
@@ -23,6 +24,7 @@ export default function AdminScreen({ navigation }) {
         sellerCount: 0
     });
     const [dateFilter, setDateFilter] = useState('month'); // 'week', 'month', 'year'
+    const [tooltip, setTooltip] = useState({ visible: false, value: 0, x: 0, y: 0 });
 
     useEffect(() => {
         fetchData();
@@ -31,74 +33,53 @@ export default function AdminScreen({ navigation }) {
     const fetchData = async () => {
         setLoading(true);
         try {
-            // Fetch commission rate from settings
-            const { data: settingsData } = await supabase
-                .from('settings')
-                .select('value')
-                .eq('key', 'commission_rate')
-                .single();
-
+            // Fetch settings
+            const { data: settingsData } = await supabase.from('settings').select('*');
             if (settingsData) {
-                setCommissionRate((parseFloat(settingsData.value) * 100).toString());
-            }
-
-            // Fetch transport rate from settings
-            const { data: transportData } = await supabase
-                .from('settings')
-                .select('value')
-                .eq('key', 'transport_rate')
-                .single();
-
-            if (transportData) {
-                setTransportRate((parseFloat(transportData.value) * 100).toString());
+                const comm = settingsData.find(s => s.key === 'commission_rate');
+                const trans = settingsData.find(s => s.key === 'transport_rate');
+                if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
+                if (trans) setTransportRate((parseFloat(trans.value) * 100).toString());
             }
 
             // Calculate date range based on filter
             const now = new Date();
             let startDate;
 
-            if (dateFilter === 'week') {
+            if (dateFilter === 'day') {
+                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Start of today 00:00
+            } else if (dateFilter === 'week') {
                 startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             } else if (dateFilter === 'month') {
-                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-            } else if (dateFilter === 'year') {
+                // User requested 'Month' filter to show 12 months (Current Year)
                 startDate = new Date(now.getFullYear(), 0, 1);
+            } else if (dateFilter === 'year') {
+                // 'Year' filter now shows last 5 years
+                startDate = new Date(now.getFullYear() - 4, 0, 1);
             }
 
-            // Fetch sales with date filter
+            // Fetch sales
             const { data: sales } = await supabase
                 .from('sales')
                 .select('id, created_at, total_amount, profit_generated, commission_amount')
                 .gte('created_at', startDate.toISOString())
                 .order('created_at', { ascending: false });
 
-            // Fetch expenses with date filter
+            // Fetch expenses (Fixed: use 'created_at' instead of 'date')
             const { data: expenses } = await supabase
                 .from('expenses')
                 .select('amount, created_at')
-                .gte('date', startDate.toISOString());
+                .gte('created_at', startDate.toISOString());
 
-            // Fetch sale items with products for pie chart
-            const saleIds = sales?.map(s => s.id) || [];
-            let saleItems = [];
-            if (saleIds.length > 0) {
-                const { data } = await supabase
-                    .from('sale_items')
-                    .select('quantity, products(name)')
-                    .in('sale_id', saleIds);
-                saleItems = data || [];
+            // ... (Fetch sale items logic)
+
+            if (sales || expenses) {
+                processChartData(sales || []);
+                processProgressData(sales || [], expenses || []); // New Chart Processing
+                calculateStats(sales || [], expenses || []);
             }
 
-            if (sales) {
-                processChartData(sales);
-                calculateStats(sales, expenses || []);
-            }
-
-            if (saleItems.length > 0) {
-                processProductData(saleItems);
-            } else {
-                setProductData([]);
-            }
+            // ... (Rest of fetch logic)
         } catch (error) {
             console.log('Error fetching admin data:', error);
         } finally {
@@ -106,32 +87,109 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
-    const processChartData = (sales) => {
-        const last7Days = [];
-        const today = new Date();
+    const generateTimeline = (filter) => {
+        const timeline = [];
+        const now = new Date();
 
-        // Generate last 7 days
-        for (let i = 6; i >= 0; i--) {
-            const date = new Date(today);
-            date.setDate(date.getDate() - i);
-            last7Days.push({
-                date: date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
-                total: 0
+        if (filter === 'day') {
+            // Hours 0-23
+            for (let i = 0; i < 24; i++) {
+                timeline.push({
+                    key: i,
+                    label: i % 4 === 0 ? `${i}:00` : '', // Show label every 4 hours
+                    dateMatch: (date) => new Date(date).getHours() === i && new Date(date).getDate() === now.getDate(),
+                    total: 0, income: 0, expense: 0
+                });
+            }
+        } else if (filter === 'week') {
+            // Last 7 days
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date(now);
+                d.setDate(d.getDate() - i);
+                const dayStr = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+                timeline.push({
+                    key: dayStr,
+                    label: dayStr,
+                    dateMatch: (date) => new Date(date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }) === dayStr,
+                    total: 0, income: 0, expense: 0
+                });
+            }
+        } else if (filter === 'month') {
+            // Current Year (Jan-Dec) - Requested by User
+            const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+            months.forEach((m, index) => {
+                timeline.push({
+                    key: index,
+                    label: m,
+                    dateMatch: (date) => new Date(date).getMonth() === index && new Date(date).getFullYear() === now.getFullYear(),
+                    total: 0, income: 0, expense: 0
+                });
             });
+        } else if (filter === 'year') {
+            // Last 5 Years
+            for (let i = 4; i >= 0; i--) {
+                const year = now.getFullYear() - i;
+                timeline.push({
+                    key: year,
+                    label: year.toString(),
+                    dateMatch: (date) => new Date(date).getFullYear() === year,
+                    total: 0, income: 0, expense: 0
+                });
+            }
         }
+        return timeline;
+    };
 
-        // Aggregate sales by day
+    const processChartData = (sales) => {
+        const timeline = generateTimeline(dateFilter);
+
         sales.forEach(sale => {
-            const saleDate = new Date(sale.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
-            const dayIndex = last7Days.findIndex(d => d.date === saleDate);
-            if (dayIndex !== -1) {
-                last7Days[dayIndex].total += sale.total_amount;
+            const saleDate = new Date(sale.created_at);
+            const item = timeline.find(t => t.dateMatch(saleDate));
+            if (item) {
+                item.total += sale.total_amount;
             }
         });
 
         setSalesData({
-            labels: last7Days.map(d => d.date),
-            data: last7Days.map(d => d.total)
+            labels: timeline.map(t => t.label),
+            data: timeline.map(t => t.total)
+        });
+    };
+
+    const processProgressData = (sales, expenses) => {
+        const timeline = generateTimeline(dateFilter);
+
+        sales.forEach(s => {
+            const d = new Date(s.created_at);
+            const item = timeline.find(t => t.dateMatch(d));
+            if (item) item.income += s.total_amount;
+        });
+
+        expenses.forEach(e => {
+            const d = new Date(e.created_at);
+            const item = timeline.find(t => t.dateMatch(d));
+            if (item) item.expense += parseFloat(e.amount);
+        });
+
+        // Calculate Net Balance (Cumulative / Running Total)
+        let runningTotal = 0;
+        const netData = timeline.map(t => {
+            const dailyNet = t.income - t.expense;
+            runningTotal += dailyNet;
+            return runningTotal;
+        });
+
+        setProgressData({
+            labels: timeline.map(t => t.label),
+            datasets: [
+                {
+                    data: netData,
+                    color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
+                    strokeWidth: 2
+                }
+            ],
+            legend: ["Balance Neto (Ingresos - Gastos)"]
         });
     };
 
@@ -238,6 +296,33 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
+    const progressChart = useMemo(() => {
+        if (!progressData?.datasets || progressData.datasets.length === 0) return null;
+        return (
+            <LineChart
+                data={progressData}
+                width={screenWidth - 60}
+                height={220}
+                yAxisLabel="$"
+                chartConfig={{
+                    backgroundColor: '#1e1e1e',
+                    backgroundGradientFrom: '#1e1e1e',
+                    backgroundGradientTo: '#1e1e1e',
+                    decimalPlaces: 0,
+                    color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
+                    labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+                    style: { borderRadius: 16 },
+                    propsForDots: { r: '6', strokeWidth: '2', stroke: '#d4af37' }
+                }}
+                bezier
+                style={styles.chart}
+                onDataPointClick={({ value, x, y }) => {
+                    setTooltip({ visible: true, value, x, y });
+                }}
+            />
+        );
+    }, [progressData]);
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
@@ -259,20 +344,26 @@ export default function AdminScreen({ navigation }) {
                 {/* Date Filter Buttons */}
                 <View style={styles.filterContainer}>
                     <TouchableOpacity
+                        style={[styles.filterBtn, dateFilter === 'day' && styles.filterBtnActive]}
+                        onPress={() => { setDateFilter('day'); setTooltip({ ...tooltip, visible: false }); }}
+                    >
+                        <Text style={[styles.filterText, dateFilter === 'day' && styles.filterTextActive]}>DÍA</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
                         style={[styles.filterBtn, dateFilter === 'week' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('week'); fetchData(); }}
+                        onPress={() => { setDateFilter('week'); setTooltip({ ...tooltip, visible: false }); }}
                     >
                         <Text style={[styles.filterText, dateFilter === 'week' && styles.filterTextActive]}>SEMANA</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={[styles.filterBtn, dateFilter === 'month' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('month'); fetchData(); }}
+                        onPress={() => { setDateFilter('month'); setTooltip({ ...tooltip, visible: false }); }}
                     >
                         <Text style={[styles.filterText, dateFilter === 'month' && styles.filterTextActive]}>MES</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={[styles.filterBtn, dateFilter === 'year' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('year'); fetchData(); }}
+                        onPress={() => { setDateFilter('year'); setTooltip({ ...tooltip, visible: false }); }}
                     >
                         <Text style={[styles.filterText, dateFilter === 'year' && styles.filterTextActive]}>AÑO</Text>
                     </TouchableOpacity>
@@ -337,6 +428,35 @@ export default function AdminScreen({ navigation }) {
                         />
                     ) : (
                         <Text style={styles.noDataText}>No hay datos suficientes para mostrar</Text>
+                    )}
+                </View>
+
+                {/* Business Progress Chart (Net Balance) */}
+                <View style={styles.chartCard}>
+                    <Text style={styles.sectionTitle}>BALANCE NETO (Ingresos - Egresos)</Text>
+                    {progressData.datasets?.length > 0 ? (
+                        <View>
+                            {progressChart}
+                            {tooltip.visible && (
+                                <View style={{
+                                    position: 'absolute',
+                                    top: tooltip.y - 20,
+                                    left: (tooltip.index === (progressData.labels.length - 1) || tooltip.x > (screenWidth - 100)) ? tooltip.x - 50 : tooltip.x - 30,
+                                    backgroundColor: '#333',
+                                    padding: 8,
+                                    borderRadius: 8,
+                                    zIndex: 100,
+                                    borderWidth: 1,
+                                    borderColor: '#d4af37'
+                                }}>
+                                    <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>
+                                        ${Number(tooltip.value).toFixed(2)}
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                    ) : (
+                        <Text style={styles.noDataText}>No hay datos suficientes</Text>
                     )}
                 </View>
 

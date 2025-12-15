@@ -11,6 +11,10 @@ import PromotionsScreen from '../screens/PromotionsScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import AdminScreen from '../screens/AdminScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
+import OrdersScreen from '../screens/OrdersScreen';
+import NewOrderScreen from '../screens/NewOrderScreen';
+import SupplierOrdersScreen from '../screens/SupplierOrdersScreen';
+import NewSupplierOrderScreen from '../screens/NewSupplierOrderScreen';
 
 const Stack = createStackNavigator();
 
@@ -70,6 +74,26 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="Expenses"
                 component={ExpensesScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Orders"
+                component={OrdersScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="NewOrder"
+                component={NewOrderScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="SupplierOrders"
+                component={SupplierOrdersScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="NewSupplierOrder"
+                component={NewSupplierOrderScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

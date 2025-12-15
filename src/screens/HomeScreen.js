@@ -68,6 +68,20 @@ export default function HomeScreen({ navigation }) {
                             fullWidth
                         />
                         <DashboardCard
+                            title="PEDIDOS (CLIENTES)"
+                            icon="truck-delivery"
+                            color="#3498db" // Blue
+                            onPress={() => navigation.navigate('Orders')}
+                            fullWidth
+                        />
+                        <DashboardCard
+                            title="COMPRAS / STOCK"
+                            icon="airplane"
+                            color="#9b59b6" // Purple
+                            onPress={() => navigation.navigate('SupplierOrders')}
+                            fullWidth
+                        />
+                        <DashboardCard
                             title="CAJA & CIERRES"
                             icon="chart-line"
                             color="#ecf0f1" // SILVER

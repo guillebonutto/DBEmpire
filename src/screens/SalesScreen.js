@@ -12,10 +12,11 @@ export default function SalesScreen({ navigation }) {
     const fetchSalesData = async () => {
         setLoading(true);
         try {
-            // Get all sales (In a real large app, filter by date range in SQL)
+            // Get all COMPLETED sales
             const { data, error } = await supabase
                 .from('sales')
                 .select('*, profiles(full_name), clients(name)') // Join with profile AND clients
+                .eq('status', 'completed')
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
