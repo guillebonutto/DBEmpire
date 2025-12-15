@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal } from 'react-native';
 import { supabase } from '../services/supabase';
 import * as ImagePicker from 'expo-image-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function AddProductScreen({ navigation, route }) {
@@ -12,6 +13,11 @@ export default function AddProductScreen({ navigation, route }) {
     const [transportRate, setTransportRate] = useState(0); // Global transport rate %
     const [includeTransport, setIncludeTransport] = useState(true);
     const [calculatedTransportCost, setCalculatedTransportCost] = useState(0);
+
+    // Scanner State
+    const [permission, requestPermission] = useCameraPermissions();
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanned, setScanned] = useState(false);
 
     // Overhead State
     const [overheadInternet, setOverheadInternet] = useState('');
@@ -29,7 +35,10 @@ export default function AddProductScreen({ navigation, route }) {
         profit_margin_percent: '',
         sale_price: '',
         current_stock: '',
-        defect_notes: ''
+        sale_price: '',
+        current_stock: '',
+        defect_notes: '',
+        barcode: ''
     });
 
     // Fetch Transport Rate on Mount
@@ -105,7 +114,9 @@ export default function AddProductScreen({ navigation, route }) {
                 profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
                 sale_price: productToEdit.sale_price?.toString() || '',
                 current_stock: productToEdit.current_stock?.toString() || '',
-                defect_notes: productToEdit.defect_notes || ''
+                current_stock: productToEdit.current_stock?.toString() || '',
+                defect_notes: productToEdit.defect_notes || '',
+                barcode: productToEdit.barcode || ''
             });
             setOverheadInternet(productToEdit.internet_cost?.toString() || '');
             setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
@@ -224,7 +235,10 @@ export default function AddProductScreen({ navigation, route }) {
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
                 defect_notes: formData.defect_notes,
-                image_url: finalImageUrl
+                electricity_cost: parseFloat(overheadElectricity) || 0,
+                defect_notes: formData.defect_notes,
+                image_url: finalImageUrl,
+                barcode: formData.barcode // Add barcode
             };
 
             let error;
@@ -365,6 +379,32 @@ export default function AddProductScreen({ navigation, route }) {
                 onChangeText={(text) => handleChange('name', text)}
                 placeholder="Ej. Zapatillas Nike Air"
             />
+
+            <Text style={styles.label}>Código de Barras</Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={formData.barcode}
+                    onChangeText={(text) => handleChange('barcode', text)}
+                    placeholder="Escanear o escribir..."
+                />
+                <TouchableOpacity
+                    style={{ backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20, borderRadius: 8 }}
+                    onPress={async () => {
+                        if (permission && !permission.granted) {
+                            const result = await requestPermission();
+                            if (!result.granted) {
+                                Alert.alert("Permiso requerido", "Habilita la cámara para escanear.");
+                                return;
+                            }
+                        }
+                        setScanned(false);
+                        setIsScanning(true);
+                    }}
+                >
+                    <MaterialCommunityIcons name="barcode-scan" size={24} color="#d4af37" />
+                </TouchableOpacity>
+            </View>
 
             <View style={styles.row}>
                 <View style={styles.halfInput}>
@@ -555,6 +595,30 @@ export default function AddProductScreen({ navigation, route }) {
                 )}
             </TouchableOpacity>
 
+
+            <Modal visible={isScanning} animationType="slide">
+                <View style={{ flex: 1, backgroundColor: 'black' }}>
+                    <CameraView
+                        style={{ flex: 1 }}
+                        facing="back"
+                        onBarcodeScanned={scanned ? undefined : ({ data }) => {
+                            setScanned(true);
+                            handleChange('barcode', data);
+                            setIsScanning(false);
+                            Alert.alert('Escaneado', `Código: ${data}`);
+                        }}
+                    />
+                    <TouchableOpacity
+                        style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                        onPress={() => setIsScanning(false)}
+                    >
+                        <MaterialCommunityIcons name="close" size={30} color="white" />
+                    </TouchableOpacity>
+                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center' }}>
+                        <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>Apunta al código de barras</Text>
+                    </View>
+                </View>
+            </Modal>
 
         </ScrollView >
     );

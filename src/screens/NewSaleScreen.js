@@ -6,6 +6,7 @@ import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 export default function NewSaleScreen({ navigation }) {
     const [cart, setCart] = useState([]);
@@ -33,6 +34,11 @@ export default function NewSaleScreen({ navigation }) {
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
     const [tempQty, setTempQty] = useState(1);
+
+    // Scanner
+    const [permission, requestPermission] = useCameraPermissions();
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanned, setScanned] = useState(false);
 
     useEffect(() => {
         AsyncStorage.getItem('user_role').then(role => {
@@ -104,6 +110,35 @@ export default function NewSaleScreen({ navigation }) {
             if (newVal > maxStock) return maxStock;
             return newVal;
         });
+    };
+
+    const handleBarcodeScanned = ({ data }) => {
+        setScanned(true);
+        setIsScanning(false); // Close immediately
+
+        // Find product
+        const product = products.find(p => p.barcode === data);
+
+        if (product) {
+            // Check stock
+            const available = getAvailableStock(product);
+            if (available > 0) {
+                // Add to cart directly (1 unit)
+                // We reuse confirmAddToCart but need to wrap it to match the signature or just call setCart
+                setCart(prev => {
+                    const existing = prev.find(item => item.id === product.id);
+                    if (existing) {
+                        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+                    }
+                    return [...prev, { ...product, qty: 1 }];
+                });
+                Alert.alert('✅ Agregado', `${product.name} (+1)`);
+            } else {
+                Alert.alert('Sin Stock', `No hay stock disponible de ${product.name}`);
+            }
+        } else {
+            Alert.alert('No encontrado', `No existe producto con código: ${data}`);
+        }
     };
 
     const confirmAddToCart = (product) => {
@@ -316,6 +351,27 @@ export default function NewSaleScreen({ navigation }) {
         </LinearGradient>
     );
 
+    if (isScanning) {
+        return (
+            <View style={{ flex: 1, backgroundColor: 'black' }}>
+                <CameraView
+                    style={{ flex: 1 }}
+                    facing="back"
+                    onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                />
+                <TouchableOpacity
+                    style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                    onPress={() => setIsScanning(false)}
+                >
+                    <MaterialCommunityIcons name="close" size={30} color="white" />
+                </TouchableOpacity>
+                <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 }}>
+                    <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Escanea para agregar al carrito</Text>
+                </View>
+            </View>
+        );
+    }
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
@@ -427,9 +483,32 @@ export default function NewSaleScreen({ navigation }) {
             />
 
             <View style={styles.footer}>
+                <TouchableOpacity
+                    style={[styles.addProductBtn, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37' }]}
+                    onPress={async () => {
+                        console.log('Scanner button pressed');
+                        if (!permission) {
+                            console.log('Permission loading, requesting...');
+                            await requestPermission();
+                        }
+                        if (permission && !permission.granted) {
+                            console.log('Permission not granted, requesting...');
+                            const result = await requestPermission();
+                            if (!result.granted) {
+                                Alert.alert("Permiso requerido", "Habilita la cámara para escanear.");
+                                return;
+                            }
+                        }
+                        console.log('Access granted, opening scanner');
+                        setScanned(false);
+                        setIsScanning(true);
+                    }}
+                >
+                    <MaterialCommunityIcons name="barcode-scan" size={24} color="#d4af37" />
+                </TouchableOpacity>
+
                 <TouchableOpacity style={styles.addProductBtn} onPress={handleAddProductPress}>
-                    <MaterialCommunityIcons name="plus" size={24} color="#000" />
-                    <Text style={styles.addProductText}>AÑADIR</Text>
+                    <MaterialCommunityIcons name="magnify" size={24} color="#000" />
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -631,7 +710,27 @@ export default function NewSaleScreen({ navigation }) {
                     </TouchableOpacity>
                 </View>
             </Modal>
-        </SafeAreaView>
+
+            {/* BARCODE SCANNER MODAL */}
+            <Modal visible={isScanning} animationType="slide">
+                <View style={{ flex: 1, backgroundColor: 'black' }}>
+                    <CameraView
+                        style={{ flex: 1 }}
+                        facing="back"
+                        onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                    />
+                    <TouchableOpacity
+                        style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                        onPress={() => setIsScanning(false)}
+                    >
+                        <MaterialCommunityIcons name="close" size={30} color="white" />
+                    </TouchableOpacity>
+                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 }}>
+                        <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Escanea para agregar al carrito</Text>
+                    </View>
+                </View>
+            </Modal>
+        </SafeAreaView >
     );
 }
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +15,11 @@ export default function StockScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false); // New state for toggling
+
+    // Scanner
+    const [permission, requestPermission] = useCameraPermissions();
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanned, setScanned] = useState(false);
 
 
     // Function to fetch products
@@ -443,24 +449,43 @@ export default function StockScreen({ navigation, route }) {
                     >
                         <MaterialCommunityIcons name="file-pdf-box" size={24} color="#d4af37" />
                     </TouchableOpacity>
-                    <TouchableOpacity
-                        style={styles.addButton}
-                        onPress={() => navigation.navigate('AddProduct')}
-                    >
-                        <Text style={styles.addButtonText}>+ NUEVO</Text>
-                    </TouchableOpacity>
                 </View>
             </View>
 
             {/* Search Bar */}
             <View style={styles.searchContainer}>
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Buscar producto..."
-                    placeholderTextColor="#888"
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                />
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <TextInput
+                        style={[styles.searchInput, { flex: 1 }]}
+                        placeholder="Buscar producto..."
+                        placeholderTextColor="#888"
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                    />
+                    <TouchableOpacity
+                        style={{ backgroundColor: '#222', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 15, borderRadius: 8, borderWidth: 1, borderColor: '#333' }}
+                        onPress={async () => {
+                            if (permission && !permission.granted) {
+                                const result = await requestPermission();
+                                if (!result.granted) {
+                                    Alert.alert("Permiso requerido", "Habilita la cámara.");
+                                    return;
+                                }
+                            }
+                            setScanned(false);
+                            setIsScanning(true);
+                        }}
+                    >
+                        <MaterialCommunityIcons name="barcode-scan" size={24} color="#d4af37" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={{ backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 15, borderRadius: 8 }}
+                        onPress={() => navigation.navigate('AddProduct')}
+                    >
+                        <MaterialCommunityIcons name="plus" size={24} color="black" />
+                    </TouchableOpacity>
+                </View>
             </View>
 
             <FlatList
@@ -478,9 +503,13 @@ export default function StockScreen({ navigation, route }) {
                     </View>
                 }
             />
+            <View style={{ height: 20 }} />
         </SafeAreaView>
     );
 }
+
+// ... styles ...
+
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000000' },
