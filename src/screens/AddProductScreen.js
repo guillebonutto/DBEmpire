@@ -601,11 +601,45 @@ export default function AddProductScreen({ navigation, route }) {
                     <CameraView
                         style={{ flex: 1 }}
                         facing="back"
-                        onBarcodeScanned={scanned ? undefined : ({ data }) => {
+                        onBarcodeScanned={scanned ? undefined : async ({ data }) => {
                             setScanned(true);
                             handleChange('barcode', data);
                             setIsScanning(false);
-                            Alert.alert('Escaneado', `Código: ${data}`);
+
+                            // Auto-fetch details
+                            setLoading(true);
+                            try {
+                                const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${data}.json`);
+                                const result = await response.json();
+
+                                if (result.status === 1) {
+                                    const product = result.product;
+                                    const newName = product.product_name || product.product_name_es || '';
+                                    const newDesc = product.generic_name || product.brands || '';
+                                    const newImage = product.image_url || null;
+
+                                    if (newName) {
+                                        setFormData(prev => ({
+                                            ...prev,
+                                            name: prev.name ? prev.name : newName, // Only fill if empty? Or overwrite? User asked to "put the title", implying fill.
+                                            description: prev.description ? prev.description : newDesc
+                                        }));
+                                        if (newImage && !image) {
+                                            setImage(newImage);
+                                        }
+                                        Alert.alert('Producto Encontrado', `Se completaron los datos de: ${newName}`);
+                                    } else {
+                                        Alert.alert('Escaneado', `Código: ${data} (Sin nombre registrado)`);
+                                    }
+                                } else {
+                                    Alert.alert('Escaneado', `Código: ${data} (No encontrado en base de datos pública)`);
+                                }
+                            } catch (error) {
+                                console.log('Error fetching product details:', error);
+                                Alert.alert('Escaneado', `Código: ${data}`);
+                            } finally {
+                                setLoading(false);
+                            }
                         }}
                     />
                     <TouchableOpacity

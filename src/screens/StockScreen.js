@@ -1,11 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
@@ -21,11 +20,20 @@ export default function StockScreen({ navigation, route }) {
     const [isScanning, setIsScanning] = useState(false);
     const [scanned, setScanned] = useState(false);
 
+    const handleBarcodeScanned = ({ data }) => {
+        setScanned(true);
+        setIsScanning(false);
+        setSearchQuery(data);
+        // Optional: Check if it exists immediately, but the filter effect will handle the UI update
+        const exists = products.find(p => p.barcode === data);
+        if (!exists) {
+            Alert.alert("No encontrado", `No se encontró producto con código: ${data}`);
+        }
+    };
 
     // Function to fetch products
     const fetchProducts = async () => {
         setLoading(true);
-        // ... (rest is same, no need to replace all)
         try {
             // 1. Try to fetch from Supabase
             const { data, error } = await supabase
@@ -121,7 +129,8 @@ export default function StockScreen({ navigation, route }) {
         if (searchQuery) {
             const filtered = products.filter(p =>
                 p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                (p.provider && p.provider.toLowerCase().includes(searchQuery.toLowerCase()))
+                (p.provider && p.provider.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                (p.barcode && String(p.barcode).includes(searchQuery))
             );
             setFilteredProducts(filtered);
         } else {
@@ -504,6 +513,26 @@ export default function StockScreen({ navigation, route }) {
                 }
             />
             <View style={{ height: 20 }} />
+
+            {/* SCANNER MODAL */}
+            <Modal visible={isScanning} animationType="slide">
+                <View style={{ flex: 1, backgroundColor: 'black' }}>
+                    <CameraView
+                        style={{ flex: 1 }}
+                        facing="back"
+                        onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                    />
+                    <TouchableOpacity
+                        style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                        onPress={() => setIsScanning(false)}
+                    >
+                        <MaterialCommunityIcons name="close" size={30} color="white" />
+                    </TouchableOpacity>
+                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 }}>
+                        <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Escanea para buscar</Text>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
