@@ -7,6 +7,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 export default function NewSaleScreen({ navigation }) {
     const [cart, setCart] = useState([]);
@@ -265,6 +267,64 @@ export default function NewSaleScreen({ navigation }) {
         ? clients.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
         : [];
 
+    const generateReceiptPDF = async (saleData, client, cart) => {
+        try {
+            const date = new Date().toLocaleString();
+            const htmlContent = `
+            <html>
+                <body style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                    <div style="text-align: center; border-bottom: 2px solid #d4af37; padding-bottom: 20px; margin-bottom: 20px;">
+                        <h1 style="color: #d4af37; margin: 0;">DIGITAL BOOST EMPIRE</h1>
+                        <p style="margin: 5px 0;">Recibo de Venta Oficial</p>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <p><strong>Fecha:</strong> ${date}</p>
+                        <p><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
+                        <p><strong>Cliente:</strong> ${client ? client.name : 'Venta de Mostrador'}</p>
+                    </div>
+
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <thead>
+                            <tr style="background-color: #f8f8f8; border-bottom: 1px solid #eee;">
+                                <th style="text-align: left; padding: 10px;">Producto</th>
+                                <th style="text-align: center; padding: 10px;">Cant</th>
+                                <th style="text-align: right; padding: 10px;">Precio</th>
+                                <th style="text-align: right; padding: 10px;">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${cart.map(item => `
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 10px;">${item.name}</td>
+                                    <td style="text-align: center; padding: 10px;">${item.qty}</td>
+                                    <td style="text-align: right; padding: 10px;">$${item.sale_price}</td>
+                                    <td style="text-align: right; padding: 10px;">$${(item.sale_price * item.qty).toFixed(2)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+
+                    <div style="text-align: right; border-top: 2px solid #d4af37; padding-top: 20px;">
+                        <h2 style="margin: 0;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
+                    </div>
+
+                    <div style="margin-top: 50px; text-align: center; color: #888; font-size: 12px;">
+                        <p>¡Gracias por elegir al Imperio!</p>
+                        <p>Digital Boost Empire - Resultados Reales</p>
+                    </div>
+                </body>
+            </html>
+            `;
+
+            const { uri } = await Print.printToFileAsync({ html: htmlContent });
+            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: 'Enviar Recibo' });
+        } catch (error) {
+            console.log('Error generating PDF:', error);
+            Alert.alert('Error', 'No se pudo generar el recibo digital.');
+        }
+    };
+
     const processCheckout = async (client) => {
         setLoading(true);
         try {
@@ -312,15 +372,29 @@ export default function NewSaleScreen({ navigation }) {
 
             Alert.alert(
                 '✅ Venta Exitosa',
-                `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}`,
-                [{
-                    text: 'OK', onPress: () => {
-                        setCart([]);
-                        setSelectedClient(null);
-                        setClientModalVisible(false);
-                        navigation.navigate('Sales'); // Or goBack
+                `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¿Deseas enviar el recibo digital?`,
+                [
+                    {
+                        text: 'No, solo cerrar',
+                        style: 'cancel',
+                        onPress: () => {
+                            setCart([]);
+                            setSelectedClient(null);
+                            setClientModalVisible(false);
+                            navigation.navigate('Sales');
+                        }
+                    },
+                    {
+                        text: 'SÍ, ENVIAR RECIBO',
+                        onPress: async () => {
+                            await generateReceiptPDF(saleData, client, cart);
+                            setCart([]);
+                            setSelectedClient(null);
+                            setClientModalVisible(false);
+                            navigation.navigate('Sales');
+                        }
                     }
-                }]
+                ]
             );
 
         } catch (error) {
