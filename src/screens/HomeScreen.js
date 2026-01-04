@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, RefreshControl, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 
@@ -18,11 +19,69 @@ export default function HomeScreen({ navigation }) {
     });
     const [loading, setLoading] = useState(false);
 
+    // Camera State
+    const [permission, requestPermission] = useCameraPermissions();
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanned, setScanned] = useState(false);
+
     useEffect(() => {
         AsyncStorage.getItem('user_role').then(role => {
             if (role) setUserRole(role);
         });
     }, []);
+
+    const handleBarcodeScanned = async ({ data }) => {
+        if (scanned) return;
+        setScanned(true);
+        setIsScanning(false);
+
+        try {
+            // 1. Check local DB
+            const { data: product, error } = await supabase
+                .from('products')
+                .select('*')
+                .eq('barcode', data)
+                .single();
+
+            if (product) {
+                navigation.navigate('NewSale', { preselectedProduct: product });
+            } else {
+                // 2. Not found locally, fetch from Open Food Facts
+                let scannedName = '';
+                let scannedDescription = '';
+                let scannedImage = null;
+
+                try {
+                    const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${data}.json`);
+                    const json = await response.json();
+                    if (json.status === 1) {
+                        const product = json.product;
+                        scannedName = product.product_name || '';
+                        scannedDescription = product.generic_name || product.product_name || '';
+                        scannedImage = product.image_url ||
+                            product.image_front_url ||
+                            product.selected_images?.front?.display?.es ||
+                            product.selected_images?.front?.display?.en ||
+                            null;
+                    }
+                } catch (e) {
+                    console.log("Error fetching from external API:", e);
+                }
+
+                navigation.navigate('AddProduct', {
+                    scannedBarcode: data,
+                    scannedName: scannedName,
+                    scannedDescription: scannedDescription,
+                    scannedImage: scannedImage
+                });
+            }
+        } catch (err) {
+            console.log("Error searching product:", err);
+            navigation.navigate('AddProduct', { scannedBarcode: data });
+        } finally {
+            setScanned(false);
+        }
+    };
 
     const fetchDashboardStats = async () => {
         setLoading(true);
@@ -104,17 +163,14 @@ export default function HomeScreen({ navigation }) {
         }, [])
     );
 
-    // Mini Dash Stat Component
-    const MiniDashboardStat = ({ label, value, color, icon }) => (
-        <View style={[styles.miniStatCard, { borderColor: color + '40' }]}>
-            <LinearGradient colors={[color + '15', 'transparent']} style={styles.miniStatGradient}>
-                <View style={styles.miniStatHeader}>
-                    <MaterialCommunityIcons name={icon} size={14} color={color} />
-                    <Text style={[styles.miniStatLabel, { color }]}>{label}</Text>
-                </View>
-                <Text style={styles.miniStatValue}>${value.toFixed(0)}</Text>
-            </LinearGradient>
-        </View>
+    // Compact Nav Item Component
+    const CompactNavItem = ({ title, icon, color, onPress }) => (
+        <TouchableOpacity style={styles.compactNavItem} onPress={onPress}>
+            <View style={[styles.compactIconContainer, { backgroundColor: color + '20' }]}>
+                <MaterialCommunityIcons name={icon} size={20} color={color} />
+            </View>
+            <Text style={styles.compactNavTitle} numberOfLines={1}>{title}</Text>
+        </TouchableOpacity>
     );
 
     // Nav Item Component
@@ -133,192 +189,150 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
     );
 
+    if (isScanning) {
+        return (
+            <SafeAreaView style={styles.scannerContainer}>
+                <CameraView
+                    style={StyleSheet.absoluteFillObject}
+                    onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                />
+                <TouchableOpacity style={styles.closeScanner} onPress={() => setIsScanning(false)}>
+                    <MaterialCommunityIcons name="close-circle" size={50} color="#fff" />
+                </TouchableOpacity>
+                <View style={styles.scannerOverlay}>
+                    <View style={styles.scannerRim} />
+                    <Text style={styles.scannerText}>Apunta a un código de barras</Text>
+                </View>
+            </SafeAreaView>
+        );
+    }
+
     return (
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
-            <LinearGradient
-                colors={['#000000', '#121212']}
-                style={styles.headerBackground}
-                start={{ x: 0.5, y: 0 }}
-                end={{ x: 0.5, y: 1 }}
-            >
-                <SafeAreaView style={styles.headerContent} edges={['top']}>
-                    <View style={styles.topRow}>
-                        <View>
-                            <Text style={styles.greeting}>COMANDANTE,</Text>
-                            <Text style={styles.username}>{userRole === 'admin' ? 'LÍDER SUPREMO' : 'NICO A LA ALIANZA'}</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => navigation.replace('Login')} style={styles.logoutBtn}>
-                            <MaterialCommunityIcons name="logout" size={20} color="#666" />
-                        </TouchableOpacity>
+
+            <SafeAreaView style={styles.safeContainer} edges={['top']}>
+                {/* Header Row */}
+                <View style={styles.headerRow}>
+                    <View>
+                        <Text style={styles.greeting}>COMANDANTE,</Text>
+                        <Text style={styles.username}>{userRole === 'admin' ? 'LÍDER SUPREMO' : 'NICO A LA ALIANZA'}</Text>
                     </View>
-
-                    {/* Stats Dashboard */}
-                    <View style={styles.dashboardContainer}>
-                        {stats.lowStockCount > 0 && (
-                            <TouchableOpacity
-                                style={styles.alertBanner}
-                                onPress={() => navigation.navigate('Stock', { filter: 'low' })}
-                                activeOpacity={0.8}
-                            >
-                                <LinearGradient colors={['#e74c3c', '#c0392b']} style={styles.alertGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-                                    <View style={styles.alertContent}>
-                                        <MaterialCommunityIcons name="alert-decagram" size={20} color="#fff" />
-                                        <Text style={styles.alertText}>
-                                            ALERTA CRÍTICA: {stats.lowStockCount} Activos con stock bajo
-                                        </Text>
-                                    </View>
-                                    <MaterialCommunityIcons name="chevron-right" size={20} color="#fff" />
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        )}
-                        <View style={styles.statsRow}>
-                            <MiniDashboardStat
-                                label="VENTAS HOY"
-                                value={stats.todaySales}
-                                color="#2ecc71"
-                                icon="currency-usd"
-                            />
-                            <MiniDashboardStat
-                                label="GANANCIA"
-                                value={stats.netProfit}
-                                color="#d4af37"
-                                icon="bank-transfer-in"
-                            />
-                        </View>
-                        <View style={[styles.statsRow, { marginTop: 10 }]}>
-                            <MiniDashboardStat
-                                label="PRESUPUESTOS"
-                                value={stats.budgetSales}
-                                color="#3498db"
-                                icon="file-document-outline"
-                            />
-                            <MiniDashboardStat
-                                label="DEUDAS PEND."
-                                value={stats.debtSupplier}
-                                color="#e74c3c"
-                                icon="account-cash-outline"
-                            />
-                        </View>
-                    </View>
-                </SafeAreaView>
-            </LinearGradient>
-
-            <View style={styles.bodyContainer}>
-                <ScrollView
-                    contentContainerStyle={styles.scrollContent}
-                    showsVerticalScrollIndicator={false}
-                    refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchDashboardStats} tintColor="#d4af37" />}
-                >
-                    <Text style={styles.sectionLabel}>SISTEMAS DEL IMPERIO</Text>
-
-                    {/* Main Priority Action */}
-                    <TouchableOpacity
-                        style={styles.mainActionCard}
-                        onPress={() => navigation.navigate('NewSale')}
-                        activeOpacity={0.8}
-                    >
-                        <LinearGradient colors={['#d4af37', '#b8942d']} style={styles.mainActionGradient}>
-                            <View style={styles.mainActionLeft}>
-                                <MaterialCommunityIcons name="cash-register" size={32} color="#000" />
-                                <View style={styles.mainActionText}>
-                                    <Text style={styles.mainActionTitle}>NUEVA VENTA</Text>
-                                    <Text style={styles.mainActionDesc}>Registrar operación inmediata</Text>
-                                </View>
-                            </View>
-                            <MaterialCommunityIcons name="arrow-right-circle" size={28} color="#000" />
-                        </LinearGradient>
+                    <TouchableOpacity onPress={() => navigation.replace('Login')} style={styles.logoutBtn}>
+                        <MaterialCommunityIcons name="logout" size={20} color="#666" />
                     </TouchableOpacity>
+                </View>
 
-                    {/* Secondary Navigation Grid */}
-                    <View style={styles.navGrid}>
-                        <NavItem
+                {/* Compact Menu Row */}
+                <View style={styles.menuContainer}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.menuScroll}>
+                        <CompactNavItem
                             title="Inventario"
-                            description={`${userRole === 'admin' ? 'Bóveda de activos' : 'Stock actual'}`}
                             icon="package-variant-closed"
                             color="#d4af37"
                             onPress={() => navigation.navigate('Stock')}
                         />
-                        <NavItem
+                        <CompactNavItem
                             title="Importaciones"
-                            description="Pedidos a proveedores"
                             icon="airplane"
                             color="#3498db"
                             onPress={() => navigation.navigate('SupplierOrders')}
                         />
-                        <NavItem
+                        <CompactNavItem
                             title="Clientes"
-                            description="Base de datos VIP"
                             icon="account-group"
                             color="#a29bfe"
                             onPress={() => navigation.navigate('Clients')}
                         />
-                        <NavItem
-                            title="Ventas Totales"
-                            description="Histórico y cierres"
+                        <CompactNavItem
+                            title="Ventas"
                             icon="chart-line"
                             color="#2ecc71"
                             onPress={() => navigation.navigate('Sales')}
                         />
-                        <NavItem
+                        <CompactNavItem
                             title="Pedidos"
-                            description="Entregas pendientes"
                             icon="truck-delivery"
                             color="#e67e22"
                             onPress={() => navigation.navigate('Orders')}
                         />
-                        <NavItem
-                            title="Panel Admin"
-                            description="Control total"
-                            icon="shield-account"
-                            color="#e74c3c"
-                            onPress={() => navigation.navigate('Admin')}
-                        />
-                    </View>
-                </ScrollView>
-            </View>
+                        {userRole === 'admin' && (
+                            <CompactNavItem
+                                title="Panel Admin"
+                                icon="shield-account"
+                                color="#e74c3c"
+                                onPress={() => navigation.navigate('Admin')}
+                            />
+                        )}
+                    </ScrollView>
+                </View>
+
+                {/* Main Scanner Section */}
+                <View style={styles.centerSection}>
+                    <TouchableOpacity
+                        style={styles.giantScannerBtn}
+                        onPress={async () => {
+                            if (permission && !permission.granted) {
+                                const result = await requestPermission();
+                                if (!result.granted) return;
+                            }
+                            setIsScanning(true);
+                        }}
+                        activeOpacity={0.8}
+                    >
+                        <LinearGradient colors={['#d4af37', '#b8942d']} style={styles.scannerCircle}>
+                            <MaterialCommunityIcons name="barcode-scan" size={80} color="#000" />
+                            <Text style={styles.scannerBtnText}>NUEVA VENTA</Text>
+                        </LinearGradient>
+                    </TouchableOpacity>
+                    <Text style={styles.centerDesc}>Escanea para empezar a vender</Text>
+                </View>
+
+                {/* Optional Alert Banner */}
+                {stats.lowStockCount > 0 && (
+                    <TouchableOpacity
+                        style={styles.alertBanner}
+                        onPress={() => navigation.navigate('Stock', { filter: 'low' })}
+                    >
+                        <LinearGradient colors={['#e74c3c', '#d63031']} style={styles.alertGradient}>
+                            <MaterialCommunityIcons name="alert-decagram" size={20} color="#fff" />
+                            <Text style={styles.alertText}>ALERTA: {stats.lowStockCount} Activos bajos</Text>
+                            <MaterialCommunityIcons name="chevron-right" size={20} color="#fff" />
+                        </LinearGradient>
+                    </TouchableOpacity>
+                )}
+            </SafeAreaView>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000000' },
-    headerBackground: { paddingBottom: 25, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#222' },
-    headerContent: { marginTop: 10 },
-    topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+    safeContainer: { flex: 1, paddingHorizontal: 20 },
+    headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15, marginBottom: 20 },
     greeting: { color: '#666', fontSize: 10, letterSpacing: 2, fontWeight: '900' },
-    username: { color: '#d4af37', fontSize: 22, fontWeight: '900', letterSpacing: 1 },
+    username: { color: '#d4af37', fontSize: 20, fontWeight: '900', letterSpacing: 1 },
     logoutBtn: { padding: 8, backgroundColor: '#1a1a1a', borderRadius: 10, borderWidth: 1, borderColor: '#333' },
 
-    dashboardContainer: { width: '100%' },
-    alertBanner: { marginBottom: 15, borderRadius: 12, overflow: 'hidden', elevation: 5 },
-    alertGradient: { paddingVertical: 10, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    alertContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    alertText: { color: '#fff', fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
+    menuContainer: { marginHorizontal: -20, marginBottom: 20 },
+    menuScroll: { paddingHorizontal: 20, gap: 15 },
+    compactNavItem: { alignItems: 'center', width: 75 },
+    compactIconContainer: { width: 50, height: 50, borderRadius: 15, justifyContent: 'center', alignItems: 'center', marginBottom: 5 },
+    compactNavTitle: { color: '#888', fontSize: 10, fontWeight: '600', textAlign: 'center' },
 
-    statsRow: { flexDirection: 'row', gap: 10 },
-    miniStatCard: { flex: 1, borderRadius: 15, borderWidth: 1, backgroundColor: '#0a0a0a', overflow: 'hidden' },
-    miniStatGradient: { padding: 12 },
-    miniStatHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-    miniStatLabel: { fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
-    miniStatValue: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
+    centerSection: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    giantScannerBtn: { width: 220, height: 220, borderRadius: 110, elevation: 15, shadowColor: '#d4af37', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.5, shadowRadius: 15 },
+    scannerCircle: { flex: 1, borderRadius: 110, justifyContent: 'center', alignItems: 'center' },
+    scannerBtnText: { color: '#000', fontSize: 16, fontWeight: '900', marginTop: 15, letterSpacing: 1 },
+    centerDesc: { color: '#444', fontSize: 12, marginTop: 25, fontWeight: '600', letterSpacing: 1, textTransform: 'uppercase' },
 
-    bodyContainer: { flex: 1, marginTop: 5 },
-    scrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
-    sectionLabel: { fontSize: 10, fontWeight: '900', color: '#444', marginBottom: 15, marginTop: 25, letterSpacing: 3, textTransform: 'uppercase' },
+    alertBanner: { marginBottom: 20, borderRadius: 15, overflow: 'hidden' },
+    alertGradient: { padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    alertText: { flex: 1, color: '#fff', fontSize: 12, fontWeight: '900', marginHorizontal: 10 },
 
-    mainActionCard: { marginBottom: 20, borderRadius: 20, overflow: 'hidden', elevation: 10, shadowColor: '#d4af37', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
-    mainActionGradient: { padding: 25, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    mainActionLeft: { flexDirection: 'row', alignItems: 'center', gap: 15 },
-    mainActionText: { justifyContent: 'center' },
-    mainActionTitle: { color: '#000', fontSize: 20, fontWeight: '900', letterSpacing: 1 },
-    mainActionDesc: { color: 'rgba(0,0,0,0.6)', fontSize: 11, fontWeight: '600' },
-
-    navGrid: { gap: 10 },
-    navItem: { borderRadius: 18, borderWidth: 1, overflow: 'hidden' },
-    navItemInner: { padding: 18, flexDirection: 'row', alignItems: 'center', gap: 15 },
-    navIconContainer: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-    navTextContainer: { flex: 1 },
-    navTitle: { color: '#fff', fontSize: 15, fontWeight: 'bold', marginBottom: 2 },
-    navDesc: { color: '#666', fontSize: 11 },
+    scannerContainer: { flex: 1, backgroundColor: '#000' },
+    closeScanner: { position: 'absolute', top: 50, right: 30, zIndex: 10 },
+    scannerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
+    scannerRim: { width: 250, height: 250, borderWidth: 2, borderColor: '#d4af37', borderRadius: 40, backgroundColor: 'transparent' },
+    scannerText: { color: '#fff', marginTop: 20, fontWeight: 'bold', fontSize: 16, textAlign: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 10, borderRadius: 10 }
 });

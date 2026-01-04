@@ -9,7 +9,7 @@ export default function AddProductScreen({ navigation, route }) {
     const productToEdit = route.params?.product;
 
     const [loading, setLoading] = useState(false);
-    const [image, setImage] = useState(null);
+    const [image, setImage] = useState(route.params?.scannedImage || null);
     const [transportRate, setTransportRate] = useState(0); // Global transport rate %
     const [includeTransport, setIncludeTransport] = useState(true);
     const [calculatedTransportCost, setCalculatedTransportCost] = useState(0);
@@ -28,8 +28,8 @@ export default function AddProductScreen({ navigation, route }) {
     const [calcBatch, setCalcBatch] = useState('');
 
     const [formData, setFormData] = useState({
-        name: '',
-        description: '',
+        name: route.params?.scannedName || '',
+        description: route.params?.scannedDescription || '',
         provider: '',
         cost_price: '',
         profit_margin_percent: '',
@@ -38,7 +38,7 @@ export default function AddProductScreen({ navigation, route }) {
         sale_price: '',
         current_stock: '',
         defect_notes: '',
-        barcode: ''
+        barcode: route.params?.scannedBarcode || ''
     });
 
     // Fetch Transport Rate on Mount
@@ -102,6 +102,21 @@ export default function AddProductScreen({ navigation, route }) {
         setOverheadElectricity(eUnit.toFixed(2));
         setShowOverheadCalc(false);
     };
+
+    // Synchronize with Scan Parameters from Home
+    useEffect(() => {
+        if (route.params?.scannedBarcode || route.params?.scannedName) {
+            setFormData(prev => ({
+                ...prev,
+                barcode: route.params.scannedBarcode || prev.barcode,
+                name: route.params.scannedName || prev.name,
+                description: route.params.scannedDescription || prev.description,
+            }));
+            if (route.params.scannedImage) {
+                setImage(route.params.scannedImage);
+            }
+        }
+    }, [route.params?.scannedBarcode, route.params?.scannedName]);
 
     // Load data if editing
     useEffect(() => {
