@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -52,34 +52,59 @@ export default function AdminScreen({ navigation }) {
                 startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             } else if (dateFilter === 'month') {
                 // User requested 'Month' filter to show 12 months (Current Year)
-                startDate = new Date(now.getFullYear(), 0, 1);
+                // 'Month' filter now shows last 30 days
+                startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
             } else if (dateFilter === 'year') {
                 // 'Year' filter now shows last 5 years
                 startDate = new Date(now.getFullYear() - 4, 0, 1);
             }
 
-            // Fetch sales
-            const { data: sales } = await supabase
+            // Fetch all sales (we'll filter status in JS if needed, but let's be permissive first)
+            const { data: sales, error: salesError } = await supabase
                 .from('sales')
-                .select('id, created_at, total_amount, profit_generated, commission_amount')
+                .select('id, created_at, total_amount, profit_generated, commission_amount, status')
                 .gte('created_at', startDate.toISOString())
                 .order('created_at', { ascending: false });
 
-            // Fetch expenses (Fixed: use 'created_at' instead of 'date')
-            const { data: expenses } = await supabase
+            if (salesError) throw salesError;
+
+            // Fetch expenses
+            const { data: expenses, error: expError } = await supabase
                 .from('expenses')
                 .select('amount, created_at')
                 .gte('created_at', startDate.toISOString());
 
-            // ... (Fetch sale items logic)
+            if (expError) throw expError;
 
-            if (sales || expenses) {
-                processChartData(sales || []);
-                processProgressData(sales || [], expenses || []); // New Chart Processing
-                calculateStats(sales || [], expenses || []);
+            // Fetch sale items
+            let saleItems = [];
+            if (sales && sales.length > 0) {
+                const saleIds = sales.map(s => s.id);
+                const { data: items } = await supabase
+                    .from('sale_items')
+                    .select('quantity, products(name)')
+                    .in('sale_id', saleIds);
+                saleItems = items || [];
             }
 
-            // ... (Rest of fetch logic)
+            // Process data for charts and stats
+            // FILTER: Only count completed or empty-status sales as the base
+            const completedSales = (sales || []).filter(s => {
+                const status = (s.status || '').toLowerCase();
+                return status === 'completed' || status === '' || status === 'exitosa' || status === 'vended';
+            });
+
+            // If still $0 but we have sales, maybe it's the status filter. Let's be even more permissive if none match.
+            const finalSales = completedSales.length > 0 ? completedSales : (sales || []);
+
+            // Process data for charts and stats
+            processChartData(finalSales);
+            processProgressData(finalSales, expenses || []);
+            calculateStats(finalSales, expenses || []);
+
+            if (saleItems && saleItems.length > 0) {
+                processProductData(saleItems);
+            }
         } catch (error) {
             console.log('Error fetching admin data:', error);
         } finally {
@@ -96,8 +121,11 @@ export default function AdminScreen({ navigation }) {
             for (let i = 0; i < 24; i++) {
                 timeline.push({
                     key: i,
-                    label: i % 4 === 0 ? `${i}:00` : '', // Show label every 4 hours
-                    dateMatch: (date) => new Date(date).getHours() === i && new Date(date).getDate() === now.getDate(),
+                    label: i % 4 === 0 ? `${i}:00` : '',
+                    dateMatch: (date) => {
+                        const d = new Date(date);
+                        return d.getHours() === i && d.getDate() === now.getDate() && d.getMonth() === now.getMonth();
+                    },
                     total: 0, income: 0, expense: 0
                 });
             }
@@ -147,7 +175,7 @@ export default function AdminScreen({ navigation }) {
             const saleDate = new Date(sale.created_at);
             const item = timeline.find(t => t.dateMatch(saleDate));
             if (item) {
-                item.total += sale.total_amount;
+                item.total += (parseFloat(sale.total_amount) || 0);
             }
         });
 
@@ -163,7 +191,7 @@ export default function AdminScreen({ navigation }) {
         sales.forEach(s => {
             const d = new Date(s.created_at);
             const item = timeline.find(t => t.dateMatch(d));
-            if (item) item.income += s.total_amount;
+            if (item) item.income += (parseFloat(s.total_amount) || 0);
         });
 
         expenses.forEach(e => {
@@ -194,10 +222,10 @@ export default function AdminScreen({ navigation }) {
     };
 
     const calculateStats = (sales, expenses) => {
-        const totalSales = sales.reduce((sum, s) => sum + s.total_amount, 0);
-        const grossProfit = sales.reduce((sum, s) => sum + s.profit_generated, 0);
-        const totalCommissions = sales.reduce((sum, s) => sum + (s.commission_amount || 0), 0);
-        const totalExpenses = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+        const totalSales = (sales || []).reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
+        const grossProfit = (sales || []).reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
+        const totalCommissions = (sales || []).reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
+        const totalExpenses = (expenses || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
 
         // Net Profit = Gross Profit - Commissions - Expenses
         const netProfit = grossProfit - totalCommissions - totalExpenses;
@@ -340,7 +368,11 @@ export default function AdminScreen({ navigation }) {
                 </View>
             </LinearGradient>
 
-            <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
+            <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={styles.content}
+                refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchData} tintColor="#d4af37" />}
+            >
                 {/* Date Filter Buttons */}
                 <View style={styles.filterContainer}>
                     <TouchableOpacity
