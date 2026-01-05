@@ -218,7 +218,13 @@ export default function HomeScreen({ navigation }) {
                         <Text style={styles.greeting}>COMANDANTE,</Text>
                         <Text style={styles.username}>{userRole === 'admin' ? 'LÍDER SUPREMO' : 'NICO A LA ALIANZA'}</Text>
                     </View>
-                    <TouchableOpacity onPress={() => navigation.replace('Login')} style={styles.logoutBtn}>
+                    <TouchableOpacity
+                        onPress={async () => {
+                            await AsyncStorage.removeItem('user_role');
+                            navigation.replace('Login');
+                        }}
+                        style={styles.logoutBtn}
+                    >
                         <MaterialCommunityIcons name="logout" size={20} color="#666" />
                     </TouchableOpacity>
                 </View>

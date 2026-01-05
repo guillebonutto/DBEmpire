@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Dimensions, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Dimensions, StatusBar, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,13 +7,48 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 
 const { width } = Dimensions.get('window');
+import { DeviceAuthService } from '../services/deviceAuth';
 
 export default function LoginScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
 
+    // Hardware & Session Recognition Logic
+    React.useEffect(() => {
+        const performAuthCheck = async () => {
+            setLoading(true);
+            try {
+                // 1. Try recognition by Hardware (Ultra fast & No clicks)
+                const hardwareRole = await DeviceAuthService.checkAuthorization();
+                if (hardwareRole) {
+                    navigation.replace('Home');
+                    return;
+                }
+
+                // 2. Fallback: Try recognition by saved preference
+                const savedRole = await AsyncStorage.getItem('user_role');
+                if (savedRole) {
+                    navigation.replace('Home');
+                }
+            } catch (e) {
+                console.log('Error in auth check:', e);
+            } finally {
+                setLoading(false);
+            }
+        };
+        performAuthCheck();
+    }, []);
+
+    const showSecretSignature = async () => {
+        const info = await DeviceAuthService.getDebugInfo();
+        Alert.alert(
+            '🆔 Identificador de Hardware',
+            `Nombre: ${info.name}\n${info.details}\n\nFirma Segura:\n${info.sig || 'ERROR: NULL'}\n\nEnvía esta firma a soporte para acceso automático.`,
+            [{ text: 'Copiar Firma', onPress: () => console.log('SIGNATURE:', info.sig) }, { text: 'Cerrar' }]
+        );
+    };
+
     const handleSelectUser = async (role) => {
         setLoading(true);
-        // Simulate a sleek loading delay for effect
         setTimeout(async () => {
             try {
                 await AsyncStorage.setItem('user_role', role);
@@ -54,9 +89,15 @@ export default function LoginScreen({ navigation }) {
 
             <SafeAreaView style={styles.content}>
                 <View style={styles.header}>
-                    <View style={styles.logoContainer}>
-                        <MaterialCommunityIcons name="bullseye-arrow" size={60} color="#d4af37" />
-                    </View>
+                    <TouchableOpacity
+                        onLongPress={showSecretSignature}
+                        delayLongPress={3000}
+                        activeOpacity={0.8}
+                    >
+                        <View style={styles.logoContainer}>
+                            <MaterialCommunityIcons name="bullseye-arrow" size={60} color="#d4af37" />
+                        </View>
+                    </TouchableOpacity>
                     <Text style={styles.appName}>DIGITAL BOOST</Text>
                     <Text style={styles.appTagline}>EMPIRE</Text>
                 </View>
