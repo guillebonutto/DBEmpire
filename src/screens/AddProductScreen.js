@@ -41,8 +41,6 @@ export default function AddProductScreen({ navigation, route }) {
         profit_margin_percent: '',
         sale_price: '',
         current_stock: '',
-        sale_price: '',
-        current_stock: '',
         defect_notes: '',
         barcode: route.params?.scannedBarcode || ''
     });
@@ -256,12 +254,11 @@ export default function AddProductScreen({ navigation, route }) {
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
                 defect_notes: formData.defect_notes,
-                electricity_cost: parseFloat(overheadElectricity) || 0,
-                defect_notes: formData.defect_notes,
                 image_url: finalImageUrl,
                 barcode: formData.barcode // Add barcode
             };
 
+            let productId = productToEdit?.id;
             let error;
             if (productToEdit) {
                 // Update
@@ -272,15 +269,18 @@ export default function AddProductScreen({ navigation, route }) {
                 error = updateError;
             } else {
                 // Insert
-                const { error: insertError } = await supabase
+                const { data: newProd, error: insertError } = await supabase
                     .from('products')
-                    .insert([productPayload]);
+                    .insert([productPayload])
+                    .select()
+                    .single();
                 error = insertError;
+                if (newProd) productId = newProd.id;
             }
 
             if (error) throw error;
 
-            // --- AUTO EXPENSE GENERATION ---
+            // --- AUTO EXPENSE & ORDER GENERATION ---
             try {
                 const newStock = parseInt(formData.current_stock) || 0;
                 const costPrice = parseFloat(formData.cost_price) || 0;
@@ -299,6 +299,8 @@ export default function AddProductScreen({ navigation, route }) {
 
                 if (stockDifference > 0 && costPrice > 0) {
                     const expenseAmount = stockDifference * costPrice;
+
+                    // 1. Create Expense
                     const { error: expenseError } = await supabase.from('expenses').insert({
                         description: `Inventario: ${formData.name} (x${stockDifference})`,
                         amount: expenseAmount,
@@ -306,6 +308,33 @@ export default function AddProductScreen({ navigation, route }) {
                         created_at: new Date().toISOString()
                     });
                     if (expenseError) throw expenseError;
+
+                    // 2. Create Supplier Order (Auto-generated)
+                    const { data: orderData, error: orderError } = await supabase
+                        .from('supplier_orders')
+                        .insert({
+                            provider_name: formData.provider || 'Sin Proveedor',
+                            items_description: `Ingreso Manual: ${formData.name}`,
+                            total_cost: expenseAmount,
+                            status: 'received', // Already in stock
+                            installments_total: 1,
+                            installments_paid: 0,
+                            created_at: new Date().toISOString()
+                        })
+                        .select()
+                        .single();
+
+                    if (orderError) {
+                        console.log('Error creating auto-order:', orderError);
+                    } else if (orderData && productId) {
+                        // 3. Link Item
+                        await supabase.from('supplier_order_items').insert({
+                            supplier_order_id: orderData.id,
+                            product_id: productId,
+                            quantity: stockDifference,
+                            cost_per_unit: costPrice
+                        });
+                    }
                 }
             } catch (expErr) {
                 console.log('Auto-expense error:', expErr);

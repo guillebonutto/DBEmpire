@@ -14,6 +14,51 @@ export default function NewSupplierOrderScreen({ navigation }) {
     const [installmentsPaid, setInstallmentsPaid] = useState('0');
     const [loading, setLoading] = useState(false);
 
+    // Product Linking State
+    const [products, setProducts] = useState([]);
+    const [selectedProducts, setSelectedProducts] = useState([]); // { product, quantity, cost }
+    const [showProductModal, setShowProductModal] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+
+    React.useEffect(() => {
+        fetchProducts();
+    }, []);
+
+    const fetchProducts = async () => {
+        const { data } = await supabase.from('products').select('*').eq('active', true);
+        if (data) setProducts(data);
+    };
+
+    const addProductToOrder = (product) => {
+        setSelectedProducts(prev => {
+            const exists = prev.find(p => p.product.id === product.id);
+            if (exists) return prev; // Already added
+            return [...prev, { product, quantity: '1', cost: product.cost_price?.toString() || '0' }];
+        });
+        setShowProductModal(false);
+    };
+
+    const updateProductItem = (id, field, value) => {
+        setSelectedProducts(prev => prev.map(p => {
+            if (p.product.id === id) {
+                return { ...p, [field]: value };
+            }
+            return p;
+        }));
+    };
+
+    const removeProductItem = (id) => {
+        setSelectedProducts(prev => prev.filter(p => p.product.id !== id));
+    };
+
+    // Auto-calculate total cost
+    React.useEffect(() => {
+        const total = selectedProducts.reduce((acc, item) => {
+            return acc + (parseFloat(item.cost) || 0) * (parseInt(item.quantity) || 0);
+        }, 0);
+        if (total > 0) setCost(total.toString());
+    }, [selectedProducts]);
+
     const handleSave = async () => {
         if (!provider) {
             Alert.alert('Error', 'El nombre del proveedor (Temu, Shein...) es obligatorio.');
@@ -30,7 +75,27 @@ export default function NewSupplierOrderScreen({ navigation }) {
                 installments_total: parseInt(installmentsTotal) || 1,
                 installments_paid: parseInt(installmentsPaid) || 0,
                 status: 'pending' // default
-            });
+            })
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            // Save Linked Items
+            if (selectedProducts.length > 0 && data) {
+                const itemsPayload = selectedProducts.map(p => ({
+                    supplier_order_id: data.id,
+                    product_id: p.product.id,
+                    quantity: parseInt(p.quantity) || 1,
+                    cost_per_unit: parseFloat(p.cost) || 0
+                }));
+
+                const { error: itemsError } = await supabase
+                    .from('supplier_order_items')
+                    .insert(itemsPayload);
+
+                if (itemsError) throw itemsError;
+            }
 
             if (error) throw error;
 
@@ -76,10 +141,43 @@ export default function NewSupplierOrderScreen({ navigation }) {
                     />
                 </View>
 
-                <Text style={styles.label}>Descripción de Items</Text>
+                <Text style={styles.label}>Productos Vinculados (Opcional)</Text>
+                {selectedProducts.map((item, index) => (
+                    <View key={index} style={styles.productRow}>
+                        <Text style={styles.productName}>{item.product.name}</Text>
+                        <View style={{ flexDirection: 'row', gap: 10 }}>
+                            <TextInput
+                                style={[styles.miniInput, { width: 60 }]}
+                                placeholder="Cant."
+                                placeholderTextColor="#666"
+                                keyboardType="numeric"
+                                value={item.quantity}
+                                onChangeText={v => updateProductItem(item.product.id, 'quantity', v)}
+                            />
+                            <TextInput
+                                style={[styles.miniInput, { width: 80 }]}
+                                placeholder="Costo U."
+                                placeholderTextColor="#666"
+                                keyboardType="numeric"
+                                value={item.cost}
+                                onChangeText={v => updateProductItem(item.product.id, 'cost', v)}
+                            />
+                            <TouchableOpacity onPress={() => removeProductItem(item.product.id)} style={{ justifyContent: 'center' }}>
+                                <MaterialCommunityIcons name="close-circle" size={24} color="#e74c3c" />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                ))}
+
+                <TouchableOpacity style={styles.addProdBtn} onPress={() => setShowProductModal(true)}>
+                    <MaterialCommunityIcons name="plus" size={20} color="#000" />
+                    <Text style={styles.addProdText}>AGREGAR PRODUCTO DE INVENTARIO</Text>
+                </TouchableOpacity>
+
+                <Text style={styles.label}>Descripción Adicional</Text>
                 <TextInput
-                    style={[styles.input, { height: 100, textAlignVertical: 'top' }]}
-                    placeholder="Ej: 50 fundas, 20 vidrios templados..."
+                    style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
+                    placeholder="Notas extra..."
                     placeholderTextColor="#666"
                     multiline
                     value={itemsDesc}
@@ -129,6 +227,33 @@ export default function NewSupplierOrderScreen({ navigation }) {
                     {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.saveText}>GUARDAR PEDIDO</Text>}
                 </TouchableOpacity>
             </ScrollView>
+
+            {/* Product Selection Modal */}
+            {showProductModal && (
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Seleccionar Producto</Text>
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder="Buscar..."
+                            placeholderTextColor="#666"
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                        />
+                        <ScrollView>
+                            {products.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => (
+                                <TouchableOpacity key={p.id} style={styles.modalItem} onPress={() => addProductToOrder(p)}>
+                                    <Text style={styles.modalItemText}>{p.name}</Text>
+                                    <Text style={styles.modalItemSub}>Stock: {p.current_stock}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                        <TouchableOpacity style={styles.closeModal} onPress={() => setShowProductModal(false)}>
+                            <Text style={styles.closeText}>CERRAR</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
         </SafeAreaView>
     );
 }
@@ -146,5 +271,22 @@ const styles = StyleSheet.create({
     trackingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', padding: 5, paddingLeft: 15, borderRadius: 10, borderWidth: 1, borderColor: '#333', marginBottom: 20 },
 
     saveBtn: { backgroundColor: '#d4af37', padding: 18, borderRadius: 10, alignItems: 'center', marginTop: 20 },
-    saveText: { color: '#000', fontWeight: '900', fontSize: 16 }
+    saveText: { color: '#000', fontWeight: '900', fontSize: 16 },
+
+    // Product Linking Styles
+    productRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#222', padding: 10, borderRadius: 8, marginBottom: 10 },
+    productName: { color: '#fff', fontWeight: 'bold', flex: 1, marginRight: 10 },
+    miniInput: { backgroundColor: '#111', color: '#fff', padding: 8, borderRadius: 5, borderWidth: 1, borderColor: '#333', textAlign: 'center' },
+    addProdBtn: { flexDirection: 'row', backgroundColor: '#d4af37', padding: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+    addProdText: { fontWeight: 'bold', marginLeft: 5, fontSize: 12 },
+
+    modalOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
+    modalContent: { backgroundColor: '#1e1e1e', borderRadius: 15, padding: 20, maxHeight: '80%' },
+    modalTitle: { color: '#d4af37', fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
+    searchInput: { backgroundColor: '#111', color: '#fff', padding: 12, borderRadius: 8, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    modalItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: '#333' },
+    modalItemText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+    modalItemSub: { color: '#666', fontSize: 12 },
+    closeModal: { marginTop: 15, alignItems: 'center', padding: 10 },
+    closeText: { color: '#e74c3c', fontWeight: 'bold' }
 });
