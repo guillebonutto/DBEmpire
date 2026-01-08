@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -16,7 +16,7 @@ export default function StockScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
-    const [isFastMode, setIsFastMode] = useState(false); // New state for rapid stock update
+    const [isFastMode, setIsFastMode] = useState(false);
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();
@@ -27,7 +27,6 @@ export default function StockScreen({ navigation, route }) {
         if (scanned && !isFastMode) return;
 
         let barcodeData = data;
-        // SMART QR HANDLE
         if (data.includes('linktr.ee/digital_boost_empire')) {
             const parts = data.split('barcode=');
             if (parts.length > 1) barcodeData = parts[1];
@@ -39,7 +38,6 @@ export default function StockScreen({ navigation, route }) {
 
         if (product) {
             if (isFastMode) {
-                // Increment stock automatically
                 try {
                     const newStock = (product.current_stock || 0) + 1;
                     const { error } = await supabase
@@ -49,17 +47,13 @@ export default function StockScreen({ navigation, route }) {
 
                     if (error) throw error;
 
-                    // Update local state to reflect change
                     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, current_stock: newStock } : p));
-
-                    // Simple feedback but keep scanning
                     Alert.alert("✅ Stock +1", `${product.name}: ${newStock}`, [{ text: "Seguir", onPress: () => setScanned(false) }], { cancelable: true });
                 } catch (err) {
                     Alert.alert("Error", "No se pudo actualizar el stock");
                     setScanned(false);
                 }
             } else {
-                // Normal mode: just search
                 setIsScanning(false);
                 setSearchQuery(data);
             }
@@ -268,11 +262,6 @@ export default function StockScreen({ navigation, route }) {
         try {
             const linktree = "https://linktr.ee/digital_boost_empire";
             const whatsapp = "+54 9 3884 19-7137";
-            const logoPath = "https://i.imgur.com/your_provided_logo.png"; // Placeholder for the actual logo
-
-            // Note: Since we are in a mobile environment, local filesystem paths like C:/... don't work.
-            // I will use a high-quality CSS fallback/placeholder for the logo unless the user provides a web URL.
-            // For now, I'll use the DBE styled logo box.
 
             const labelItems = products.map(p => {
                 if (!p.barcode) return '';
@@ -383,7 +372,7 @@ export default function StockScreen({ navigation, route }) {
             <View style={styles.header}>
                 <View>
                     <Text style={styles.headerLabel}>LOGÍSTICA DEL IMPERIO</Text>
-                    <Text style={styles.title}>INVENTARIO <Text style={{ color: '#666' }}>({products.length})</Text></Text>
+                    <Text style={styles.title}>INVENTARIO</Text>
                 </View>
                 <View style={styles.headerActions}>
                     <TouchableOpacity
@@ -470,6 +459,25 @@ export default function StockScreen({ navigation, route }) {
                     </View>
                 }
             />
+
+            <Modal visible={isScanning} animationType="slide">
+                <View style={{ flex: 1, backgroundColor: 'black' }}>
+                    <CameraView
+                        style={{ flex: 1 }}
+                        facing="back"
+                        onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                    />
+                    <TouchableOpacity
+                        style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                        onPress={() => setIsScanning(false)}
+                    >
+                        <MaterialCommunityIcons name="close" size={30} color="white" />
+                    </TouchableOpacity>
+                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center' }}>
+                        <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>Apunta al código de barras</Text>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -510,5 +518,5 @@ const styles = StyleSheet.create({
 
     emptyContainer: { alignItems: 'center', marginTop: 100 },
     emptyText: { fontSize: 18, color: '#444', fontWeight: '900', letterSpacing: 1 },
-    emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' }
+    emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' },
 });
