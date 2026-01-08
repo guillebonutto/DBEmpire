@@ -8,6 +8,7 @@ import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { logoBase64 } from '../assets/logoBase64';
 
 export default function StockScreen({ navigation, route }) {
     const [products, setProducts] = useState([]);
@@ -266,18 +267,31 @@ export default function StockScreen({ navigation, route }) {
         setLoading(true);
         try {
             const linktree = "https://linktr.ee/digital_boost_empire";
+            const whatsapp = "+54 9 3884 19-7137";
+            const logoPath = "https://i.imgur.com/your_provided_logo.png"; // Placeholder for the actual logo
+
+            // Note: Since we are in a mobile environment, local filesystem paths like C:/... don't work.
+            // I will use a high-quality CSS fallback/placeholder for the logo unless the user provides a web URL.
+            // For now, I'll use the DBE styled logo box.
+
             const labelItems = products.map(p => {
                 if (!p.barcode) return '';
                 const smartUrl = `${linktree}?barcode=${p.barcode}`;
-                const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(smartUrl)}`;
+                const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(smartUrl)}&ecc=H`;
                 return `
-                <div class="label-card">
-                    <div class="product-name">${p.name.toUpperCase()}</div>
-                    <div class="qr-box">
-                        <img src="${qrApi}" />
+                <div class="label-wrapper">
+                    <div class="wa-top">${whatsapp}</div>
+                    <div class="label-card">
+                        <div class="qr-container">
+                            <img src="${qrApi}" class="qr-code" />
+                            <div class="qr-logo-overlay">
+                                <img src="${logoBase64}" 
+                                     style="width:100%; height:100%; object-fit:contain; border-radius:4px;" 
+                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+                                <div class="logo-fallback" style="display:none; width:100%; height:100%; align-items:center; justify-content:center; color:#d4af37; font-weight:900; font-size:10px;">DBE</div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="product-price">$${p.sale_price}</div>
-                    <div class="helper-text">Escanea para info / App DBE</div>
                 </div>
                 `;
             }).join('');
@@ -287,30 +301,68 @@ export default function StockScreen({ navigation, route }) {
             <html>
             <head>
                 <style>
-                    body { font-family: sans-serif; margin: 0; padding: 20px; }
-                    .labels-container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
-                    .label-card { 
-                        width: 180px; 
-                        height: 250px; 
-                        border: 1px solid #ddd; 
-                        padding: 10px; 
-                        text-align: center; 
-                        display: flex; 
-                        flex-direction: column; 
-                        justify-content: space-between;
-                        border-radius: 8px;
-                        background: #fff;
+                    @page { margin: 0; }
+                    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background: #fff; }
+                    .labels-grid { 
+                        display: grid; 
+                        grid-template-columns: repeat(auto-fill, 130px); 
+                        gap: 0; 
+                        justify-content: center; 
                     }
-                    .product-name { font-size: 14px; font-weight: bold; height: 40px; overflow: hidden; }
-                    .product-price { font-size: 20px; font-weight: 900; color: #000; }
-                    .qr-box { width: 120px; height: 120px; margin: 0 auto; }
-                    .qr-box img { width: 100%; height: 100%; }
-                    .helper-text { font-size: 8px; color: #666; margin-top: 5px; }
+                    .label-wrapper {
+                        width: 130px;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        padding: 10px 0;
+                    }
+                    .wa-top {
+                        font-size: 8px;
+                        font-weight: 900;
+                        color: #000;
+                        margin-bottom: 2px;
+                        letter-spacing: 0.5px;
+                    }
+                    .label-card { 
+                        width: 110px; 
+                        height: 110px;
+                        padding: 5px; 
+                        text-align: center; 
+                        border: 1px dashed #000;
+                        background: #fff;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                    }
+                    .qr-container {
+                        position: relative;
+                        width: 100px;
+                        height: 100px;
+                    }
+                    .qr-code {
+                        width: 100%;
+                        height: 100%;
+                    }
+                    .qr-logo-overlay {
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        width: 32px;
+                        height: 32px;
+                        background: #fff;
+                        border-radius: 6px;
+                        padding: 2px;
+                        box-shadow: 0 0 2px rgba(0,0,0,0.5);
+                        overflow: hidden;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
                 </style>
             </head>
             <body>
-                <h2 style="text-align:center;">Etiquetas Inteligentes Imperial</h2>
-                <div class="labels-container">
+                <div class="labels-grid">
                     ${labelItems}
                 </div>
             </body>

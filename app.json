@@ -47,7 +47,8 @@
             "extraProguardRules": "-keep class com.google.android.gms.** { *; }"
           }
         }
-      ]
+      ],
+      "expo-asset"
     ]
   }
 }
