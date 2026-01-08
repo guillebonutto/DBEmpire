@@ -59,6 +59,24 @@ export default function SupplierOrdersScreen({ navigation }) {
         fetchOrders();
     };
 
+    const handlePayInstallment = async (item) => {
+        const currentPaid = item.installments_paid || 0;
+        const total = item.installments_total || 1;
+
+        if (currentPaid >= total) return;
+
+        const { error } = await supabase
+            .from('supplier_orders')
+            .update({ installments_paid: currentPaid + 1 })
+            .eq('id', item.id);
+
+        if (error) {
+            Alert.alert('Error', 'No se pudo actualizar la cuota');
+        } else {
+            fetchOrders();
+        }
+    };
+
     const renderOrderItem = ({ item }) => (
         <View style={styles.card}>
             <View style={styles.cardHeader}>
@@ -73,6 +91,28 @@ export default function SupplierOrdersScreen({ navigation }) {
 
             <Text style={styles.desc}>{item.items_description}</Text>
             {item.total_cost > 0 && <Text style={styles.cost}>Costo: ${item.total_cost}</Text>}
+
+            {/* Installments Section */}
+            {item.installments_total > 1 && (
+                <View style={styles.installmentContainer}>
+                    <View>
+                        <Text style={styles.installmentText}>
+                            Cuotas: <Text style={{ color: '#fff' }}>{item.installments_paid || 0}/{item.installments_total}</Text>
+                        </Text>
+                        <Text style={styles.installmentText}>
+                            Restantes: <Text style={{ color: '#e74c3c' }}>{item.installments_total - (item.installments_paid || 0)}</Text>
+                        </Text>
+                    </View>
+                    {(item.installments_paid || 0) < item.installments_total && (
+                        <TouchableOpacity
+                            style={styles.payBtn}
+                            onPress={() => handlePayInstallment(item)}
+                        >
+                            <Text style={styles.payBtnText}>PAGAR CUOTA</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            )}
 
             {/* Tracking Section */}
             {item.tracking_number ? (
@@ -140,6 +180,11 @@ const styles = StyleSheet.create({
 
     desc: { color: '#ccc', marginBottom: 10, fontSize: 14 },
     cost: { color: '#fff', fontWeight: 'bold', marginBottom: 10 },
+
+    installmentContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#2c3e50', padding: 10, borderRadius: 8, marginBottom: 10 },
+    installmentText: { color: '#bdc3c7', fontSize: 12, fontWeight: 'bold' },
+    payBtn: { backgroundColor: '#27ae60', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5 },
+    payBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
 
     trackRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', padding: 10, borderRadius: 8, marginBottom: 15, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#333' },
     trackText: { color: '#3498db', marginLeft: 10, fontWeight: '600', letterSpacing: 1 },

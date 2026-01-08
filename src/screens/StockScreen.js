@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -15,7 +15,9 @@ export default function StockScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
-    const [isFastMode, setIsFastMode] = useState(false); // New state for rapid stock update
+    const [isFastMode, setIsFastMode] = useState(false);
+    const [viewMode, setViewMode] = useState('stock'); // 'stock' or 'orders'
+    const [orders, setOrders] = useState([]);
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();
@@ -26,7 +28,6 @@ export default function StockScreen({ navigation, route }) {
         if (scanned && !isFastMode) return;
 
         let barcodeData = data;
-        // SMART QR HANDLE
         if (data.includes('linktr.ee/digital_boost_empire')) {
             const parts = data.split('barcode=');
             if (parts.length > 1) barcodeData = parts[1];
@@ -38,7 +39,6 @@ export default function StockScreen({ navigation, route }) {
 
         if (product) {
             if (isFastMode) {
-                // Increment stock automatically
                 try {
                     const newStock = (product.current_stock || 0) + 1;
                     const { error } = await supabase
@@ -48,17 +48,13 @@ export default function StockScreen({ navigation, route }) {
 
                     if (error) throw error;
 
-                    // Update local state to reflect change
                     setProducts(prev => prev.map(p => p.id === product.id ? { ...p, current_stock: newStock } : p));
-
-                    // Simple feedback but keep scanning
                     Alert.alert("✅ Stock +1", `${product.name}: ${newStock}`, [{ text: "Seguir", onPress: () => setScanned(false) }], { cancelable: true });
                 } catch (err) {
                     Alert.alert("Error", "No se pudo actualizar el stock");
                     setScanned(false);
                 }
             } else {
-                // Normal mode: just search
                 setIsScanning(false);
                 setSearchQuery(data);
             }
@@ -93,6 +89,61 @@ export default function StockScreen({ navigation, route }) {
         } finally {
             setLoading(false);
         }
+    };
+
+    const fetchOrders = async () => {
+        setLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from('supplier_orders')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            setOrders(data || []);
+        } catch (err) {
+            console.log(err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handlePayInstallment = async (item) => {
+        const currentPaid = item.installments_paid || 0;
+        const total = item.installments_total || 1;
+
+        if (currentPaid >= total) return;
+
+        const { error } = await supabase
+            .from('supplier_orders')
+            .update({ installments_paid: currentPaid + 1 })
+            .eq('id', item.id);
+
+        if (error) {
+            Alert.alert('Error', 'No se pudo actualizar la cuota');
+        } else {
+            fetchOrders();
+        }
+    };
+
+    const handleDeleteOrder = (id) => {
+        Alert.alert('Eliminar', '¿Borrar este pedido del historial?', [
+            { text: 'Cancelar' },
+            {
+                text: 'Borrar',
+                style: 'destructive',
+                onPress: async () => {
+                    await supabase.from('supplier_orders').delete().eq('id', id);
+                    fetchOrders();
+                }
+            }
+        ]);
+    };
+
+    const handleTrack = (trackingNumber) => {
+        if (!trackingNumber) return;
+        const url = `https://t.17track.net/en#nums=${trackingNumber}`;
+        Linking.openURL(url);
     };
 
     const handleDelete = async (product) => {
@@ -154,8 +205,9 @@ export default function StockScreen({ navigation, route }) {
 
     useFocusEffect(
         useCallback(() => {
-            fetchProducts();
-        }, [route.params?.refresh, showHiddenStock])
+            if (viewMode === 'stock') fetchProducts();
+            else fetchOrders();
+        }, [route.params?.refresh, showHiddenStock, viewMode])
     );
 
     const renderProductItem = ({ item }) => {
@@ -209,6 +261,56 @@ export default function StockScreen({ navigation, route }) {
             </TouchableOpacity>
         );
     };
+
+    const renderOrderItem = ({ item }) => (
+        <View style={styles.orderCard}>
+            <View style={styles.cardHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <MaterialCommunityIcons name="cube-send" size={24} color="#d4af37" style={{ marginRight: 10 }} />
+                    <Text style={styles.providerName}>{item.provider_name}</Text>
+                </View>
+                <TouchableOpacity onPress={() => handleDeleteOrder(item.id)}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={20} color="#666" />
+                </TouchableOpacity>
+            </View>
+
+            <Text style={styles.desc}>{item.items_description}</Text>
+            {item.total_cost > 0 && <Text style={styles.cost}>Costo: ${item.total_cost}</Text>}
+
+            {/* Installments Section */}
+            {item.installments_total > 1 && (
+                <View style={styles.installmentContainer}>
+                    <View>
+                        <Text style={styles.installmentText}>
+                            Cuotas: <Text style={{ color: '#fff' }}>{item.installments_paid || 0}/{item.installments_total}</Text>
+                        </Text>
+                        <Text style={styles.installmentText}>
+                            Restantes: <Text style={{ color: '#e74c3c' }}>{item.installments_total - (item.installments_paid || 0)}</Text>
+                        </Text>
+                    </View>
+                    {(item.installments_paid || 0) < item.installments_total && (
+                        <TouchableOpacity
+                            style={styles.payBtn}
+                            onPress={() => handlePayInstallment(item)}
+                        >
+                            <Text style={styles.payBtnText}>PAGAR CUOTA</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            )}
+
+            {/* Tracking Section */}
+            {item.tracking_number ? (
+                <TouchableOpacity style={styles.trackRow} onPress={() => handleTrack(item.tracking_number)}>
+                    <MaterialCommunityIcons name="radar" size={20} color="#3498db" />
+                    <Text style={styles.trackText}>{item.tracking_number}</Text>
+                    <MaterialCommunityIcons name="open-in-new" size={16} color="#666" style={{ marginLeft: 5 }} />
+                </TouchableOpacity>
+            ) : null}
+
+            <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
+        </View>
+    );
 
     const exportToPDF = async () => {
         setLoading(true);
@@ -331,7 +433,14 @@ export default function StockScreen({ navigation, route }) {
             <View style={styles.header}>
                 <View>
                     <Text style={styles.headerLabel}>LOGÍSTICA DEL IMPERIO</Text>
-                    <Text style={styles.title}>INVENTARIO <Text style={{ color: '#666' }}>({products.length})</Text></Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+                        <TouchableOpacity onPress={() => setViewMode('stock')}>
+                            <Text style={[styles.title, viewMode !== 'stock' && { color: '#333' }]}>INVENTARIO</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setViewMode('orders')}>
+                            <Text style={[styles.title, viewMode !== 'orders' && { color: '#333' }]}>COMPRAS</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
                 <View style={styles.headerActions}>
                     <TouchableOpacity
@@ -367,54 +476,70 @@ export default function StockScreen({ navigation, route }) {
                 </View>
             </View>
 
-            <View style={styles.searchSection}>
-                <View style={styles.searchBar}>
-                    <MaterialCommunityIcons name="magnify" size={20} color="#555" style={{ marginLeft: 15 }} />
-                    <TextInput
-                        style={styles.searchInput}
-                        placeholder="Buscar activo..."
-                        placeholderTextColor="#444"
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                    />
-                    <TouchableOpacity
-                        style={styles.scanBtn}
-                        onPress={async () => {
-                            if (permission && !permission.granted) {
-                                const result = await requestPermission();
-                                if (!result.granted) {
-                                    Alert.alert("Permiso requerido", "Habilita la cámara.");
-                                    return;
+            {viewMode === 'stock' && (
+                <View style={styles.searchSection}>
+                    <View style={styles.searchBar}>
+                        <MaterialCommunityIcons name="magnify" size={20} color="#555" style={{ marginLeft: 15 }} />
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder="Buscar activo..."
+                            placeholderTextColor="#444"
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                        />
+                        <TouchableOpacity
+                            style={styles.scanBtn}
+                            onPress={async () => {
+                                if (permission && !permission.granted) {
+                                    const result = await requestPermission();
+                                    if (!result.granted) {
+                                        Alert.alert("Permiso requerido", "Habilita la cámara.");
+                                        return;
+                                    }
                                 }
-                            }
-                            setScanned(false);
-                            setIsScanning(true);
-                        }}
+                                setScanned(false);
+                                setIsScanning(true);
+                            }}
+                        >
+                            <MaterialCommunityIcons name="barcode-scan" size={20} color="#d4af37" />
+                        </TouchableOpacity>
+                    </View>
+
+                    <TouchableOpacity
+                        style={styles.addButton}
+                        onPress={() => navigation.navigate('AddProduct')}
                     >
-                        <MaterialCommunityIcons name="barcode-scan" size={20} color="#d4af37" />
+                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
+                            <MaterialCommunityIcons name="plus" size={28} color="#000" />
+                        </LinearGradient>
                     </TouchableOpacity>
                 </View>
+            )}
 
-                <TouchableOpacity
-                    style={styles.addButton}
-                    onPress={() => navigation.navigate('AddProduct')}
-                >
-                    <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
-                        <MaterialCommunityIcons name="plus" size={28} color="#000" />
-                    </LinearGradient>
-                </TouchableOpacity>
-            </View>
+            {viewMode === 'orders' && (
+                <View style={styles.searchSection}>
+                    <View style={{ flex: 1 }} />
+                    <TouchableOpacity
+                        style={styles.addButton}
+                        onPress={() => navigation.navigate('NewSupplierOrder')}
+                    >
+                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
+                            <MaterialCommunityIcons name="plus" size={28} color="#000" />
+                        </LinearGradient>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             <FlatList
-                data={filteredProducts}
+                data={viewMode === 'stock' ? filteredProducts : orders}
                 keyExtractor={(item) => item.id}
-                renderItem={renderProductItem}
+                renderItem={viewMode === 'stock' ? renderProductItem : renderOrderItem}
                 contentContainerStyle={styles.listContent}
-                refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchProducts} tintColor="#d4af37" />}
+                refreshControl={<RefreshControl refreshing={loading} onRefresh={viewMode === 'stock' ? fetchProducts : fetchOrders} tintColor="#d4af37" />}
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
-                        <Text style={styles.emptyText}>{searchQuery ? 'No encontrado.' : 'Bóveda vacía.'}</Text>
-                        {!searchQuery && <Text style={styles.emptySubtext}>Añade activos para comenzar.</Text>}
+                        <Text style={styles.emptyText}>{viewMode === 'stock' ? (searchQuery ? 'No encontrado.' : 'Bóveda vacía.') : 'No hay pedidos.'}</Text>
+                        {!searchQuery && viewMode === 'stock' && <Text style={styles.emptySubtext}>Añade activos para comenzar.</Text>}
                     </View>
                 }
             />
@@ -458,5 +583,19 @@ const styles = StyleSheet.create({
 
     emptyContainer: { alignItems: 'center', marginTop: 100 },
     emptyText: { fontSize: 18, color: '#444', fontWeight: '900', letterSpacing: 1 },
-    emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' }
+    emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' },
+
+    // Order Styles
+    orderCard: { backgroundColor: '#1e1e1e', borderRadius: 12, padding: 20, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10, alignItems: 'center' },
+    providerName: { color: '#fff', fontWeight: 'bold', fontSize: 18 },
+    desc: { color: '#ccc', marginBottom: 10, fontSize: 14 },
+    cost: { color: '#fff', fontWeight: 'bold', marginBottom: 10 },
+    installmentContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#2c3e50', padding: 10, borderRadius: 8, marginBottom: 10 },
+    installmentText: { color: '#bdc3c7', fontSize: 12, fontWeight: 'bold' },
+    payBtn: { backgroundColor: '#27ae60', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5 },
+    payBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+    trackRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', padding: 10, borderRadius: 8, marginBottom: 15, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#333' },
+    trackText: { color: '#3498db', marginLeft: 10, fontWeight: '600', letterSpacing: 1 },
+    date: { color: '#666', fontSize: 12 }
 });

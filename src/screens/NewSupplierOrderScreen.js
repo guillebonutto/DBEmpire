@@ -10,6 +10,8 @@ export default function NewSupplierOrderScreen({ navigation }) {
     const [tracking, setTracking] = useState('');
     const [itemsDesc, setItemsDesc] = useState('');
     const [cost, setCost] = useState('');
+    const [installmentsTotal, setInstallmentsTotal] = useState('1');
+    const [installmentsPaid, setInstallmentsPaid] = useState('0');
     const [loading, setLoading] = useState(false);
 
     const handleSave = async () => {
@@ -25,6 +27,8 @@ export default function NewSupplierOrderScreen({ navigation }) {
                 tracking_number: tracking || null,
                 items_description: itemsDesc,
                 total_cost: parseFloat(cost) || 0,
+                installments_total: parseInt(installmentsTotal) || 1,
+                installments_paid: parseInt(installmentsPaid) || 0,
                 status: 'pending' // default
             });
 
@@ -92,6 +96,31 @@ export default function NewSupplierOrderScreen({ navigation }) {
                     onChangeText={setCost}
                 />
 
+                <View style={styles.row}>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                        <Text style={styles.label}>Cuotas Totales</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="1"
+                            placeholderTextColor="#666"
+                            keyboardType="numeric"
+                            value={installmentsTotal}
+                            onChangeText={setInstallmentsTotal}
+                        />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.label}>Cuotas Pagadas</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="0"
+                            placeholderTextColor="#666"
+                            keyboardType="numeric"
+                            value={installmentsPaid}
+                            onChangeText={setInstallmentsPaid}
+                        />
+                    </View>
+                </View>
+
                 <TouchableOpacity
                     style={styles.saveBtn}
                     onPress={handleSave}
@@ -112,6 +141,7 @@ const styles = StyleSheet.create({
 
     label: { color: '#d4af37', marginBottom: 10, fontWeight: 'bold', marginTop: 10 },
     input: { backgroundColor: '#1e1e1e', color: '#fff', padding: 15, borderRadius: 10, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
+    row: { flexDirection: 'row', justifyContent: 'space-between' },
 
     trackingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e1e1e', padding: 5, paddingLeft: 15, borderRadius: 10, borderWidth: 1, borderColor: '#333', marginBottom: 20 },
 
