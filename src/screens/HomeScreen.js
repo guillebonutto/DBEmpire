@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, RefreshControl, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -7,6 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
+import { NotificationService } from '../services/notificationService';
+import { SyncService } from '../services/syncService';
+import NetInfo from '@react-native-community/netinfo';
+
+const { width } = Dimensions.get('window');
 
 export default function HomeScreen({ navigation }) {
     const [userRole, setUserRole] = useState('seller');
@@ -28,60 +33,24 @@ export default function HomeScreen({ navigation }) {
         AsyncStorage.getItem('user_role').then(role => {
             if (role) setUserRole(role);
         });
-    }, []);
+        NotificationService.requestPermissions();
 
-    const handleBarcodeScanned = async ({ data }) => {
-        if (scanned) return;
-        setScanned(true);
-        setIsScanning(false);
+        // Initial sync attempt
+        SyncService.syncPending();
 
-        try {
-            // 1. Check local DB
-            const { data: product, error } = await supabase
-                .from('products')
-                .select('*')
-                .eq('barcode', data)
-                .single();
-
-            if (product) {
-                navigation.navigate('NewSale', { preselectedProduct: product });
-            } else {
-                // 2. Not found locally, fetch from Open Food Facts
-                let scannedName = '';
-                let scannedDescription = '';
-                let scannedImage = null;
-
-                try {
-                    const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${data}.json`);
-                    const json = await response.json();
-                    if (json.status === 1) {
-                        const product = json.product;
-                        scannedName = product.product_name || '';
-                        scannedDescription = product.generic_name || product.product_name || '';
-                        scannedImage = product.image_url ||
-                            product.image_front_url ||
-                            product.selected_images?.front?.display?.es ||
-                            product.selected_images?.front?.display?.en ||
-                            null;
+        // Listen for reconnect
+        const unsubscribe = NetInfo.addEventListener(state => {
+            if (state.isConnected) {
+                SyncService.syncPending().then(success => {
+                    if (success) {
+                        fetchDashboardStats(); // Refresh stats after sync
                     }
-                } catch (e) {
-                    console.log("Error fetching from external API:", e);
-                }
-
-                navigation.navigate('AddProduct', {
-                    scannedBarcode: data,
-                    scannedName: scannedName,
-                    scannedDescription: scannedDescription,
-                    scannedImage: scannedImage
                 });
             }
-        } catch (err) {
-            console.log("Error searching product:", err);
-            navigation.navigate('AddProduct', { scannedBarcode: data });
-        } finally {
-            setScanned(false);
-        }
-    };
+        });
+
+        return () => unsubscribe();
+    }, []);
 
     const fetchDashboardStats = async () => {
         setLoading(true);
@@ -89,7 +58,6 @@ export default function HomeScreen({ navigation }) {
             const now = new Date();
             const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
-            // 1. Fetch Today's Sales & Profit
             const { data: sales } = await supabase
                 .from('sales')
                 .select('total_amount, profit_generated, commission_amount, status')
@@ -101,7 +69,8 @@ export default function HomeScreen({ navigation }) {
 
             if (sales) {
                 sales.forEach(s => {
-                    if (s.status === 'completed') {
+                    const status = (s.status || '').toLowerCase();
+                    if (status === 'completed' || status === 'exitosa' || status === '') {
                         todaySales += (s.total_amount || 0);
                         grossProfit += (s.profit_generated || 0);
                         commissions += (s.commission_amount || 0);
@@ -109,236 +78,176 @@ export default function HomeScreen({ navigation }) {
                 });
             }
 
-            // 2. Fetch Expenses for today
-            const { data: expenses } = await supabase
-                .from('expenses')
-                .select('amount')
-                .gte('created_at', startOfDay);
-
+            const { data: expenses } = await supabase.from('expenses').select('amount').gte('created_at', startOfDay);
             const totalExpenses = expenses ? expenses.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
-
-            // 3. Fetch Budgets (Total pending)
-            const { data: allBudgets } = await supabase
-                .from('sales')
-                .select('total_amount')
-                .eq('status', 'budget');
-
-            const totalBudgets = allBudgets ? allBudgets.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0;
-
-            // 4. Fetch Debts (Supplier orders not received)
-            const { data: pendingOrders } = await supabase
-                .from('supplier_orders')
-                .select('total_cost')
-                .neq('status', 'received');
-
-            const totalDebts = pendingOrders ? pendingOrders.reduce((acc, order) => acc + (parseFloat(order.total_cost) || 0), 0) : 0;
-
-            // 5. Fetch Low Stock Count
-            const { data: lowStockItems, error: lsError } = await supabase
-                .from('products')
-                .select('id')
-                .eq('active', true)
-                .lte('current_stock', 5);
-
-            const lowStockCount = lowStockItems ? lowStockItems.length : 0;
+            const { data: budgets } = await supabase.from('sales').select('total_amount').eq('status', 'budget');
+            const { data: lowStock } = await supabase.from('products').select('id').eq('active', true).lte('current_stock', 5);
 
             setStats({
                 todaySales,
-                budgetSales: totalBudgets,
-                debtSupplier: totalDebts,
+                budgetSales: budgets ? budgets.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
                 netProfit: grossProfit - commissions - totalExpenses,
-                lowStockCount
+                lowStockCount: lowStock ? lowStock.length : 0
             });
-
         } catch (error) {
-            console.log('Error fetching dashboard stats:', error);
+            console.log('Stats error:', error);
         } finally {
             setLoading(false);
         }
     };
 
-    useFocusEffect(
-        useCallback(() => {
-            fetchDashboardStats();
-        }, [])
-    );
+    const getAICounsel = () => {
+        if (loading) return "Consultando al Oráculo...";
+        if (stats.lowStockCount > 3) return "⚠️ Stock crítico detectado. Reabastece pronto.";
+        if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales} en presupuestos pendientes.`;
+        return "Buen trabajo, Comandante. El imperio crece.";
+    };
 
-    // Compact Nav Item Component
-    const CompactNavItem = ({ title, icon, color, onPress }) => (
-        <TouchableOpacity style={styles.compactNavItem} onPress={onPress}>
-            <View style={[styles.compactIconContainer, { backgroundColor: color + '20' }]}>
-                <MaterialCommunityIcons name={icon} size={20} color={color} />
+    useFocusEffect(useCallback(() => { fetchDashboardStats(); }, []));
+
+    const handleBarcodeScanned = async ({ data }) => {
+        if (scanned) return;
+
+        let barcodeData = data;
+        // SMART QR HANDLE
+        if (data.includes('linktr.ee/digital_boost_empire')) {
+            const parts = data.split('barcode=');
+            if (parts.length > 1) barcodeData = parts[1];
+        }
+
+        setScanned(true);
+        setIsScanning(false);
+        try {
+            const { data: product } = await supabase.from('products').select('*').eq('barcode', barcodeData).single();
+            if (product) {
+                navigation.navigate('NewSale', { preselectedProduct: product });
+            } else {
+                navigation.navigate('AddProduct', { scannedBarcode: barcodeData });
+            }
+        } catch (err) {
+            navigation.navigate('AddProduct', { scannedBarcode: barcodeData });
+        } finally {
+            setScanned(false);
+        }
+    };
+
+    const MinimalModule = ({ title, icon, color, isNew, onPress }) => (
+        <TouchableOpacity style={styles.miniCard} onPress={onPress} activeOpacity={0.7}>
+            <View style={[styles.miniIcon, { backgroundColor: color + '15', borderColor: color + '40' }]}>
+                <MaterialCommunityIcons name={icon} size={24} color={color} />
             </View>
-            <Text style={styles.compactNavTitle} numberOfLines={1}>{title}</Text>
-        </TouchableOpacity>
-    );
-
-    // Nav Item Component
-    const NavItem = ({ title, icon, color, onPress, description }) => (
-        <TouchableOpacity style={[styles.navItem, { borderColor: color + '30' }]} onPress={onPress} activeOpacity={0.7}>
-            <LinearGradient colors={['#1a1a1a', '#0a0a0a']} style={styles.navItemInner}>
-                <View style={[styles.navIconContainer, { backgroundColor: color + '20' }]}>
-                    <MaterialCommunityIcons name={icon} size={24} color={color} />
-                </View>
-                <View style={styles.navTextContainer}>
-                    <Text style={styles.navTitle}>{title}</Text>
-                    <Text style={styles.navDesc} numberOfLines={1}>{description}</Text>
-                </View>
-                <MaterialCommunityIcons name="chevron-right" size={18} color="#444" />
-            </LinearGradient>
+            <Text style={styles.miniTitle}>{title}</Text>
+            {isNew && <View style={styles.miniBadge} />}
         </TouchableOpacity>
     );
 
     if (isScanning) {
         return (
-            <SafeAreaView style={styles.scannerContainer}>
-                <CameraView
-                    style={StyleSheet.absoluteFillObject}
-                    onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
-                />
-                <TouchableOpacity style={styles.closeScanner} onPress={() => setIsScanning(false)}>
+            <View style={styles.scannerFull}>
+                <CameraView style={StyleSheet.absoluteFillObject} onBarcodeScanned={scanned ? undefined : handleBarcodeScanned} />
+                <TouchableOpacity style={styles.closeBtn} onPress={() => setIsScanning(false)}>
                     <MaterialCommunityIcons name="close-circle" size={50} color="#fff" />
                 </TouchableOpacity>
-                <View style={styles.scannerOverlay}>
-                    <View style={styles.scannerRim} />
-                    <Text style={styles.scannerText}>Apunta a un código de barras</Text>
-                </View>
-            </SafeAreaView>
+            </View>
         );
     }
 
     return (
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
+            <LinearGradient colors={['#000', '#121212']} style={styles.background} />
 
-            <SafeAreaView style={styles.safeContainer} edges={['top']}>
-                {/* Header Row */}
-                <View style={styles.headerRow}>
+            <SafeAreaView style={styles.safe}>
+                <View style={styles.header}>
                     <View>
-                        <Text style={styles.greeting}>COMANDANTE,</Text>
-                        <Text style={styles.username}>{userRole === 'admin' ? 'LÍDER SUPREMO' : 'NICO A LA ALIANZA'}</Text>
+                        <Text style={styles.brandName}>EMPIRE 👑</Text>
+                        <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'Aliado'}</Text>
                     </View>
-                    <TouchableOpacity
-                        onPress={async () => {
-                            await AsyncStorage.removeItem('user_role');
-                            navigation.replace('Login');
-                        }}
-                        style={styles.logoutBtn}
-                    >
-                        <MaterialCommunityIcons name="logout" size={20} color="#666" />
+                    <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login'); }}>
+                        <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
                     </TouchableOpacity>
                 </View>
 
-                {/* Compact Menu Row */}
-                <View style={styles.menuContainer}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.menuScroll}>
-                        <CompactNavItem
-                            title="Inventario"
-                            icon="package-variant-closed"
-                            color="#d4af37"
-                            onPress={() => navigation.navigate('Stock')}
-                        />
-                        <CompactNavItem
-                            title="Importaciones"
-                            icon="airplane"
-                            color="#3498db"
-                            onPress={() => navigation.navigate('SupplierOrders')}
-                        />
-                        <CompactNavItem
-                            title="Clientes"
-                            icon="account-group"
-                            color="#a29bfe"
-                            onPress={() => navigation.navigate('Clients')}
-                        />
-                        <CompactNavItem
-                            title="Ventas"
-                            icon="chart-line"
-                            color="#2ecc71"
-                            onPress={() => navigation.navigate('Sales')}
-                        />
-                        <CompactNavItem
-                            title="Pedidos"
-                            icon="truck-delivery"
-                            color="#e67e22"
-                            onPress={() => navigation.navigate('Orders')}
-                        />
-                        {userRole === 'admin' && (
-                            <CompactNavItem
-                                title="Panel Admin"
-                                icon="shield-account"
-                                color="#e74c3c"
-                                onPress={() => navigation.navigate('Admin')}
-                            />
-                        )}
-                    </ScrollView>
-                </View>
+                <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+                    {/* Minimal Insight */}
+                    <View style={styles.insightBox}>
+                        <LinearGradient colors={['rgba(212,175,55,0.1)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.insightGrad} />
+                        <MaterialCommunityIcons name="lightning-bolt" size={18} color="#d4af37" />
+                        <Text style={styles.insightText}>{getAICounsel()}</Text>
+                    </View>
 
-                {/* Main Scanner Section */}
-                <View style={styles.centerSection}>
-                    <TouchableOpacity
-                        style={styles.giantScannerBtn}
-                        onPress={async () => {
-                            if (permission && !permission.granted) {
-                                const result = await requestPermission();
-                                if (!result.granted) return;
-                            }
-                            setIsScanning(true);
-                        }}
-                        activeOpacity={0.8}
-                    >
-                        <LinearGradient colors={['#d4af37', '#b8942d']} style={styles.scannerCircle}>
-                            <MaterialCommunityIcons name="barcode-scan" size={80} color="#000" />
-                            <Text style={styles.scannerBtnText}>NUEVA VENTA</Text>
-                        </LinearGradient>
-                    </TouchableOpacity>
-                    <Text style={styles.centerDesc}>Escanea para empezar a vender</Text>
-                </View>
+                    {/* Stats Bricks Clean */}
+                    <View style={styles.statsGrid}>
+                        <View style={styles.statBrick}>
+                            <Text style={styles.statLab}>Ventas Hoy</Text>
+                            <Text style={styles.statVal}>${stats.todaySales}</Text>
+                        </View>
+                        <View style={styles.statBrick}>
+                            <Text style={styles.statLab}>Balance Neto</Text>
+                            <Text style={[styles.statVal, { color: stats.netProfit >= 0 ? '#00ff88' : '#ff4444' }]}>
+                                ${stats.netProfit}
+                            </Text>
+                        </View>
+                    </View>
 
-                {/* Optional Alert Banner */}
-                {stats.lowStockCount > 0 && (
-                    <TouchableOpacity
-                        style={styles.alertBanner}
-                        onPress={() => navigation.navigate('Stock', { filter: 'low' })}
-                    >
-                        <LinearGradient colors={['#e74c3c', '#d63031']} style={styles.alertGradient}>
-                            <MaterialCommunityIcons name="alert-decagram" size={20} color="#fff" />
-                            <Text style={styles.alertText}>ALERTA: {stats.lowStockCount} Activos bajos</Text>
-                            <MaterialCommunityIcons name="chevron-right" size={20} color="#fff" />
-                        </LinearGradient>
-                    </TouchableOpacity>
-                )}
+                    {/* Minimalist Grid of Actions */}
+                    <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
+                    <View style={styles.actionGrid}>
+                        <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => Alert.alert('Empire AI Coach', getAICounsel())} />
+                        <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
+                        <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
+                        <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
+                        <MinimalModule title="Presupuesto" icon="file-document-edit" color="#e67e22" onPress={() => navigation.navigate('NewSale', { mode: 'quote' })} />
+                        <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
+                    </View>
+
+                    {/* Primary Action: Minimalist Giant Scanner */}
+                    <View style={styles.scannerCenter}>
+                        <TouchableOpacity style={styles.scannerTap} onPress={() => setIsScanning(true)}>
+                            <LinearGradient colors={['#d4af37', '#b8860b']} style={styles.scannerCircle}>
+                                <MaterialCommunityIcons name="barcode-scan" size={45} color="#000" />
+                                <Text style={styles.scannerLabel}>ESCANEAR PRODUCTO</Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    </View>
+                </ScrollView>
             </SafeAreaView>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000000' },
-    safeContainer: { flex: 1, paddingHorizontal: 20 },
-    headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15, marginBottom: 20 },
-    greeting: { color: '#666', fontSize: 10, letterSpacing: 2, fontWeight: '900' },
-    username: { color: '#d4af37', fontSize: 20, fontWeight: '900', letterSpacing: 1 },
-    logoutBtn: { padding: 8, backgroundColor: '#1a1a1a', borderRadius: 10, borderWidth: 1, borderColor: '#333' },
+    container: { flex: 1, backgroundColor: '#000' },
+    background: { ...StyleSheet.absoluteFillObject },
+    safe: { flex: 1 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, paddingVertical: 20 },
+    brandName: { color: '#d4af37', fontSize: 22, fontWeight: '900', letterSpacing: 2 },
+    headerRole: { color: '#666', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginTop: 2 },
 
-    menuContainer: { marginHorizontal: -20, marginBottom: 20 },
-    menuScroll: { paddingHorizontal: 20, gap: 15 },
-    compactNavItem: { alignItems: 'center', width: 75 },
-    compactIconContainer: { width: 50, height: 50, borderRadius: 15, justifyContent: 'center', alignItems: 'center', marginBottom: 5 },
-    compactNavTitle: { color: '#888', fontSize: 10, fontWeight: '600', textAlign: 'center' },
+    scroll: { paddingBottom: 120 },
 
-    centerSection: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    giantScannerBtn: { width: 220, height: 220, borderRadius: 110, elevation: 15, shadowColor: '#d4af37', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.5, shadowRadius: 15 },
-    scannerCircle: { flex: 1, borderRadius: 110, justifyContent: 'center', alignItems: 'center' },
-    scannerBtnText: { color: '#000', fontSize: 16, fontWeight: '900', marginTop: 15, letterSpacing: 1 },
-    centerDesc: { color: '#444', fontSize: 12, marginTop: 25, fontWeight: '600', letterSpacing: 1, textTransform: 'uppercase' },
+    insightBox: { marginHorizontal: 25, flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 12, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#1a1a1a', overflow: 'hidden' },
+    insightGrad: { ...StyleSheet.absoluteFillObject },
+    insightText: { color: '#bbb', fontSize: 13, fontWeight: '600', marginLeft: 10 },
 
-    alertBanner: { marginBottom: 20, borderRadius: 15, overflow: 'hidden' },
-    alertGradient: { padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    alertText: { flex: 1, color: '#fff', fontSize: 12, fontWeight: '900', marginHorizontal: 10 },
+    statsGrid: { flexDirection: 'row', gap: 12, paddingHorizontal: 25, marginTop: 20 },
+    statBrick: { flex: 1, backgroundColor: '#0a0a0a', padding: 18, borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' },
+    statLab: { color: '#555', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+    statVal: { color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 6 },
 
-    scannerContainer: { flex: 1, backgroundColor: '#000' },
-    closeScanner: { position: 'absolute', top: 50, right: 30, zIndex: 10 },
-    scannerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
-    scannerRim: { width: 250, height: 250, borderWidth: 2, borderColor: '#d4af37', borderRadius: 40, backgroundColor: 'transparent' },
-    scannerText: { color: '#fff', marginTop: 20, fontWeight: 'bold', fontSize: 16, textAlign: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 10, borderRadius: 10 }
+    sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, paddingHorizontal: 25, marginTop: 30, marginBottom: 15 },
+
+    actionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, gap: 10 },
+    miniCard: { width: (width - 60) / 3, backgroundColor: '#0a0a0a', padding: 15, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
+    miniIcon: { width: 45, height: 45, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, marginBottom: 10 },
+    miniTitle: { color: '#888', fontSize: 10, fontWeight: '800' },
+    miniBadge: { position: 'absolute', top: 10, right: 10, width: 6, height: 6, borderRadius: 3, backgroundColor: '#d4af37' },
+
+    scannerCenter: { alignItems: 'center', marginTop: 40 },
+    scannerTap: { width: 180, height: 180, borderRadius: 90, elevation: 20, shadowColor: '#d4af37', shadowOpacity: 0.3, shadowRadius: 20 },
+    scannerCircle: { flex: 1, borderRadius: 90, justifyContent: 'center', alignItems: 'center', padding: 20 },
+    scannerLabel: { color: '#000', fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 10, letterSpacing: 1 },
+
+    scannerFull: { flex: 1, backgroundColor: '#000' },
+    closeBtn: { position: 'absolute', top: 50, right: 30 }
 });

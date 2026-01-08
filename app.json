@@ -37,6 +37,16 @@
         {
           "photosPermission": "The app accesses your photos to let you upload product images."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.google.android.gms.** { *; }"
+          }
+        }
       ]
     ]
   }

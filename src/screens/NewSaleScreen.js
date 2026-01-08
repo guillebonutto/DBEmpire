@@ -9,8 +9,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { NotificationService } from '../services/notificationService';
+import { SyncService } from '../services/syncService';
+import NetInfo from '@react-native-community/netinfo';
 
-export default function NewSaleScreen({ navigation }) {
+export default function NewSaleScreen({ navigation, route }) {
     const [cart, setCart] = useState([]);
     const [products, setProducts] = useState([]);
     const [clients, setClients] = useState([]);
@@ -48,7 +51,26 @@ export default function NewSaleScreen({ navigation }) {
         });
         fetchData();
         fetchCommissionRate();
-    }, []);
+
+        // Handle preselected product from Home screen barcode scan
+        if (route.params?.preselectedProduct) {
+            const product = route.params.preselectedProduct;
+            setCart(prev => {
+                const existing = prev.find(item => item.id === product.id);
+                if (existing) {
+                    return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+                }
+                return [...prev, { ...product, qty: 1 }];
+            });
+            navigation.setParams({ preselectedProduct: null });
+        }
+
+        // Handle specific mode (e.g. Presupuesto from Home)
+        if (route.params?.mode) {
+            if (route.params.mode === 'quote') setSaleType('budget');
+            navigation.setParams({ mode: null });
+        }
+    }, [route.params?.preselectedProduct, route.params?.mode]);
 
     const fetchCommissionRate = async () => {
         try {
@@ -115,11 +137,18 @@ export default function NewSaleScreen({ navigation }) {
     };
 
     const handleBarcodeScanned = ({ data }) => {
+        let barcodeData = data;
+        // SMART QR HANDLE
+        if (data.includes('linktr.ee/digital_boost_empire')) {
+            const parts = data.split('barcode=');
+            if (parts.length > 1) barcodeData = parts[1];
+        }
+
         setScanned(true);
         setIsScanning(false); // Close immediately
 
         // Find product
-        const product = products.find(p => p.barcode === data);
+        const product = products.find(p => p.barcode === barcodeData);
 
         if (product) {
             // Check stock
@@ -180,11 +209,19 @@ export default function NewSaleScreen({ navigation }) {
 
     const { total, totalProfit, commission } = calculateTotals();
 
+    const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
+
     // Triggered when clicking "COBRAR"
     const handleCheckout = () => {
         if (cart.length === 0) return;
 
         // Final sanity check for client
+        if (!selectedClient && saleType !== 'completed') {
+            Alert.alert('Falta Cliente', 'Las deudas y presupuestos requieren seleccionar un cliente.');
+            setClientModalVisible(true);
+            return;
+        }
+
         if (!selectedClient) {
             setClientModalVisible(true);
             return;
@@ -328,27 +365,60 @@ export default function NewSaleScreen({ navigation }) {
     const processCheckout = async (client) => {
         setLoading(true);
         try {
-            // Find seller ID logic...
+            const netState = await NetInfo.fetch();
+
+            // Logic for Seller ID and Device Signature
             const { data: profiles } = await supabase.from('profiles').select('id').eq('role', currentUserRole).limit(1);
             let sellerId = profiles && profiles.length > 0 ? profiles[0].id : null;
-            if (!sellerId) {
-                const { data: allProfiles } = await supabase.from('profiles').select('id').limit(1);
-                if (allProfiles && allProfiles.length > 0) sellerId = allProfiles[0].id;
+            const deviceSig = await require('../services/deviceAuth').DeviceAuthService.getDeviceSignature();
+
+            let salePayload = {
+                seller_id: sellerId,
+                client_id: client ? client.id : null,
+                total_amount: total,
+                profit_generated: totalProfit,
+                commission_amount: commission,
+                status: saleType,
+                device_sig: deviceSig
+            };
+
+            if (!netState.isConnected) {
+                // OFFLINE MODE
+                const offlineId = await SyncService.queueSale(salePayload, cart);
+                Alert.alert(
+                    '📴 Modo Offline Activo',
+                    'No tienes internet. La venta se ha guardado localmente y se sincronizará automáticamente cuando recuperes la señal.',
+                    [{
+                        text: 'ENTENDIDO', onPress: () => {
+                            setCart([]);
+                            setSelectedClient(null);
+                            setClientModalVisible(false);
+                            navigation.navigate('Home');
+                        }
+                    }]
+                );
+                return;
             }
 
-            // Insert Sale
-            const { data: saleData, error: saleError } = await supabase
+            // ... Proceed with normal online insert ...
+            let { data: saleData, error: saleError } = await supabase
                 .from('sales')
-                .insert({
-                    seller_id: sellerId,
-                    client_id: client ? client.id : null,
-                    total_amount: total,
-                    profit_generated: totalProfit,
-                    commission_amount: commission,
-                    status: 'completed'
-                })
+                .insert(salePayload)
                 .select()
                 .single();
+
+            // Fallback: If device_sig column doesn't exist yet, retry without it
+            if (saleError && saleError.message.includes('device_sig')) {
+                console.log('Retry: device_sig column missing. Inserting without it.');
+                delete salePayload.device_sig;
+                const retry = await supabase
+                    .from('sales')
+                    .insert(salePayload)
+                    .select()
+                    .single();
+                saleData = retry.data;
+                saleError = retry.error;
+            }
 
             if (saleError) throw saleError;
 
@@ -364,10 +434,23 @@ export default function NewSaleScreen({ navigation }) {
             const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
             if (itemsError) throw itemsError;
 
-            // Update Stock
-            for (const item of cart) {
-                const newStock = (item.current_stock || 0) - item.qty;
-                await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
+            // Update Stock (Skip if it's just a budget/quote)
+            if (saleType !== 'budget') {
+                const lowStockProducts = [];
+                for (const item of cart) {
+                    const newStock = (item.current_stock || 0) - item.qty;
+                    await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
+
+                    if (newStock <= 5) {
+                        lowStockProducts.push({ name: item.name, stock: newStock });
+                        await NotificationService.sendLowStockAlert(item.name, newStock);
+                    }
+                }
+
+                // If there are critical products, schedule the 5-hour reminder
+                if (lowStockProducts.length > 0) {
+                    await NotificationService.scheduleStockReminder(lowStockProducts);
+                }
             }
 
             Alert.alert(
@@ -556,24 +639,41 @@ export default function NewSaleScreen({ navigation }) {
                 }
             />
 
+            {/* Transaction Type Selector */}
+            <View style={styles.typeSelector}>
+                <TouchableOpacity
+                    style={[styles.typeBtn, saleType === 'completed' && styles.typeBtnActive]}
+                    onPress={() => setSaleType('completed')}
+                >
+                    <MaterialCommunityIcons name="currency-usd" size={18} color={saleType === 'completed' ? '#000' : '#888'} />
+                    <Text style={[styles.typeText, saleType === 'completed' && styles.typeTextActive]}>VENTA</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.typeBtn, saleType === 'pending' && styles.typeBtnActive]}
+                    onPress={() => setSaleType('pending')}
+                >
+                    <MaterialCommunityIcons name="clock-outline" size={18} color={saleType === 'pending' ? '#000' : '#888'} />
+                    <Text style={[styles.typeText, saleType === 'pending' && styles.typeTextActive]}>DEUDA</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.typeBtn, saleType === 'budget' && styles.typeBtnActive]}
+                    onPress={() => setSaleType('budget')}
+                >
+                    <MaterialCommunityIcons name="file-document-outline" size={18} color={saleType === 'budget' ? '#000' : '#888'} />
+                    <Text style={[styles.typeText, saleType === 'budget' && styles.typeTextActive]}>PRESUP.</Text>
+                </TouchableOpacity>
+            </View>
+
             <View style={styles.footer}>
                 <TouchableOpacity
                     style={[styles.addProductBtn, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37' }]}
                     onPress={async () => {
-                        console.log('Scanner button pressed');
-                        if (!permission) {
-                            console.log('Permission loading, requesting...');
-                            await requestPermission();
-                        }
                         if (permission && !permission.granted) {
-                            console.log('Permission not granted, requesting...');
                             const result = await requestPermission();
-                            if (!result.granted) {
-                                Alert.alert("Permiso requerido", "Habilita la cámara para escanear.");
-                                return;
-                            }
+                            if (!result.granted) return;
                         }
-                        console.log('Access granted, opening scanner');
                         setScanned(false);
                         setIsScanning(true);
                     }}
@@ -586,14 +686,22 @@ export default function NewSaleScreen({ navigation }) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    style={[styles.checkoutBtn, cart.length === 0 && styles.disabled]}
+                    style={[
+                        styles.checkoutBtn,
+                        cart.length === 0 && styles.disabled,
+                        saleType === 'pending' && { backgroundColor: '#e74c3c' },
+                        saleType === 'budget' && { backgroundColor: '#3498db' }
+                    ]}
                     onPress={handleCheckout}
                     disabled={cart.length === 0 || loading}
                 >
                     {loading ? (
                         <ActivityIndicator color="black" />
                     ) : (
-                        <Text style={styles.checkoutText}>COBRAR ${total.toFixed(2)}</Text>
+                        <Text style={styles.checkoutText}>
+                            {saleType === 'completed' ? `COBRAR ($${total.toFixed(0)})` :
+                                saleType === 'pending' ? `GUARDAR DEUDA` : `CREAR PRESUPUESTO`}
+                        </Text>
                     )}
                 </TouchableOpacity>
             </View>
@@ -1011,5 +1119,38 @@ const styles = StyleSheet.create({
         padding: 5,
         backgroundColor: '#333',
         borderRadius: 20
+    },
+
+    // Transaction Type Selector Styles
+    typeSelector: {
+        flexDirection: 'row',
+        paddingHorizontal: 20,
+        paddingBottom: 15,
+        gap: 10,
+        backgroundColor: '#1a1a1a'
+    },
+    typeBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#222',
+        paddingVertical: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#333',
+        gap: 6
+    },
+    typeBtnActive: {
+        backgroundColor: '#d4af37',
+        borderColor: '#d4af37'
+    },
+    typeText: {
+        color: '#888',
+        fontSize: 10,
+        fontWeight: '900'
+    },
+    typeTextActive: {
+        color: '#000'
     }
 });

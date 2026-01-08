@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, M
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
 
-export default function ClientsScreen() {
+export default function ClientsScreen({ navigation }) {
     const [clients, setClients] = useState([]);
     const [filteredClients, setFilteredClients] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -115,10 +115,13 @@ export default function ClientsScreen() {
                     }
 
                     return (
-                        <View style={[
-                            styles.card,
-                            index === 0 && !searchQuery && item.totalSpent > 0 && { borderColor: '#ffd700', borderWidth: 2 } // Gold border for #1
-                        ]}>
+                        <TouchableOpacity
+                            style={[
+                                styles.card,
+                                index === 0 && !searchQuery && item.totalSpent > 0 && { borderColor: '#ffd700', borderWidth: 2 } // Gold border for #1
+                            ]}
+                            onPress={() => navigation.navigate('ClientDetail', { client: item })}
+                        >
                             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                 <View>
                                     <Text style={styles.name}>{item.name}</Text>
@@ -132,7 +135,7 @@ export default function ClientsScreen() {
                                 </View>
                             </View>
                             <Text style={styles.notes}>{item.notes}</Text>
-                        </View>
+                        </TouchableOpacity>
                     );
                 }}
                 ListEmptyComponent={<Text style={styles.empty}>{searchQuery ? 'Sin resultados.' : 'No hay clientes registrados.'}</Text>}

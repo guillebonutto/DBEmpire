@@ -38,18 +38,23 @@ export default function ReportsScreen() {
         const currentMonth = new Date().getMonth();
 
         sales.forEach(sale => {
+            const status = (sale.status || '').toLowerCase();
+            const isFinalized = status === 'completed' || status === 'exitosa' || status === 'vended' || status === '';
+
+            if (!isFinalized) return; // Skip budgets/pending from financial reports
+
             const date = new Date(sale.created_at);
             const dateKey = date.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
 
             // Monthly Total
             if (date.getMonth() === currentMonth) {
-                currentMonthTotal += sale.total_amount;
+                currentMonthTotal += (sale.total_amount || 0);
             }
 
             if (!grouped[dateKey]) {
                 grouped[dateKey] = { date: dateKey, total: 0, count: 0, closed: true };
             }
-            grouped[dateKey].total += sale.total_amount;
+            grouped[dateKey].total += (sale.total_amount || 0);
             grouped[dateKey].count += 1;
         });
 

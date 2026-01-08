@@ -20,14 +20,15 @@ export default function LoginScreen({ navigation }) {
                 // 1. Try recognition by Hardware (Ultra fast & No clicks)
                 const hardwareRole = await DeviceAuthService.checkAuthorization();
                 if (hardwareRole) {
-                    navigation.replace('Home');
+                    navigation.replace('Main');
                     return;
                 }
 
-                // 2. Fallback: Try recognition by saved preference
+                // 2. No automatic fallback to saved role if hardware is not recognized!
+                // This prevents people like the cousin from entering just by clicking once.
                 const savedRole = await AsyncStorage.getItem('user_role');
-                if (savedRole) {
-                    navigation.replace('Home');
+                if (savedRole && !hardwareRole) {
+                    console.log('Saved role found but hardware not recognized. Requiring manual selection.');
                 }
             } catch (e) {
                 console.log('Error in auth check:', e);
@@ -49,15 +50,28 @@ export default function LoginScreen({ navigation }) {
 
     const handleSelectUser = async (role) => {
         setLoading(true);
-        setTimeout(async () => {
-            try {
-                await AsyncStorage.setItem('user_role', role);
-                setLoading(false);
-                navigation.replace('Home');
-            } catch (error) {
-                setLoading(false);
+        try {
+            // SECURITY CHECK: If trying to enter as Admin, verify hardware recognition
+            if (role === 'admin') {
+                const hardwareRole = await DeviceAuthService.checkAuthorization();
+                if (hardwareRole !== 'admin') {
+                    setLoading(false);
+                    Alert.alert(
+                        '🛑 ACCESO DENEGADO',
+                        'Este dispositivo no está autorizado para el rol de LÍDER SUPREMO.\n\nSi eres el dueño, autoriza esta firma en Supabase.',
+                        [{ text: 'Ver Firma', onPress: showSecretSignature }, { text: 'Entendido' }]
+                    );
+                    return;
+                }
             }
-        }, 800);
+
+            await AsyncStorage.setItem('user_role', role);
+            setLoading(false);
+            navigation.replace('Main');
+        } catch (error) {
+            setLoading(false);
+            Alert.alert('Error', 'No se pudo verificar el acceso.');
+        }
     };
 
     const RoleCard = ({ role, title, subtitle, icon, color, onPress }) => (

@@ -25,6 +25,7 @@ export default function AdminScreen({ navigation }) {
     });
     const [dateFilter, setDateFilter] = useState('month'); // 'week', 'month', 'year'
     const [tooltip, setTooltip] = useState({ visible: false, value: 0, x: 0, y: 0 });
+    const [deviceData, setDeviceData] = useState([]);
 
     useEffect(() => {
         fetchData();
@@ -59,12 +60,26 @@ export default function AdminScreen({ navigation }) {
                 startDate = new Date(now.getFullYear() - 4, 0, 1);
             }
 
-            // Fetch all sales (we'll filter status in JS if needed, but let's be permissive first)
-            const { data: sales, error: salesError } = await supabase
+            // Fetch all sales
+            let salesQuery = supabase
                 .from('sales')
-                .select('id, created_at, total_amount, profit_generated, commission_amount, status')
+                .select('id, created_at, total_amount, profit_generated, commission_amount, status, device_sig')
                 .gte('created_at', startDate.toISOString())
                 .order('created_at', { ascending: false });
+
+            let { data: sales, error: salesError } = await salesQuery;
+
+            // Fallback for missing device_sig column
+            if (salesError && salesError.message.includes('device_sig')) {
+                console.log('Fallback: device_sig column missing. Querying without it.');
+                const fallbackQuery = await supabase
+                    .from('sales')
+                    .select('id, created_at, total_amount, profit_generated, commission_amount, status')
+                    .gte('created_at', startDate.toISOString())
+                    .order('created_at', { ascending: false });
+                sales = fallbackQuery.data;
+                salesError = fallbackQuery.error;
+            }
 
             if (salesError) throw salesError;
 
@@ -88,19 +103,17 @@ export default function AdminScreen({ navigation }) {
             }
 
             // Process data for charts and stats
-            // FILTER: Only count completed or empty-status sales as the base
-            const completedSales = (sales || []).filter(s => {
+            // FILTER: Only count finalized sales for financial metrics
+            const finalSales = (sales || []).filter(s => {
                 const status = (s.status || '').toLowerCase();
-                return status === 'completed' || status === '' || status === 'exitosa' || status === 'vended';
+                return status === 'completed' || status === 'exitosa' || status === 'vended' || status === '';
             });
-
-            // If still $0 but we have sales, maybe it's the status filter. Let's be even more permissive if none match.
-            const finalSales = completedSales.length > 0 ? completedSales : (sales || []);
 
             // Process data for charts and stats
             processChartData(finalSales);
             processProgressData(finalSales, expenses || []);
             calculateStats(finalSales, expenses || []);
+            processDeviceData(finalSales);
 
             if (saleItems && saleItems.length > 0) {
                 processProductData(saleItems);
@@ -268,6 +281,22 @@ export default function AdminScreen({ navigation }) {
         }));
 
         setProductData(chartData);
+    };
+
+    const processDeviceData = (sales) => {
+        const deviceMap = {};
+        sales.forEach(s => {
+            const sig = s.device_sig || 'Otros / Manual';
+            if (!deviceMap[sig]) deviceMap[sig] = 0;
+            deviceMap[sig] += (parseFloat(s.total_amount) || 0);
+        });
+
+        const data = Object.keys(deviceMap).map(sig => ({
+            sig,
+            total: deviceMap[sig]
+        })).sort((a, b) => b.total - a.total);
+
+        setDeviceData(data);
     };
 
     const updateCommissionRate = async () => {
@@ -510,6 +539,35 @@ export default function AdminScreen({ navigation }) {
                         />
                     ) : (
                         <Text style={styles.noDataText}>No hay datos de productos disponibles</Text>
+                    )}
+                </View>
+
+                {/* Hardware (Aliados) Performance Breakdown */}
+                <View style={styles.chartCard}>
+                    <Text style={styles.sectionTitle}>DESEMPEÑO POR ALIADO (HARDWARE)</Text>
+                    <Text style={[styles.settingsDesc, { marginTop: -5, marginBottom: 15 }]}>
+                        Ventas totales atribuidas a cada dispositivo físico autorizado.
+                    </Text>
+                    {deviceData.length > 0 ? (
+                        <View>
+                            {deviceData.map((d, i) => (
+                                <View key={i} style={{
+                                    flexDirection: 'row',
+                                    justifyContent: 'space-between',
+                                    paddingVertical: 12,
+                                    borderBottomWidth: i === deviceData.length - 1 ? 0 : 1,
+                                    borderBottomColor: '#222'
+                                }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <MaterialCommunityIcons name="cellphone-check" size={18} color="#d4af37" style={{ marginRight: 10 }} />
+                                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>{d.sig}</Text>
+                                    </View>
+                                    <Text style={{ color: '#d4af37', fontWeight: '900' }}>${d.total.toFixed(0)}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    ) : (
+                        <Text style={styles.noDataText}>Sin datos de dispositivos</Text>
                     )}
                 </View>
 

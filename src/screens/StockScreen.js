@@ -24,9 +24,17 @@ export default function StockScreen({ navigation, route }) {
 
     const handleBarcodeScanned = async ({ data }) => {
         if (scanned && !isFastMode) return;
+
+        let barcodeData = data;
+        // SMART QR HANDLE
+        if (data.includes('linktr.ee/digital_boost_empire')) {
+            const parts = data.split('barcode=');
+            if (parts.length > 1) barcodeData = parts[1];
+        }
+
         setScanned(true);
 
-        const product = products.find(p => p.barcode === data);
+        const product = products.find(p => p.barcode === barcodeData);
 
         if (product) {
             if (isFastMode) {
@@ -254,6 +262,69 @@ export default function StockScreen({ navigation, route }) {
         }
     };
 
+    const generateQRLabels = async () => {
+        setLoading(true);
+        try {
+            const linktree = "https://linktr.ee/digital_boost_empire";
+            const labelItems = products.map(p => {
+                if (!p.barcode) return '';
+                const smartUrl = `${linktree}?barcode=${p.barcode}`;
+                const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(smartUrl)}`;
+                return `
+                <div class="label-card">
+                    <div class="product-name">${p.name.toUpperCase()}</div>
+                    <div class="qr-box">
+                        <img src="${qrApi}" />
+                    </div>
+                    <div class="product-price">$${p.sale_price}</div>
+                    <div class="helper-text">Escanea para info / App DBE</div>
+                </div>
+                `;
+            }).join('');
+
+            const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: sans-serif; margin: 0; padding: 20px; }
+                    .labels-container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+                    .label-card { 
+                        width: 180px; 
+                        height: 250px; 
+                        border: 1px solid #ddd; 
+                        padding: 10px; 
+                        text-align: center; 
+                        display: flex; 
+                        flex-direction: column; 
+                        justify-content: space-between;
+                        border-radius: 8px;
+                        background: #fff;
+                    }
+                    .product-name { font-size: 14px; font-weight: bold; height: 40px; overflow: hidden; }
+                    .product-price { font-size: 20px; font-weight: 900; color: #000; }
+                    .qr-box { width: 120px; height: 120px; margin: 0 auto; }
+                    .qr-box img { width: 100%; height: 100%; }
+                    .helper-text { font-size: 8px; color: #666; margin-top: 5px; }
+                </style>
+            </head>
+            <body>
+                <h2 style="text-align:center;">Etiquetas Inteligentes Imperial</h2>
+                <div class="labels-container">
+                    ${labelItems}
+                </div>
+            </body>
+            </html>`;
+
+            const { uri } = await Print.printToFileAsync({ html: htmlContent });
+            await Sharing.shareAsync(uri);
+        } catch (error) {
+            Alert.alert('Error', 'No se pudieron generar las etiquetas');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
@@ -277,9 +348,21 @@ export default function StockScreen({ navigation, route }) {
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={styles.headerBtn}
+                        onPress={() => navigation.navigate('BulkAdjustment')}
+                    >
+                        <MaterialCommunityIcons name="calculator" size={22} color="#d4af37" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.headerBtn}
                         onPress={exportToPDF}
                     >
                         <MaterialCommunityIcons name="file-pdf-box" size={22} color="#d4af37" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.headerBtn}
+                        onPress={generateQRLabels}
+                    >
+                        <MaterialCommunityIcons name="qrcode-scan" size={22} color="#d4af37" />
                     </TouchableOpacity>
                 </View>
             </View>

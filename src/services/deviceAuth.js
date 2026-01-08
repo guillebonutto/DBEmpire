@@ -45,20 +45,22 @@ export const DeviceAuthService = {
         }
     },
 
-    /**
-     * Creates a secure hash of the hardware ID.
-     * This hash is what gets stored in Supabase.
-     */
     getDeviceSignature: async () => {
         const rawId = await DeviceAuthService.getRawDeviceId();
         if (!rawId) return null;
 
         // Combine ID with Salt and Hash it (SHA-256)
-        const signature = await Crypto.digestStringAsync(
+        const hash = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
             rawId + SALT
         );
-        return signature;
+
+        // Format to human-readable (promised format: X78Y-Z21)
+        // Taking first 8 chars: XXXX-XXXX
+        const clean = hash.toUpperCase().replace(/[^A-Z0-0]/g, '');
+        const part1 = clean.substring(0, 4);
+        const part2 = clean.substring(4, 8);
+        return `${part1}-${part2}`;
     },
 
     /**

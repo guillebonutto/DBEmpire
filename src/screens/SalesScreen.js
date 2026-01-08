@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
@@ -12,11 +12,11 @@ export default function SalesScreen({ navigation }) {
     const fetchSalesData = async () => {
         setLoading(true);
         try {
-            // Get all COMPLETED sales
+            // Get COMPLETED and BUDGET sales
             const { data, error } = await supabase
                 .from('sales')
-                .select('*, profiles(full_name), clients(name)') // Join with profile AND clients
-                .eq('status', 'completed')
+                .select('*, profiles(full_name), clients(name)')
+                .in('status', ['completed', 'budget', 'pending', 'exitosa', ''])
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
@@ -43,18 +43,23 @@ export default function SalesScreen({ navigation }) {
         let totalCommissions = 0;
 
         sales.forEach(sale => {
+            const status = (sale.status || '').toLowerCase();
+            const isCompleted = status === 'completed' || status === 'exitosa' || status === '' || status === 'vended' || !status;
+
+            if (!isCompleted) return; // Skip budgets and other non-finalized statuses for money stats
+
             const saleDate = new Date(sale.created_at).getTime();
 
-            // Calculate total commissions globally (or add date filter if needed)
+            // Calculate total commissions globally
             if (sale.commission_amount) {
                 totalCommissions += sale.commission_amount;
             }
 
             if (saleDate >= startOfMonth) {
-                totalMonth += sale.total_amount;
+                totalMonth += (sale.total_amount || 0);
             }
             if (saleDate >= startOfDay) {
-                totalToday += sale.total_amount;
+                totalToday += (sale.total_amount || 0);
                 count++;
             }
         });
@@ -69,25 +74,95 @@ export default function SalesScreen({ navigation }) {
         }, [])
     );
 
-    const renderSaleItem = ({ item }) => (
-        <View style={styles.saleItem}>
-            <View>
-                <Text style={styles.saleId}>Venta #{item.id.slice(0, 4)}</Text>
-                <Text style={styles.saleDate}>{new Date(item.created_at).toLocaleDateString()} - {new Date(item.created_at).toLocaleTimeString()}</Text>
+    const handleConvertToSale = async (sale) => {
+        Alert.alert(
+            'Confirmar Venta',
+            '¿Deseas convertir este presupuesto en una venta real? Esto descontará los productos del inventario.',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'SÍ, CONVERTIR',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            // 1. Fetch items
+                            const { data: items, error: itemsError } = await supabase
+                                .from('sale_items')
+                                .select('product_id, quantity, products(current_stock)')
+                                .eq('sale_id', sale.id);
 
-                {/* Client Name Display */}
-                <Text style={styles.clientName}>
-                    Cliente: {item.clients ? item.clients.name : 'Anónimo'}
-                </Text>
+                            if (itemsError) throw itemsError;
 
-                {item.profiles && <Text style={styles.sellerName}>Vendió: {item.profiles.full_name}</Text>}
+                            // 2. Update status
+                            const { error: updateError } = await supabase
+                                .from('sales')
+                                .update({ status: 'completed' })
+                                .eq('id', sale.id);
+
+                            if (updateError) throw updateError;
+
+                            // 3. Update stock
+                            for (const item of items) {
+                                const currentStock = item.products?.current_stock || 0;
+                                const newStock = currentStock - item.quantity;
+                                await supabase
+                                    .from('products')
+                                    .update({ current_stock: newStock })
+                                    .eq('id', item.product_id);
+                            }
+
+                            Alert.alert('✅ Convertido', 'Venta finalizada con éxito.');
+                            fetchSalesData();
+                        } catch (err) {
+                            console.error(err);
+                            Alert.alert('Error', 'No se pudo completar la operación.');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const renderSaleItem = ({ item }) => {
+        const isBudget = item.status === 'budget';
+        const isPending = item.status === 'pending';
+
+        return (
+            <View style={[styles.saleItem, (isBudget || isPending) && styles.saleItemPending]}>
+                <View style={{ flex: 1 }}>
+                    <View style={styles.saleHeader}>
+                        <Text style={styles.saleId}>Venta #{item.id.slice(0, 4)}</Text>
+                        {isBudget && <View style={styles.budgetBadge}><Text style={styles.budgetText}>PRESUPUESTO</Text></View>}
+                        {isPending && <View style={[styles.budgetBadge, { backgroundColor: '#ff4444' }]}><Text style={styles.budgetText}>DEUDA</Text></View>}
+                    </View>
+                    <Text style={styles.saleDate}>{new Date(item.created_at).toLocaleDateString()} - {new Date(item.created_at).toLocaleTimeString()}</Text>
+
+                    <Text style={styles.clientName}>
+                        Cliente: {item.clients ? item.clients.name : 'Anónimo'}
+                    </Text>
+
+                    {item.profiles && <Text style={styles.sellerName}>Por: {item.profiles.full_name}</Text>}
+
+                    {isBudget && (
+                        <TouchableOpacity
+                            style={styles.convertBtn}
+                            onPress={() => handleConvertToSale(item)}
+                            disabled={loading}
+                        >
+                            <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
+                            <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${item.total_amount}</Text>
+                    {!isBudget && <Text style={styles.saleProfit}>(G: ${item.profit_generated})</Text>}
+                </View>
             </View>
-            <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.saleAmount}>+${item.total_amount}</Text>
-                <Text style={styles.saleProfit}>(G: ${item.profit_generated})</Text>
-            </View>
-        </View>
-    );
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -144,8 +219,10 @@ export default function SalesScreen({ navigation }) {
     );
 }
 
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000000', padding: 20 },
+    container: { flex: 1, backgroundColor: '#000000' },
 
     // Stats Cards
     statsContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
@@ -187,5 +264,23 @@ const styles = StyleSheet.create({
     sellerName: { fontSize: 12, color: '#ccc', marginTop: 2 },
     saleAmount: { fontSize: 16, fontWeight: 'bold', color: '#2ecc71' }, // Green for positives stays good
     saleProfit: { fontSize: 10, color: '#888' },
-    empty: { textAlign: 'center', marginTop: 50, color: '#444', fontStyle: 'italic' }
+    empty: { textAlign: 'center', marginTop: 50, color: '#444', fontStyle: 'italic' },
+
+    // New styles for budget conversion
+    saleHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+    budgetBadge: { backgroundColor: '#e67e22', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+    budgetText: { color: '#000', fontSize: 8, fontWeight: 'bold' },
+    saleItemPending: { borderColor: '#444', borderStyle: 'dashed' },
+    convertBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#d4af37',
+        alignSelf: 'flex-start',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
+        marginTop: 10,
+        gap: 5
+    },
+    convertBtnText: { color: '#000', fontSize: 10, fontWeight: '900' }
 });

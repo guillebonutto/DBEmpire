@@ -4,6 +4,8 @@ import { supabase } from '../services/supabase';
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { CRMService } from '../services/crmService';
+import { Linking } from 'react-native';
 
 export default function AddProductScreen({ navigation, route }) {
     const productToEdit = route.params?.product;
@@ -26,6 +28,10 @@ export default function AddProductScreen({ navigation, route }) {
     const [calcInternet, setCalcInternet] = useState('');
     const [calcElectricity, setCalcElectricity] = useState('');
     const [calcBatch, setCalcBatch] = useState('');
+
+    // CRM Match State
+    const [potentialClients, setPotentialClients] = useState([]);
+    const [showMatchModal, setShowMatchModal] = useState(false);
 
     const [formData, setFormData] = useState({
         name: route.params?.scannedName || '',
@@ -308,7 +314,20 @@ export default function AddProductScreen({ navigation, route }) {
             // -------------------------------
 
             Alert.alert('Éxito', 'Producto guardado correctamente');
-            navigation.navigate('Stock', { refresh: Date.now() });
+
+            // --- CRM SMART MATCH ---
+            const interested = await CRMService.findInterestedClients({
+                id: productToEdit?.id,
+                name: formData.name
+            });
+
+            if (interested.length > 0) {
+                setPotentialClients(interested);
+                setShowMatchModal(true);
+            } else {
+                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+            }
+            // ------------------------
         } catch (err) {
             console.log('Error saving product:', err);
             // Fallback for development (If no Supabase keys)
@@ -456,9 +475,59 @@ export default function AddProductScreen({ navigation, route }) {
                 />
             </View>
 
+            {/* CRM MATCH MODAL */}
+            <Modal
+                visible={showMatchModal}
+                transparent
+                animationType="slide"
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.crmModalContent}>
+                        <View style={styles.crmModalHeader}>
+                            <MaterialCommunityIcons name="target" size={32} color="#d4af37" />
+                            <Text style={styles.crmModalTitle}>¡Oportunidad Imperial!</Text>
+                        </View>
+
+                        <Text style={styles.crmModalSubtitle}>
+                            He detectado clientes que podrían estar interesados en este ingreso:
+                        </Text>
+
+                        <ScrollView style={{ maxHeight: 300 }}>
+                            {potentialClients.map((client, index) => (
+                                <TouchableOpacity
+                                    key={index}
+                                    style={styles.clientMatchCard}
+                                    onPress={() => {
+                                        const message = `Estimado ${client.name}, queríamos avisarle que estamos trayendo ${formData.name}, ¿estaría interesado?`;
+                                        Linking.openURL(`https://wa.me/${client.phone?.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(message)}`);
+                                    }}
+                                >
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.clientMatchName}>{client.name}</Text>
+                                        <Text style={styles.clientMatchReason}>{client.reason}</Text>
+                                        <Text style={styles.clientMatchDetail}>Venta previa: {client.lastPurchasedItem}</Text>
+                                    </View>
+                                    <MaterialCommunityIcons name="whatsapp" size={24} color="#25D366" />
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+
+                        <TouchableOpacity
+                            style={styles.crmCloseBtn}
+                            onPress={() => {
+                                setShowMatchModal(false);
+                                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                            }}
+                        >
+                            <Text style={styles.crmCloseBtnText}>CONTINUAR</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
             {/* Break-even Analysis Section */}
             <View style={styles.analysisContainer}>
-                <Text style={styles.sectionTitle}>Análisis de Rentabilidad (Punto de Equilibrio)</Text>
+                <Text style={[styles.sectionTitle, { color: '#d4af37' }]}>ANÁLISIS DE RENTABILIDAD</Text>
 
                 <Text style={styles.helperText}>Calcula cuántas ventas necesitas para pagar el Internet y la Luz de este periodo.</Text>
 
@@ -471,7 +540,7 @@ export default function AddProductScreen({ navigation, route }) {
                             onChangeText={setOverheadInternet}
                             keyboardType="numeric"
                             placeholder="Total a cubrir"
-                            placeholderTextColor="#666"
+                            placeholderTextColor="#444"
                         />
                     </View>
                     <View style={{ flex: 1 }}>
@@ -482,7 +551,7 @@ export default function AddProductScreen({ navigation, route }) {
                             onChangeText={setOverheadElectricity}
                             keyboardType="numeric"
                             placeholder="Total a cubrir"
-                            placeholderTextColor="#666"
+                            placeholderTextColor="#444"
                         />
                     </View>
                 </View>
@@ -674,53 +743,54 @@ export default function AddProductScreen({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5', padding: 20 },
-    label: { fontSize: 16, fontWeight: '600', color: '#34495e', marginBottom: 5, marginTop: 10 },
+    container: { flex: 1, backgroundColor: '#000', padding: 20 },
+    label: { fontSize: 13, fontWeight: '900', color: '#d4af37', marginBottom: 8, marginTop: 20, letterSpacing: 1, textTransform: 'uppercase' },
     input: {
-        backgroundColor: 'white',
-        padding: 12,
-        borderRadius: 8,
+        backgroundColor: '#0a0a0a',
+        padding: 15,
+        borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#bdc3c7',
+        borderColor: '#1a1a1a',
         fontSize: 16,
+        color: '#fff'
     },
     readOnly: {
-        backgroundColor: '#e8f6f3',
-        borderColor: '#1abc9c',
-        color: '#16a085',
-        fontWeight: 'bold',
+        backgroundColor: '#0a0a0a',
+        borderColor: '#d4af37',
+        color: '#d4af37',
+        fontWeight: '900',
     },
     row: { flexDirection: 'row', justifyContent: 'space-between' },
     halfInput: { width: '48%' },
     textArea: { height: 80, textAlignVertical: 'top' },
-    defectInput: { borderColor: '#e74c3c', backgroundColor: '#fff5f5' }, // Red tint for defects
+    defectInput: { borderColor: '#e74c3c', backgroundColor: '#100' },
     saveButton: {
-        backgroundColor: '#3498db',
-        padding: 15,
-        borderRadius: 8,
+        backgroundColor: '#d4af37',
+        padding: 18,
+        borderRadius: 15,
         alignItems: 'center',
         marginTop: 30,
         marginBottom: 50,
-        shadowColor: '#000',
-        shadowOpacity: 0.2,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 3,
+        shadowColor: '#d4af37',
+        shadowOpacity: 0.3,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 10,
     },
-    saveButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
+    saveButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
 
     // Image Picker Styles
     imagePicker: {
         alignSelf: 'center',
-        width: 120,
-        height: 120,
-        backgroundColor: '#e1e1e1',
-        borderRadius: 60,
+        width: 140,
+        height: 140,
+        backgroundColor: '#0a0a0a',
+        borderRadius: 20,
         justifyContent: 'center',
         alignItems: 'center',
         overflow: 'hidden',
-        marginBottom: 10,
+        marginBottom: 20,
         borderWidth: 1,
-        borderColor: '#ccc'
+        borderColor: '#1a1a1a'
     },
     imagePreview: {
         width: '100%',
@@ -830,5 +900,70 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#bdc3c7'
+    },
+    // CRM Modal styles
+    crmModalContent: {
+        backgroundColor: '#1a1a1a',
+        padding: 25,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#d4af37',
+    },
+    crmModalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        marginBottom: 10
+    },
+    crmModalTitle: {
+        color: '#d4af37',
+        fontSize: 22,
+        fontWeight: '900',
+        textAlign: 'center'
+    },
+    crmModalSubtitle: {
+        color: '#aaa',
+        fontSize: 14,
+        textAlign: 'center',
+        marginBottom: 20
+    },
+    clientMatchCard: {
+        backgroundColor: '#0a0a0a',
+        padding: 15,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#333',
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 10
+    },
+    clientMatchName: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: 'bold'
+    },
+    clientMatchReason: {
+        color: '#d4af37',
+        fontSize: 12,
+        fontWeight: 'bold',
+        marginTop: 2
+    },
+    clientMatchDetail: {
+        color: '#666',
+        fontSize: 11,
+        marginTop: 2
+    },
+    crmCloseBtn: {
+        backgroundColor: '#d4af37',
+        padding: 15,
+        borderRadius: 12,
+        alignItems: 'center',
+        marginTop: 15
+    },
+    crmCloseBtnText: {
+        color: '#000',
+        fontWeight: 'bold',
+        letterSpacing: 1
     }
 });

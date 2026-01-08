@@ -1,5 +1,10 @@
 import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { View, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
 import StockScreen from '../screens/StockScreen';
@@ -15,8 +20,64 @@ import OrdersScreen from '../screens/OrdersScreen';
 import NewOrderScreen from '../screens/NewOrderScreen';
 import SupplierOrdersScreen from '../screens/SupplierOrdersScreen';
 import NewSupplierOrderScreen from '../screens/NewSupplierOrderScreen';
+import DebtsScreen from '../screens/DebtsScreen';
+import CatalogScreen from '../screens/CatalogScreen';
+import ClientDetailScreen from '../screens/ClientDetailScreen';
+import BulkAdjustmentScreen from '../screens/BulkAdjustmentScreen';
 
 const Stack = createStackNavigator();
+const Tab = createBottomTabNavigator();
+
+function MainTabs() {
+    const insets = useSafeAreaInsets();
+    const bottomPadding = insets.bottom > 0 ? insets.bottom : 10;
+    const tabBarHeight = Platform.OS === 'ios' ? 65 + insets.bottom : 65 + (insets.bottom > 0 ? insets.bottom / 2 : 5);
+
+    return (
+        <Tab.Navigator
+            screenOptions={({ route }) => ({
+                headerShown: false,
+                tabBarStyle: {
+                    backgroundColor: '#000',
+                    borderTopColor: '#333',
+                    height: tabBarHeight,
+                    paddingBottom: bottomPadding,
+                    paddingTop: 10,
+                    elevation: 0,
+                    borderTopWidth: 1
+                },
+                tabBarActiveTintColor: '#d4af37',
+                tabBarInactiveTintColor: '#666',
+                tabBarLabelStyle: {
+                    fontSize: 10,
+                    fontWeight: '700'
+                },
+                tabBarIcon: ({ focused, color, size }) => {
+                    let iconName;
+                    if (route.name === 'Home') iconName = 'home-variant';
+                    else if (route.name === 'Balance') iconName = 'scale-balance';
+                    else if (route.name === 'Deudas') iconName = 'cash-check';
+                    else if (route.name === 'Inventario') iconName = 'package-variant-closed';
+
+                    return (
+                        <View style={focused ? {
+                            backgroundColor: 'rgba(212, 175, 55, 0.1)',
+                            padding: 8,
+                            borderRadius: 12
+                        } : null}>
+                            <MaterialCommunityIcons name={iconName} size={24} color={color} />
+                        </View>
+                    );
+                },
+            })}
+        >
+            <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
+            <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
+            <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
+            <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
+        </Tab.Navigator>
+    );
+}
 
 export default function AppNavigator() {
     return (
@@ -27,13 +88,8 @@ export default function AppNavigator() {
                 options={{ headerShown: false }}
             />
             <Stack.Screen
-                name="Home"
-                component={HomeScreen}
-                options={{ headerShown: false }}
-            />
-            <Stack.Screen
-                name="Stock"
-                component={StockScreen}
+                name="Main"
+                component={MainTabs}
                 options={{ headerShown: false }}
             />
             <Stack.Screen
@@ -67,11 +123,6 @@ export default function AppNavigator() {
                 options={{ headerShown: false }}
             />
             <Stack.Screen
-                name="Admin"
-                component={AdminScreen}
-                options={{ headerShown: false }}
-            />
-            <Stack.Screen
                 name="Expenses"
                 component={ExpensesScreen}
                 options={{ headerShown: false }}
@@ -94,6 +145,21 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="NewSupplierOrder"
                 component={NewSupplierOrderScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Catalog"
+                component={CatalogScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="ClientDetail"
+                component={ClientDetailScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="BulkAdjustment"
+                component={BulkAdjustmentScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>
