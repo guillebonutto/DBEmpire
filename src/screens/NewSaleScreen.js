@@ -35,6 +35,8 @@ export default function NewSaleScreen({ navigation, route }) {
     const [selectedClient, setSelectedClient] = useState(null);
     const [loading, setLoading] = useState(false);
     const [commissionRate, setCommissionRate] = useState(0.10);
+    const [transportCost, setTransportCost] = useState(0);
+    const [includeTransport, setIncludeTransport] = useState(false);
 
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
@@ -74,17 +76,28 @@ export default function NewSaleScreen({ navigation, route }) {
 
     const fetchCommissionRate = async () => {
         try {
-            const { data } = await supabase
+            const { data: commData } = await supabase
                 .from('settings')
                 .select('value')
                 .eq('key', 'commission_rate')
                 .single();
 
-            if (data) {
-                setCommissionRate(parseFloat(data.value));
+            if (commData) {
+                setCommissionRate(parseFloat(commData.value));
+            }
+
+            // Fetch transport cost (now a fixed amount, not percentage)
+            const { data: transData } = await supabase
+                .from('settings')
+                .select('value')
+                .eq('key', 'transport_cost')
+                .single();
+
+            if (transData) {
+                setTransportCost(parseFloat(transData.value) || 0);
             }
         } catch (error) {
-            console.log('Using default commission rate:', error);
+            console.log('Using default rates:', error);
         }
     };
 
@@ -195,19 +208,20 @@ export default function NewSaleScreen({ navigation, route }) {
     };
 
     const calculateTotals = () => {
-        let total = 0;
+        let subtotal = 0;
         let totalProfit = 0;
         cart.forEach(item => {
             const itemTotal = item.sale_price * item.qty;
             const itemCost = item.cost_price * item.qty;
-            total += itemTotal;
+            subtotal += itemTotal;
             totalProfit += (itemTotal - itemCost);
         });
+        const total = subtotal + (includeTransport ? transportCost : 0); // Only add if enabled
         const commission = currentUserRole === 'seller' ? totalProfit * commissionRate : 0;
-        return { total, totalProfit, commission };
+        return { subtotal, total, totalProfit, commission };
     };
 
-    const { total, totalProfit, commission } = calculateTotals();
+    const { subtotal, total, totalProfit, commission } = calculateTotals();
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
 
@@ -617,7 +631,8 @@ export default function NewSaleScreen({ navigation, route }) {
             <FlatList
                 data={cart}
                 keyExtractor={item => item.id}
-                contentContainerStyle={{ padding: 15, paddingBottom: 100 }}
+                style={{ flex: 1 }}
+                contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
                 renderItem={({ item }) => (
                     <View style={styles.cartItem}>
                         <View style={styles.itemInfo}>
@@ -638,6 +653,51 @@ export default function NewSaleScreen({ navigation, route }) {
                     </View>
                 }
             />
+
+            {/* Cost Breakdown */}
+            {cart.length > 0 && (
+                <View style={{ backgroundColor: '#1a1a1a', padding: 15, borderTopWidth: 1, borderTopColor: '#333' }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text style={{ color: '#888', fontSize: 14 }}>Subtotal Productos:</Text>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>${subtotal.toFixed(2)}</Text>
+                    </View>
+
+                    {/* Transport Toggle */}
+                    <TouchableOpacity
+                        style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 8,
+                            padding: 8,
+                            backgroundColor: includeTransport ? '#1e2a1e' : 'transparent',
+                            borderRadius: 6,
+                            borderWidth: 1,
+                            borderColor: includeTransport ? '#2ecc71' : '#333'
+                        }}
+                        onPress={() => setIncludeTransport(!includeTransport)}
+                    >
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <MaterialCommunityIcons
+                                name={includeTransport ? "checkbox-marked" : "checkbox-blank-outline"}
+                                size={20}
+                                color={includeTransport ? '#2ecc71' : '#666'}
+                                style={{ marginRight: 8 }}
+                            />
+                            <Text style={{ color: includeTransport ? '#2ecc71' : '#888', fontSize: 14 }}>Incluir Transporte:</Text>
+                        </View>
+                        <Text style={{ color: includeTransport ? '#2ecc71' : '#666', fontSize: 14, fontWeight: 'bold' }}>
+                            ${transportCost.toFixed(2)}
+                        </Text>
+                    </TouchableOpacity>
+
+                    <View style={{ height: 1, backgroundColor: '#333', marginVertical: 8 }} />
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 1 }}>TOTAL:</Text>
+                        <Text style={{ color: '#d4af37', fontSize: 18, fontWeight: '900' }}>${total.toFixed(2)}</Text>
+                    </View>
+                </View>
+            )}
 
             {/* Transaction Type Selector */}
             <View style={styles.typeSelector}>
@@ -937,7 +997,7 @@ const styles = StyleSheet.create({
     emptyText: { fontSize: 18, fontWeight: '900', marginTop: 10, color: '#666' },
     emptySubtext: { fontSize: 14, color: '#444' },
 
-    footer: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 20, paddingBottom: 70, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderTopColor: '#333', flexDirection: 'row' },
+    footer: { padding: 20, paddingBottom: 30, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderTopColor: '#333', flexDirection: 'row' },
     addProductBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#ccc', borderRadius: 10, padding: 15, marginRight: 10 },
     addProductText: { marginLeft: 5, color: '#000', fontWeight: '900', letterSpacing: 0.5 },
     checkoutBtn: { flex: 2, backgroundColor: '#d4af37', borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.3, elevation: 10 },

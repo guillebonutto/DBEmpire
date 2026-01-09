@@ -38,9 +38,9 @@ export default function AdminScreen({ navigation }) {
             const { data: settingsData } = await supabase.from('settings').select('*');
             if (settingsData) {
                 const comm = settingsData.find(s => s.key === 'commission_rate');
-                const trans = settingsData.find(s => s.key === 'transport_rate');
+                const trans = settingsData.find(s => s.key === 'transport_cost');
                 if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
-                if (trans) setTransportRate((parseFloat(trans.value) * 100).toString());
+                if (trans) setTransportRate(parseFloat(trans.value).toString());
             }
 
             // Calculate date range based on filter
@@ -328,8 +328,8 @@ export default function AdminScreen({ navigation }) {
 
     const updateTransportRate = async () => {
         const rate = parseFloat(transportRate);
-        if (isNaN(rate) || rate < 0 || rate > 100) {
-            Alert.alert('Error', 'Ingresa un porcentaje válido entre 0 y 100');
+        if (isNaN(rate) || rate < 0) {
+            Alert.alert('Error', 'Ingresa un monto válido mayor o igual a 0');
             return;
         }
 
@@ -338,13 +338,13 @@ export default function AdminScreen({ navigation }) {
             const { error } = await supabase
                 .from('settings')
                 .upsert(
-                    { key: 'transport_rate', value: (rate / 100).toString() },
+                    { key: 'transport_cost', value: rate.toString() },
                     { onConflict: 'key' }
                 );
 
             if (error) throw error;
 
-            Alert.alert('✅ Actualizado', `El costo de transporte ahora es del ${rate}%`);
+            Alert.alert('✅ Actualizado', `El costo de transporte ahora es de $${rate}`);
         } catch (error) {
             Alert.alert('Error', 'No se pudo actualizar el costo de transporte');
             console.log(error);
@@ -602,9 +602,9 @@ export default function AdminScreen({ navigation }) {
 
                 {/* Transport Cost Settings */}
                 <View style={styles.settingsCard}>
-                    <Text style={styles.sectionTitle}>COSTO DE TRANSPORTE (GLOBAL)</Text>
+                    <Text style={styles.sectionTitle}>COSTO DE TRANSPORTE POR VENTA</Text>
                     <Text style={styles.settingsDesc}>
-                        Porcentaje adicional que se sumará al costo de cada producto para cubrir transporte/envíos.
+                        Monto fijo que se sumará al total de cada venta/presupuesto para cubrir envíos.
                     </Text>
 
                     <View style={styles.inputContainer}>
@@ -616,7 +616,7 @@ export default function AdminScreen({ navigation }) {
                             placeholder="0"
                             placeholderTextColor="#666"
                         />
-                        <Text style={styles.inputSuffix}>%</Text>
+                        <Text style={styles.inputSuffix}>$</Text>
                     </View>
 
                     <TouchableOpacity

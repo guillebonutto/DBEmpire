@@ -22,7 +22,7 @@ export const CRMService = {
                     product:products(name),
                     sale:sales(
                         client_id,
-                        client:clients(id, name, phone)
+                        client:clients(id, name, phone, gender)
                     )
                 `);
 

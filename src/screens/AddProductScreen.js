@@ -12,9 +12,6 @@ export default function AddProductScreen({ navigation, route }) {
 
     const [loading, setLoading] = useState(false);
     const [image, setImage] = useState(route.params?.scannedImage || null);
-    const [transportRate, setTransportRate] = useState(0); // Global transport rate %
-    const [includeTransport, setIncludeTransport] = useState(true);
-    const [calculatedTransportCost, setCalculatedTransportCost] = useState(0);
 
     // Scanner State
     const [permission, requestPermission] = useCameraPermissions();
@@ -45,41 +42,17 @@ export default function AddProductScreen({ navigation, route }) {
         barcode: route.params?.scannedBarcode || ''
     });
 
-    // Fetch Transport Rate on Mount
-    useEffect(() => {
-        const fetchSettings = async () => {
-            const { data } = await supabase
-                .from('settings')
-                .select('value')
-                .eq('key', 'transport_rate')
-                .single();
-            if (data) {
-                setTransportRate(parseFloat(data.value) || 0);
-            }
-        };
-        fetchSettings();
-    }, []);
+
 
     // Calculate Sale Price automatically
     useEffect(() => {
         if (formData.cost_price && formData.profit_margin_percent) {
             const cost = parseFloat(formData.cost_price);
             const margin = parseFloat(formData.profit_margin_percent);
-            const internet = parseFloat(overheadInternet) || 0;
-            const electricity = parseFloat(overheadElectricity) || 0;
 
             if (!isNaN(cost) && !isNaN(margin)) {
-                let transportCost = 0;
-                if (includeTransport) {
-                    transportCost = cost * transportRate;
-                }
-                setCalculatedTransportCost(transportCost);
-
-                // Base Cost = Product Cost + Transport ONLY (Overhead is analyzed separately)
-                const finalCost = cost + transportCost;
-
-                // Sale Price = Base Cost * (1 + Margin)
-                const calculatedPrice = finalCost * (1 + (margin / 100));
+                // Sale Price = Cost * (1 + Margin)
+                const calculatedPrice = cost * (1 + (margin / 100));
 
                 setFormData(prev => ({
                     ...prev,
@@ -87,7 +60,7 @@ export default function AddProductScreen({ navigation, route }) {
                 }));
             }
         }
-    }, [formData.cost_price, formData.profit_margin_percent, transportRate, includeTransport, overheadInternet, overheadElectricity]);
+    }, [formData.cost_price, formData.profit_margin_percent, overheadInternet, overheadElectricity]);
 
     // Apply Calculator
     const applyOverheadCalc = () => {
@@ -492,18 +465,6 @@ export default function AddProductScreen({ navigation, route }) {
                 </View>
             </View>
 
-            {/* Transport Option */}
-            <View style={styles.switchContainer}>
-                <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>¿Incluir Costo de Transporte? ({(transportRate * 100).toFixed(0)}%)</Text>
-                <Switch
-                    trackColor={{ false: "#767577", true: "#3498db" }}
-                    thumbColor={includeTransport ? "#f4f3f4" : "#f4f3f4"}
-                    ios_backgroundColor="#3e3e3e"
-                    onValueChange={setIncludeTransport}
-                    value={includeTransport}
-                />
-            </View>
-
             {/* CRM MATCH MODAL */}
             <Modal
                 visible={showMatchModal}
@@ -527,8 +488,10 @@ export default function AddProductScreen({ navigation, route }) {
                                     key={index}
                                     style={styles.clientMatchCard}
                                     onPress={() => {
-                                        const message = `Estimado ${client.name}, queríamos avisarle que estamos trayendo ${formData.name}, ¿estaría interesado?`;
-                                        Linking.openURL(`https://wa.me/${client.phone?.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(message)}`);
+                                        const greeting = client.gender === 'F' ? 'Estimada' : 'Estimado';
+                                        const message = `${greeting} ${client.name}, queríamos avisarle que estamos trayendo ${formData.name}, ¿estaría interesado?`;
+                                        const phone = client.phone?.replace(/[^0-9]/g, '');
+                                        Linking.openURL(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`);
                                     }}
                                 >
                                     <View style={{ flex: 1 }}>
@@ -624,26 +587,6 @@ export default function AddProductScreen({ navigation, route }) {
                         })()}
                     </View>
                 )}
-            </View>
-
-            {/* Transport Cost Display */}
-            <View style={styles.row}>
-                <View style={styles.halfInput}>
-                    <Text style={[styles.label, { fontSize: 12, color: '#888' }]}>+ Costo Transp. Calc.</Text>
-                    <TextInput
-                        style={[styles.input, styles.readOnly, { fontSize: 14 }]}
-                        value={`$${calculatedTransportCost.toFixed(2)}`}
-                        editable={false}
-                    />
-                </View>
-                <View style={styles.halfInput}>
-                    <Text style={[styles.label, { fontSize: 12, color: '#888' }]}>= Costo Final</Text>
-                    <TextInput
-                        style={[styles.input, styles.readOnly, { fontSize: 14 }]}
-                        value={`$${(parseFloat(formData.cost_price || 0) + calculatedTransportCost).toFixed(2)}`}
-                        editable={false}
-                    />
-                </View>
             </View>
 
             <Text style={styles.label}>Precio de Venta (Calculado)</Text>
