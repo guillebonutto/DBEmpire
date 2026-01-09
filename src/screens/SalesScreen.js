@@ -93,10 +93,13 @@ export default function SalesScreen({ navigation }) {
 
                             if (itemsError) throw itemsError;
 
-                            // 2. Update status
+                            // 2. Update status and timestamp to now
                             const { error: updateError } = await supabase
                                 .from('sales')
-                                .update({ status: 'completed' })
+                                .update({
+                                    status: 'completed',
+                                    created_at: new Date().toISOString()
+                                })
                                 .eq('id', sale.id);
 
                             if (updateError) throw updateError;

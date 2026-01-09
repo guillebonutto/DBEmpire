@@ -45,7 +45,7 @@ export default function ExpensesScreen({ navigation }) {
         try {
             const { data, error } = await supabase
                 .from('supplier_orders')
-                .select('*, supplier_order_items(id, product_id, quantity, cost_per_unit, products(name))')
+                .select('*')
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
@@ -226,79 +226,85 @@ export default function ExpensesScreen({ navigation }) {
         </View>
     );
 
-    const renderOrderItem = ({ item }) => (
-        <View style={styles.orderCard}>
-            <View style={styles.cardHeader}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <MaterialCommunityIcons name={item.status === 'received' ? "check-decagram" : "cube-send"} size={24} color={item.status === 'received' ? "#2ecc71" : "#d4af37"} style={{ marginRight: 10 }} />
-                    <View>
-                        <Text style={styles.providerName}>{item.provider_name}</Text>
-                        <Text style={[styles.date, { color: item.status === 'received' ? '#2ecc71' : '#666' }]}>
-                            {item.status === 'received' ? 'RECIBIDO' : 'PENDIENTE'}
-                        </Text>
+    const renderOrderItem = ({ item }) => {
+        const totalInstallments = item.installments_total || 1;
+        const paidInstallments = item.installments_paid || 0;
+        const amountPerInstallment = item.total_cost / totalInstallments;
+        const isPaidOff = paidInstallments >= totalInstallments;
+
+        return (
+            <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('NewSupplierOrder', { orderToEdit: item })}
+            >
+                <View style={[styles.orderCard, isPaidOff && { borderColor: '#2ecc71' }]}>
+                    <View style={styles.cardHeader}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <MaterialCommunityIcons name={item.status === 'received' ? "check-decagram" : "cube-send"} size={24} color={item.status === 'received' ? "#2ecc71" : "#d4af37"} style={{ marginRight: 10 }} />
+                            <View>
+                                <Text style={styles.providerName}>{item.provider_name}</Text>
+                                <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
+                            </View>
+                        </View>
+                        <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
+                            <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
+                        </View>
                     </View>
-                </View>
-                <TouchableOpacity onPress={() => handleDeleteOrder(item.id)}>
-                    <MaterialCommunityIcons name="trash-can-outline" size={20} color="#666" />
-                </TouchableOpacity>
-            </View>
 
-            {/* Linked Items List */}
-            {item.supplier_order_items && item.supplier_order_items.length > 0 ? (
-                <View style={styles.itemsList}>
-                    {item.supplier_order_items.map((prod, idx) => (
-                        <Text key={idx} style={styles.itemText}>
-                            • {prod.products?.name} (x{prod.quantity})
-                        </Text>
-                    ))}
-                </View>
-            ) : (
-                <Text style={styles.desc}>{item.items_description}</Text>
-            )}
-
-            {item.total_cost > 0 && <Text style={styles.cost}>Costo: ${item.total_cost}</Text>}
-
-            {/* Installments Section */}
-            {item.installments_total > 1 && (
-                <View style={styles.installmentContainer}>
-                    <View>
-                        <Text style={styles.installmentText}>
-                            Cuotas: <Text style={{ color: '#fff' }}>{item.installments_paid || 0}/{item.installments_total}</Text>
-                        </Text>
-                        <Text style={styles.installmentText}>
-                            Restantes: <Text style={{ color: '#e74c3c' }}>{item.installments_total - (item.installments_paid || 0)}</Text>
-                        </Text>
+                    {/* Cost & Installments Summary */}
+                    <View style={styles.summaryContainer}>
+                        <View>
+                            <Text style={styles.summaryLabel}>Total Deuda</Text>
+                            <Text style={styles.summaryValue}>${item.total_cost?.toLocaleString()}</Text>
+                        </View>
+                        <View>
+                            <Text style={styles.summaryLabel}>Plan de Cuotas</Text>
+                            <Text style={styles.summaryValue}>{paidInstallments}/{totalInstallments}</Text>
+                        </View>
+                        <View>
+                            <Text style={styles.summaryLabel}>Valor Cuota</Text>
+                            <Text style={styles.summaryValue}>${amountPerInstallment.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</Text>
+                        </View>
                     </View>
-                    {(item.installments_paid || 0) < item.installments_total && (
+
+                    {/* Progress Bar */}
+                    {totalInstallments > 1 && (
+                        <View style={styles.progressContainer}>
+                            <View style={styles.progressBarBg}>
+                                <View
+                                    style={[
+                                        styles.progressBarFill,
+                                        { width: `${(paidInstallments / totalInstallments) * 100}%` },
+                                        isPaidOff && { backgroundColor: '#2ecc71' }
+                                    ]}
+                                />
+                            </View>
+                            <Text style={styles.progressText}>
+                                {isPaidOff ? '¡DEUDA PAGADA!' : `Restan ${totalInstallments - paidInstallments} cuotas`}
+                            </Text>
+                        </View>
+                    )}
+
+                    {/* Quick Action: Pay Next Installment */}
+                    {!isPaidOff && totalInstallments > 1 && (
                         <TouchableOpacity
                             style={styles.payBtn}
                             onPress={() => handlePayInstallment(item)}
                         >
-                            <Text style={styles.payBtnText}>PAGAR CUOTA</Text>
+                            <Text style={styles.payBtnText}>PAGAR CUOTA DE ESTE MES</Text>
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Receive Button (Critical for Stock) */}
+                    {item.status !== 'received' && (
+                        <TouchableOpacity style={styles.receiveBtn} onPress={() => handleReceiveOrder(item)}>
+                            <Text style={styles.receiveBtnText}>MARCAR COMO RECIBIDO (+ STOCK)</Text>
                         </TouchableOpacity>
                     )}
                 </View>
-            )}
-
-            {/* Receive Button */}
-            {item.status !== 'received' && (
-                <TouchableOpacity style={styles.receiveBtn} onPress={() => handleReceiveOrder(item)}>
-                    <Text style={styles.receiveBtnText}>MARCAR COMO RECIBIDO (+ STOCK)</Text>
-                </TouchableOpacity>
-            )}
-
-            {/* Tracking Section */}
-            {item.tracking_number ? (
-                <TouchableOpacity style={styles.trackRow} onPress={() => handleTrack(item.tracking_number)}>
-                    <MaterialCommunityIcons name="radar" size={20} color="#3498db" />
-                    <Text style={styles.trackText}>{item.tracking_number}</Text>
-                    <MaterialCommunityIcons name="open-in-new" size={16} color="#666" style={{ marginLeft: 5 }} />
-                </TouchableOpacity>
-            ) : null}
-
-            <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
-        </View>
-    );
+            </TouchableOpacity>
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -531,19 +537,25 @@ const styles = StyleSheet.create({
     btnGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 15, gap: 10 },
     newOrderText: { color: '#000', fontWeight: '900', letterSpacing: 1 },
 
-    orderCard: { backgroundColor: '#1e1e1e', borderRadius: 12, padding: 20, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
-    providerName: { color: '#fff', fontWeight: 'bold', fontSize: 18 },
-    desc: { color: '#ccc', marginBottom: 10, fontSize: 14 },
-    cost: { color: '#fff', fontWeight: 'bold', marginBottom: 10 },
-    installmentContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#2c3e50', padding: 10, borderRadius: 8, marginBottom: 10 },
-    installmentText: { color: '#bdc3c7', fontSize: 12, fontWeight: 'bold' },
-    payBtn: { backgroundColor: '#27ae60', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5 },
-    payBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+    orderCard: { backgroundColor: '#1e1e1e', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    providerName: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+    statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 5 },
+    statusText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+
+    summaryContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#252525', padding: 10, borderRadius: 8, marginBottom: 15 },
+    summaryLabel: { color: '#888', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 },
+    summaryValue: { color: '#d4af37', fontSize: 14, fontWeight: 'bold' },
+
+    progressContainer: { marginBottom: 15 },
+    progressBarBg: { height: 6, backgroundColor: '#333', borderRadius: 3, marginBottom: 5 },
+    progressBarFill: { height: '100%', backgroundColor: '#d4af37', borderRadius: 3 },
+    progressText: { color: '#666', fontSize: 11, fontStyle: 'italic', textAlign: 'right' },
+
+    payBtn: { backgroundColor: '#222', padding: 12, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#d4af37', marginBottom: 15 },
+    payBtnText: { color: '#d4af37', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
+
     receiveBtn: { backgroundColor: '#333', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#2ecc71' },
     receiveBtnText: { color: '#2ecc71', fontWeight: '900', fontSize: 12, letterSpacing: 1 },
-    itemsList: { marginBottom: 10, padding: 10, backgroundColor: '#111', borderRadius: 8 },
-    itemText: { color: '#ccc', fontSize: 13, marginBottom: 2 },
-    trackRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', padding: 10, borderRadius: 8, marginBottom: 15, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#333' },
-    trackText: { color: '#3498db', marginLeft: 10, fontWeight: '600', letterSpacing: 1 },
+
     date: { color: '#666', fontSize: 12 }
 });
