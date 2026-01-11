@@ -506,7 +506,7 @@ export default function NewSaleScreen({ navigation, route }) {
                 return;
             }
 
-            // ... Proceed with normal online insert ...
+            // 1. Create Sale Record
             let { data: saleData, error: saleError } = await supabase
                 .from('sales')
                 .insert(salePayload)
@@ -526,9 +526,12 @@ export default function NewSaleScreen({ navigation, route }) {
                 saleError = retry.error;
             }
 
-            if (saleError) throw saleError;
+            if (saleError) {
+                console.error('Sale Insert Error:', saleError);
+                throw new Error('No se pudo crear el registro de venta.');
+            }
 
-            // Insert Items
+            // 2. Insert Items
             const saleItems = cart.map(item => ({
                 sale_id: saleData.id,
                 product_id: item.id,
@@ -538,24 +541,36 @@ export default function NewSaleScreen({ navigation, route }) {
             }));
 
             const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
-            if (itemsError) throw itemsError;
+            if (itemsError) {
+                console.error('Items Insert Error:', itemsError);
+                // Critical error: Sale exists but no items. We should probably inform the user.
+                Alert.alert('Error Parcial', 'La venta se registró pero hubo un problema guardando los productos. Por favor revisa el historial.');
+                throw new Error('Error al guardar los productos de la venta.');
+            }
 
-            // Update Stock (Skip if it's just a budget/quote)
+            // 3. Update Stock (Skip if it's just a budget/quote)
             if (saleType !== 'budget') {
-                const lowStockProducts = [];
-                for (const item of cart) {
-                    const newStock = (item.current_stock || 0) - item.qty;
-                    await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
+                try {
+                    const lowStockProducts = [];
+                    for (const item of cart) {
+                        const newStock = (item.current_stock || 0) - item.qty;
+                        await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
 
-                    if (newStock <= 5) {
-                        lowStockProducts.push({ name: item.name, stock: newStock });
-                        await NotificationService.sendLowStockAlert(item.name, newStock);
+                        if (newStock <= 5) {
+                            lowStockProducts.push({ name: item.name, stock: newStock });
+                            // Non-critical: Try to send notification but don't fail if it fails
+                            NotificationService.sendLowStockAlert(item.name, newStock).catch(e => console.log('Notification Error:', e));
+                        }
                     }
-                }
 
-                // If there are critical products, schedule the 5-hour reminder
-                if (lowStockProducts.length > 0) {
-                    await NotificationService.scheduleStockReminder(lowStockProducts);
+                    // If there are critical products, schedule the 5-hour reminder
+                    if (lowStockProducts.length > 0) {
+                        NotificationService.scheduleStockReminder(lowStockProducts).catch(e => console.log('Reminder Error:', e));
+                    }
+                } catch (stockError) {
+                    console.error('Stock Update Error:', stockError);
+                    // Non-critical for the sale itself, but important for inventory
+                    Alert.alert('Aviso', 'Venta registrada, pero hubo un error actualizando el stock de algunos productos.');
                 }
             }
 
@@ -590,7 +605,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
         } catch (error) {
             console.log('Checkout Error:', error);
-            Alert.alert('Error', 'No se pudo procesar la venta.');
+            Alert.alert('Error', error.message || 'No se pudo procesar la venta.');
         } finally {
             setLoading(false);
         }

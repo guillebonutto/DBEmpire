@@ -104,14 +104,19 @@ export default function SalesScreen({ navigation }) {
 
                             if (updateError) throw updateError;
 
-                            // 3. Update stock
-                            for (const item of items) {
-                                const currentStock = item.products?.current_stock || 0;
-                                const newStock = currentStock - item.quantity;
-                                await supabase
-                                    .from('products')
-                                    .update({ current_stock: newStock })
-                                    .eq('id', item.product_id);
+                            // 3. Update stock (Try-catch for non-critical failure)
+                            try {
+                                for (const item of items) {
+                                    const currentStock = item.products?.current_stock || 0;
+                                    const newStock = currentStock - item.quantity;
+                                    await supabase
+                                        .from('products')
+                                        .update({ current_stock: newStock })
+                                        .eq('id', item.product_id);
+                                }
+                            } catch (stockError) {
+                                console.error('Stock Update Error during conversion:', stockError);
+                                Alert.alert('Aviso', 'Venta confirmada, pero hubo un error actualizando el inventario.');
                             }
 
                             Alert.alert('✅ Convertido', 'Venta finalizada con éxito.');
