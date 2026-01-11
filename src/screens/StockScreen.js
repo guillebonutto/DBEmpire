@@ -174,6 +174,12 @@ export default function StockScreen({ navigation, route }) {
                                 <MaterialCommunityIcons name="image-off-outline" size={24} color="#333" />
                             </View>
                         )}
+                        <TouchableOpacity
+                            style={styles.deleteBadge}
+                            onPress={() => handleDelete(item)}
+                        >
+                            <MaterialCommunityIcons name="delete-outline" size={14} color="#e74c3c" />
+                        </TouchableOpacity>
                         <View style={[styles.stockGlow, { backgroundColor: stockColor + '20', borderColor: stockColor + '60' }]}>
                             <Text style={[styles.stockText, { color: stockColor }]}>{stock}</Text>
                         </View>
@@ -196,10 +202,6 @@ export default function StockScreen({ navigation, route }) {
                             </View>
                         </View>
                     </View>
-
-                    <TouchableOpacity style={styles.quickAction} onPress={() => handleDelete(item)}>
-                        <MaterialCommunityIcons name="delete-outline" size={20} color="#444" />
-                    </TouchableOpacity>
                 </LinearGradient>
             </TouchableOpacity>
         );
@@ -376,12 +378,6 @@ export default function StockScreen({ navigation, route }) {
                 </View>
                 <View style={styles.headerActions}>
                     <TouchableOpacity
-                        style={styles.headerBtn}
-                        onPress={() => navigation.navigate('Promotions')}
-                    >
-                        <MaterialCommunityIcons name="sale" size={22} color="#d4af37" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
                         style={[styles.headerBtn, isFastMode && { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }]}
                         onPress={() => setIsFastMode(!isFastMode)}
                     >
@@ -521,6 +517,15 @@ const styles = StyleSheet.create({
     metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     metaText: { color: '#555', fontSize: 11, fontWeight: '600', flex: 1 },
     quickAction: { padding: 8 },
+    deleteBadge: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        backgroundColor: '#000000a0',
+        padding: 5,
+        borderBottomRightRadius: 10,
+        zIndex: 10,
+    },
 
     emptyContainer: { alignItems: 'center', marginTop: 100 },
     emptyText: { fontSize: 18, color: '#444', fontWeight: '900', letterSpacing: 1 },

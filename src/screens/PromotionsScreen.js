@@ -10,10 +10,13 @@ export default function PromotionsScreen({ navigation }) {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(false);
     const [modalVisible, setModalVisible] = useState(false);
+    const [editingPromoId, setEditingPromoId] = useState(null);
 
     // Form State
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
+    const [type, setType] = useState('global_percent'); // global_percent, buy_x_get_y, fixed_discount
+    const [value, setValue] = useState('');
     const [selectedProducts, setSelectedProducts] = useState([]);
 
     useEffect(() => {
@@ -28,16 +31,12 @@ export default function PromotionsScreen({ navigation }) {
 
     const fetchPromos = async () => {
         setLoading(true);
-        // Fetch promos with linked products
         const { data, error } = await supabase
             .from('promotions')
             .select(`
                 *,
                 promotion_products (
-                    products (
-                        id,
-                        name
-                    )
+                    product_id
                 )
             `)
             .order('created_at', { ascending: false });
@@ -46,46 +45,113 @@ export default function PromotionsScreen({ navigation }) {
         setLoading(false);
     };
 
-    const handleAddPromo = async () => {
-        if (!title) return;
+    const handleSavePromo = async () => {
+        if (!title || !type) return;
+
+        // Validation for values
+        const numericValue = parseFloat(value.toString().replace(',', '.')) || 0;
+        if (type !== 'buy_x_get_y' && numericValue <= 0) {
+            Alert.alert('Falta Valor', 'Por favor ingresa un porcentaje o monto de descuento mayor a 0 en el campo correspondiente.');
+            return;
+        }
+
         setLoading(true);
 
-        // 1. Insert Promotion
-        const { data: promoData, error: promoError } = await supabase
-            .from('promotions')
-            .insert({ title, description, active: true })
-            .select()
-            .single();
+        const promoPayload = {
+            title,
+            description,
+            type,
+            value: numericValue,
+            active: true
+        };
+
+        let promoData, promoError;
+
+        if (editingPromoId) {
+            const result = await supabase
+                .from('promotions')
+                .update(promoPayload)
+                .eq('id', editingPromoId)
+                .select()
+                .single();
+            promoData = result.data;
+            promoError = result.error;
+        } else {
+            const result = await supabase
+                .from('promotions')
+                .insert(promoPayload)
+                .select()
+                .single();
+            promoData = result.data;
+            promoError = result.error;
+        }
 
         if (promoError) {
-            alert('Error al guardar la promoción');
+            alert('Error al guardar la promoción: ' + promoError.message);
             setLoading(false);
             return;
         }
 
-        // 2. Insert Links if any products selected
+        if (editingPromoId) {
+            await supabase.from('promotion_products').delete().eq('promotion_id', editingPromoId);
+        }
+
         if (selectedProducts.length > 0) {
-            const links = selectedProducts.map(productId => ({
+            const links = selectedProducts.map(pid => ({
                 promotion_id: promoData.id,
-                product_id: productId
+                product_id: pid
             }));
             const { error: linkError } = await supabase.from('promotion_products').insert(links);
             if (linkError) console.error('Error linking products:', linkError);
         }
 
-        setTitle('');
-        setDescription('');
-        setSelectedProducts([]);
+        resetForm();
         setModalVisible(false);
         fetchPromos();
         setLoading(false);
     };
 
-    const toggleProductSelection = (productId) => {
+    const handleDeletePromo = async (id) => {
+        Alert.alert(
+            'Eliminar Promoción',
+            '¿Estás seguro?',
+            [
+                { text: 'No', style: 'cancel' },
+                {
+                    text: 'SÍ, BORRAR',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setLoading(true);
+                        await supabase.from('promotions').delete().eq('id', id);
+                        fetchPromos();
+                    }
+                }
+            ]
+        );
+    };
+
+    const resetForm = () => {
+        setTitle('');
+        setDescription('');
+        setType('global_percent');
+        setValue('');
+        setSelectedProducts([]);
+        setEditingPromoId(null);
+    };
+
+    const openEditModal = (promo) => {
+        setTitle(promo.title);
+        setDescription(promo.description || '');
+        setType(promo.type);
+        setValue(promo.value?.toString() || '');
+        setSelectedProducts(promo.promotion_products?.map(pp => pp.product_id) || []);
+        setEditingPromoId(promo.id);
+        setModalVisible(true);
+    };
+
+    const toggleProductSelection = (id) => {
         setSelectedProducts(prev =>
-            prev.includes(productId)
-                ? prev.filter(id => id !== productId)
-                : [...prev, productId]
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
         );
     };
 
@@ -119,9 +185,19 @@ export default function PromotionsScreen({ navigation }) {
                 refreshing={loading}
                 onRefresh={fetchPromos}
                 renderItem={({ item }) => (
-                    <View style={styles.card}>
+                    <TouchableOpacity style={styles.card} onPress={() => openEditModal(item)}>
                         <View style={{ flex: 1 }}>
-                            <Text style={styles.cardTitle}>{item.title}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
+                                <Text style={styles.cardTitle}>{item.title}</Text>
+                                <View style={[styles.typeBadge, { backgroundColor: item.type === 'buy_x_get_y' ? '#e67e22' : '#d4af37' }]}>
+                                    <Text style={styles.typeBadgeText}>
+                                        {item.type === 'global_percent' ? `${item.value}% OFF` :
+                                            item.type === 'buy_x_get_y' ? '2x1' :
+                                                item.type === 'fixed_discount' ? `$${item.value} OFF` : 'PROMO'}
+                                    </Text>
+                                </View>
+                            </View>
+
                             {item.description ? <Text style={styles.cardDesc}>{item.description}</Text> : null}
 
                             {/* Linked Products Tags */}
@@ -139,73 +215,124 @@ export default function PromotionsScreen({ navigation }) {
                                 {item.active ? '● VIGENTE' : '○ PAUSADA'}
                             </Text>
                         </View>
-                        <TouchableOpacity onPress={() => togglePromo(item.id, item.active)}>
-                            <MaterialCommunityIcons
-                                name={item.active ? "toggle-switch" : "toggle-switch-off-outline"}
-                                size={44}
-                                color={item.active ? '#d4af37' : '#444'}
-                            />
-                        </TouchableOpacity>
-                    </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <TouchableOpacity onPress={() => handleDeletePromo(item.id)} style={{ padding: 10 }}>
+                                <MaterialCommunityIcons name="trash-can-outline" size={24} color="#666" />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => togglePromo(item.id, item.active)}>
+                                <MaterialCommunityIcons
+                                    name={item.active ? "toggle-switch" : "toggle-switch-off-outline"}
+                                    size={44}
+                                    color={item.active ? '#d4af37' : '#444'}
+                                />
+                            </TouchableOpacity>
+                        </View>
+                    </TouchableOpacity>
                 )}
                 ListEmptyComponent={<Text style={styles.empty}>No hay promociones activas.</Text>}
             />
 
-            <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)}>
+            <TouchableOpacity style={styles.fab} onPress={() => { resetForm(); setModalVisible(true); }}>
                 <MaterialCommunityIcons name="plus" size={32} color="black" />
             </TouchableOpacity>
 
             <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Nueva Promo</Text>
+                <View style={[styles.modalContent, { flex: 1 }]}>
+                    <ScrollView showsVerticalScrollIndicator={false}>
+                        <Text style={styles.modalTitle}>{editingPromoId ? 'Editar Promo' : 'Nueva Promo'}</Text>
 
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Título (ej. 2x1 VIP)"
-                        value={title}
-                        onChangeText={setTitle}
-                        placeholderTextColor="#666"
-                    />
+                        <Text style={styles.label}>TIPO DE PROMOCIÓN:</Text>
+                        <View style={styles.typeSelector}>
+                            <TouchableOpacity
+                                style={[styles.typeBtn, type === 'global_percent' && styles.typeBtnActive]}
+                                onPress={() => setType('global_percent')}
+                            >
+                                <Text style={[styles.typeBtnText, type === 'global_percent' && styles.typeBtnTextActive]}>% GLOBAL</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.typeBtn, type === 'buy_x_get_y' && styles.typeBtnActive]}
+                                onPress={() => setType('buy_x_get_y')}
+                            >
+                                <Text style={[styles.typeBtnText, type === 'buy_x_get_y' && styles.typeBtnTextActive]}>2x1</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.typeBtn, type === 'fixed_discount' && styles.typeBtnActive]}
+                                onPress={() => setType('fixed_discount')}
+                            >
+                                <Text style={[styles.typeBtnText, type === 'fixed_discount' && styles.typeBtnTextActive]}>FIJO $</Text>
+                            </TouchableOpacity>
+                        </View>
 
-                    <TextInput
-                        style={[styles.input, styles.textArea]}
-                        placeholder="Detalles de la oferta..."
-                        value={description}
-                        onChangeText={setDescription}
-                        multiline
-                        placeholderTextColor="#666"
-                    />
+                        <Text style={styles.label}>TÍTULO:</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Ej. Black Friday 20%"
+                            value={title}
+                            onChangeText={setTitle}
+                            placeholderTextColor="#666"
+                        />
 
-                    <Text style={styles.selectionTitle}>Vincular Productos:</Text>
-                    <View style={styles.productSelectionList}>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
-                            {products.map(product => (
-                                <TouchableOpacity
-                                    key={product.id}
-                                    style={[
-                                        styles.productChip,
-                                        selectedProducts.includes(product.id) && styles.productChipSelected
-                                    ]}
-                                    onPress={() => toggleProductSelection(product.id)}
-                                >
-                                    <Text style={[
-                                        styles.productChipText,
-                                        selectedProducts.includes(product.id) && styles.productChipTextSelected
-                                    ]}>
-                                        {product.name}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                    </View>
+                        {type !== 'buy_x_get_y' && (
+                            <>
+                                <Text style={styles.label}>{type === 'global_percent' ? 'PORCENTAJE (%)' : 'MONTO DE DESCUENTO ($)'}:</Text>
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="Ej. 10"
+                                    value={value}
+                                    onChangeText={setValue}
+                                    keyboardType="numeric"
+                                    placeholderTextColor="#666"
+                                />
+                            </>
+                        )}
 
-                    <TouchableOpacity style={styles.saveBtn} onPress={handleAddPromo}>
-                        {loading ? <ActivityIndicator color="black" /> : <Text style={styles.saveText}>Publicar</Text>}
-                    </TouchableOpacity>
+                        <Text style={styles.label}>DESCRIPCIÓN (OPCIONAL):</Text>
+                        <TextInput
+                            style={[styles.input, styles.textArea]}
+                            placeholder="Detalles adicionales..."
+                            value={description}
+                            onChangeText={setDescription}
+                            multiline
+                            placeholderTextColor="#666"
+                        />
 
-                    <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
-                        <Text style={styles.cancelText}>Cancelar</Text>
-                    </TouchableOpacity>
+                        {type !== 'global_percent' && (
+                            <>
+                                <Text style={styles.label}>VINCULAR PRODUCTOS:</Text>
+                                <View style={styles.productSelectionList}>
+                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+                                        {products.map(product => (
+                                            <TouchableOpacity
+                                                key={product.id}
+                                                style={[
+                                                    styles.productChip,
+                                                    selectedProducts.includes(product.id) && styles.productChipSelected
+                                                ]}
+                                                onPress={() => toggleProductSelection(product.id)}
+                                            >
+                                                <Text style={[
+                                                    styles.productChipText,
+                                                    selectedProducts.includes(product.id) && styles.productChipTextSelected
+                                                ]}>
+                                                    {product.name}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </ScrollView>
+                                </View>
+                            </>
+                        )}
+
+                        <TouchableOpacity style={styles.saveBtn} onPress={handleSavePromo}>
+                            {loading ? <ActivityIndicator color="black" /> : <Text style={styles.saveText}>{editingPromoId ? 'Actualizar Promo' : 'Publicar Promo'}</Text>}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
+                            <Text style={styles.cancelText}>Cancelar</Text>
+                        </TouchableOpacity>
+
+                        <View style={{ height: 50 }} />
+                    </ScrollView>
                 </View>
             </Modal>
         </SafeAreaView>
@@ -227,6 +354,9 @@ const styles = StyleSheet.create({
     statusText: { fontSize: 10, fontWeight: '900', letterSpacing: 1 },
     empty: { textAlign: 'center', marginTop: 50, color: '#444', fontStyle: 'italic' },
 
+    typeBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, marginLeft: 10 },
+    typeBadgeText: { color: '#000', fontSize: 10, fontWeight: '900' },
+
     tagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginBottom: 10 },
     tag: { backgroundColor: '#d4af3720', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 5, borderWidth: 1, borderColor: '#d4af3740' },
     tagText: { color: '#d4af37', fontSize: 10, fontWeight: 'bold' },
@@ -236,11 +366,17 @@ const styles = StyleSheet.create({
     // Modal styles
     modalContent: { flex: 1, padding: 30, backgroundColor: '#121212', marginTop: 0 },
     modalTitle: { fontSize: 24, fontWeight: '900', marginBottom: 30, color: '#d4af37', textAlign: 'center', letterSpacing: 1 },
-    input: { backgroundColor: '#222', padding: 18, borderRadius: 12, marginBottom: 15, fontSize: 16, color: 'white', borderWidth: 1, borderColor: '#333' },
-    textArea: { height: 100, textAlignVertical: 'top' },
+    label: { color: '#888', fontSize: 12, fontWeight: 'bold', marginBottom: 8, letterSpacing: 1 },
+    input: { backgroundColor: '#222', padding: 18, borderRadius: 12, marginBottom: 20, fontSize: 16, color: 'white', borderWidth: 1, borderColor: '#333' },
+    textArea: { height: 80, textAlignVertical: 'top' },
 
-    selectionTitle: { color: '#888', fontSize: 12, fontWeight: 'bold', marginBottom: 10, letterSpacing: 1 },
-    productSelectionList: { marginBottom: 20 },
+    typeSelector: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 25 },
+    typeBtn: { flex: 1, backgroundColor: '#1a1a1a', paddingVertical: 12, borderRadius: 10, alignItems: 'center', marginRight: 5, borderWidth: 1, borderColor: '#333' },
+    typeBtnActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    typeBtnText: { color: '#666', fontSize: 10, fontWeight: 'bold' },
+    typeBtnTextActive: { color: '#000' },
+
+    productSelectionList: { marginBottom: 25 },
     productChip: { backgroundColor: '#1a1a1a', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: '#333' },
     productChipSelected: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
     productChipText: { color: '#888', fontSize: 12, fontWeight: 'bold' },
@@ -248,6 +384,6 @@ const styles = StyleSheet.create({
 
     saveBtn: { backgroundColor: '#d4af37', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
     saveText: { color: 'black', fontWeight: '900', fontSize: 18, letterSpacing: 1 },
-    cancelBtn: { marginTop: 20, alignItems: 'center' },
+    cancelBtn: { marginTop: 20, marginBottom: 30, alignItems: 'center' },
     cancelText: { color: '#666', fontSize: 16, fontWeight: 'bold' }
 });

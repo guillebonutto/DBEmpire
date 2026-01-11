@@ -1,6 +1,6 @@
-
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput } from 'react-native'; // Added TextInput
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView } from 'react-native'; // Added ScrollView
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -33,6 +33,8 @@ export default function NewSaleScreen({ navigation, route }) {
 
     // Selection State
     const [selectedClient, setSelectedClient] = useState(null);
+    const [promos, setPromos] = useState([]);
+    const [selectedPromo, setSelectedPromo] = useState(null);
     const [loading, setLoading] = useState(false);
     const [commissionRate, setCommissionRate] = useState(0.10);
     const [transportCost, setTransportCost] = useState(0);
@@ -105,13 +107,30 @@ export default function NewSaleScreen({ navigation, route }) {
         try {
             const productsReq = supabase.from('products').select('*').eq('active', true).order('name');
             const clientsReq = supabase.from('clients').select('*').order('created_at', { ascending: false });
+            const promosReq = supabase
+                .from('promotions')
+                .select(`
+                    *,
+                    promotion_products (
+                        product_id
+                    )
+                `)
+                .eq('active', true)
+                .order('created_at', { ascending: false });
 
-            const [productsRes, clientsRes] = await Promise.all([productsReq, clientsReq]);
+            const [productsRes, clientsRes, promosRes] = await Promise.all([productsReq, clientsReq, promosReq]);
 
             if (productsRes.data) setProducts(productsRes.data);
             if (clientsRes.data) setClients(clientsRes.data || []);
+            if (promosRes.data) setPromos(promosRes.data || []);
         } catch (e) { console.log(e); }
     };
+
+    useFocusEffect(
+        useCallback(() => {
+            fetchData();
+        }, [])
+    );
 
     const handleAddProductPress = () => {
         if (!selectedClient) {
@@ -210,18 +229,53 @@ export default function NewSaleScreen({ navigation, route }) {
     const calculateTotals = () => {
         let subtotal = 0;
         let totalProfit = 0;
+        let discount = 0;
+        let promoDetail = '';
+
         cart.forEach(item => {
             const itemTotal = item.sale_price * item.qty;
             const itemCost = item.cost_price * item.qty;
             subtotal += itemTotal;
             totalProfit += (itemTotal - itemCost);
         });
-        const total = subtotal + (includeTransport ? transportCost : 0); // Only add if enabled
-        const commission = currentUserRole === 'seller' ? totalProfit * commissionRate : 0;
-        return { subtotal, total, totalProfit, commission };
+
+        // Apply Promotion Logic
+        if (selectedPromo) {
+            if (selectedPromo.type === 'global_percent') {
+                discount = subtotal * (selectedPromo.value / 100);
+                promoDetail = `Desc. ${selectedPromo.value}% Global`;
+            } else if (selectedPromo.type === 'fixed_discount') {
+                discount = selectedPromo.value;
+                promoDetail = `Desc. Fijo -$${selectedPromo.value}`;
+            } else if (selectedPromo.type === 'buy_x_get_y') {
+                // Get IDs of products linked to this promo
+                const promoProductIds = (selectedPromo.promotion_products || []).map(pp => pp.product_id);
+
+                let affected = [];
+                cart.forEach(item => {
+                    if (promoProductIds.includes(item.id) && item.qty >= 2) {
+                        const freeUnits = Math.floor(item.qty / 2);
+                        discount += (freeUnits * item.sale_price);
+                        affected.push(`${item.name} (x${freeUnits})`);
+                    }
+                });
+
+                if (affected.length > 0) {
+                    promoDetail = `2x1 para: ${affected.join(', ')}`;
+                } else {
+                    promoDetail = 'Sin productos en 2x1';
+                }
+            }
+        }
+
+        const total = subtotal - discount + (includeTransport ? transportCost : 0);
+        const finalProfit = totalProfit - discount; // Discount reduces profit
+        const commission = currentUserRole === 'seller' ? finalProfit * commissionRate : 0;
+
+        return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail };
     };
 
-    const { subtotal, total, totalProfit, commission } = calculateTotals();
+    const { subtotal, total, totalProfit, commission, discount, promoDetail } = calculateTotals();
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
 
@@ -345,19 +399,55 @@ export default function NewSaleScreen({ navigation, route }) {
                             </tr>
                         </thead>
                         <tbody>
-                            ${cart.map(item => `
+                            ${cart.map(item => {
+                let rows = `
                                 <tr style="border-bottom: 1px solid #eee;">
                                     <td style="padding: 10px;">${item.name}</td>
                                     <td style="text-align: center; padding: 10px;">${item.qty}</td>
                                     <td style="text-align: right; padding: 10px;">$${item.sale_price}</td>
                                     <td style="text-align: right; padding: 10px;">$${(item.sale_price * item.qty).toFixed(2)}</td>
                                 </tr>
-                            `).join('')}
+                                `;
+
+                // If 2x1 applies to this item
+                if (selectedPromo?.type === 'buy_x_get_y') {
+                    const promoProdIds = (selectedPromo.promotion_products || []).map(pp => pp.product_id);
+                    if (promoProdIds.includes(item.id) && item.qty >= 2) {
+                        const free = Math.floor(item.qty / 2);
+                        rows += `
+                                        <tr style="border-bottom: 1px solid #eee;">
+                                            <td style="padding: 10px;"><strong>Promo: ${selectedPromo.title} (${item.name})</strong></td>
+                                            <td style="text-align: center; padding: 10px;"><strong>-${free}</strong></td>
+                                            <td style="text-align: right; padding: 10px;"><strong>-$${item.sale_price}</strong></td>
+                                            <td style="text-align: right; padding: 10px;"><strong>-$${(free * item.sale_price).toFixed(2)}</strong></td>
+                                        </tr>
+                                        `;
+                    }
+                }
+                return rows;
+            }).join('')}
+                            ${(selectedPromo?.type === 'global_percent' || selectedPromo?.type === 'fixed_discount') && discount > 0 ? `
+                                <tr style="border-bottom: 2px solid #d4af37;">
+                                    <td style="padding: 10px;"><strong>Promo: ${selectedPromo.title}</strong></td>
+                                    <td style="text-align: center; padding: 10px;"><strong>1</strong></td>
+                                    <td style="text-align: right; padding: 10px;"><strong>-$${discount.toFixed(2)}</strong></td>
+                                    <td style="text-align: right; padding: 10px;"><strong>-$${discount.toFixed(2)}</strong></td>
+                                </tr>
+                            ` : ''}
+                            ${includeTransport ? `
+                                <tr style="border-bottom: 1px solid #eee; background-color: #f8f8f8;">
+                                    <td style="padding: 10px; color: #666;">Envío / Transporte</td>
+                                    <td style="text-align: center; padding: 10px; color: #666;">1</td>
+                                    <td style="text-align: right; padding: 10px; color: #666;">$${transportCost.toFixed(2)}</td>
+                                    <td style="text-align: right; padding: 10px; color: #666;">$${transportCost.toFixed(2)}</td>
+                                </tr>
+                            ` : ''}
                         </tbody>
                     </table>
 
                     <div style="text-align: right; border-top: 2px solid #d4af37; padding-top: 20px;">
-                        <h2 style="margin: 0;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
+                        <p style="margin: 0; color: #888;">Subtotal: $${subtotal.toFixed(2)}</p>
+                        <h2 style="margin: 5px 0 0 0; color: #000;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
                     </div>
 
                     <div style="margin-top: 50px; text-align: center; color: #888; font-size: 12px;">
@@ -393,7 +483,8 @@ export default function NewSaleScreen({ navigation, route }) {
                 profit_generated: totalProfit,
                 commission_amount: commission,
                 status: saleType,
-                device_sig: deviceSig
+                device_sig: deviceSig,
+                promotion_id: selectedPromo ? selectedPromo.id : null
             };
 
             if (!netState.isConnected) {
@@ -406,6 +497,7 @@ export default function NewSaleScreen({ navigation, route }) {
                         text: 'ENTENDIDO', onPress: () => {
                             setCart([]);
                             setSelectedClient(null);
+                            setSelectedPromo(null);
                             setClientModalVisible(false);
                             navigation.navigate('Home');
                         }
@@ -477,6 +569,7 @@ export default function NewSaleScreen({ navigation, route }) {
                         onPress: () => {
                             setCart([]);
                             setSelectedClient(null);
+                            setSelectedPromo(null);
                             setClientModalVisible(false);
                             navigation.navigate('Sales');
                         }
@@ -487,6 +580,7 @@ export default function NewSaleScreen({ navigation, route }) {
                             await generateReceiptPDF(saleData, client, cart);
                             setCart([]);
                             setSelectedClient(null);
+                            setSelectedPromo(null);
                             setClientModalVisible(false);
                             navigation.navigate('Sales');
                         }
@@ -654,6 +748,47 @@ export default function NewSaleScreen({ navigation, route }) {
                 }
             />
 
+            {/* Promotion Selector */}
+            {promos.length > 0 && cart.length > 0 && (
+                <View style={{ backgroundColor: '#111', padding: 15, borderTopWidth: 1, borderTopColor: '#333' }}>
+                    <Text style={{ color: '#888', fontSize: 12, fontWeight: 'bold', marginBottom: 10, letterSpacing: 1 }}>APLICAR PROMOCIÓN / OFERTA:</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <TouchableOpacity
+                            style={[
+                                styles.promoChip,
+                                selectedPromo === null && styles.promoChipSelected
+                            ]}
+                            onPress={() => setSelectedPromo(null)}
+                        >
+                            <Text style={[styles.promoChipText, selectedPromo === null && styles.promoChipTextSelected]}>NINGUNA</Text>
+                        </TouchableOpacity>
+                        {promos.map(promo => (
+                            <TouchableOpacity
+                                key={promo.id}
+                                style={[
+                                    styles.promoChip,
+                                    selectedPromo?.id === promo.id && styles.promoChipSelected
+                                ]}
+                                onPress={() => setSelectedPromo(promo)}
+                            >
+                                <MaterialCommunityIcons
+                                    name="sale"
+                                    size={14}
+                                    color={selectedPromo?.id === promo.id ? "black" : "#d4af37"}
+                                    style={{ marginRight: 5 }}
+                                />
+                                <Text style={[
+                                    styles.promoChipText,
+                                    selectedPromo?.id === promo.id && styles.promoChipTextSelected
+                                ]}>
+                                    {promo.title.toUpperCase()}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </ScrollView>
+                </View>
+            )}
+
             {/* Cost Breakdown */}
             {cart.length > 0 && (
                 <View style={{ backgroundColor: '#1a1a1a', padding: 15, borderTopWidth: 1, borderTopColor: '#333' }}>
@@ -661,6 +796,16 @@ export default function NewSaleScreen({ navigation, route }) {
                         <Text style={{ color: '#888', fontSize: 14 }}>Subtotal Productos:</Text>
                         <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>${subtotal.toFixed(2)}</Text>
                     </View>
+
+                    {selectedPromo ? (
+                        <View style={{ marginBottom: 8 }}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                <Text style={{ color: '#2ecc71', fontSize: 14, fontWeight: 'bold' }}>Promo: {selectedPromo.title}</Text>
+                                <Text style={{ color: '#2ecc71', fontSize: 14, fontWeight: 'bold' }}>-${discount.toFixed(2)}</Text>
+                            </View>
+                            {promoDetail ? <Text style={{ color: '#2ecc71', fontSize: 12, fontStyle: 'italic' }}>({promoDetail})</Text> : null}
+                        </View>
+                    ) : null}
 
                     {/* Transport Toggle */}
                     <TouchableOpacity
@@ -1211,6 +1356,31 @@ const styles = StyleSheet.create({
         fontWeight: '900'
     },
     typeTextActive: {
+        color: '#000'
+    },
+    // Promo Chips
+    promoChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#1a1a1a',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 20,
+        marginRight: 8,
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    promoChipSelected: {
+        backgroundColor: '#d4af37',
+        borderColor: '#d4af37'
+    },
+    promoChipText: {
+        color: '#888',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1
+    },
+    promoChipTextSelected: {
         color: '#000'
     }
 });

@@ -24,12 +24,14 @@ export default function AdminScreen({ navigation }) {
         sellerCount: 0
     });
     const [dateFilter, setDateFilter] = useState('month'); // 'week', 'month', 'year'
+    const [currentDate, setCurrentDate] = useState(new Date()); // For specific month navigation
+    const [viewAllMonths, setViewAllMonths] = useState(false); // Toggle for General View
     const [tooltip, setTooltip] = useState({ visible: false, value: 0, x: 0, y: 0 });
     const [deviceData, setDeviceData] = useState([]);
 
     useEffect(() => {
         fetchData();
-    }, [dateFilter]);
+    }, [dateFilter, currentDate, viewAllMonths]);
 
     const fetchData = async () => {
         setLoading(true);
@@ -45,16 +47,22 @@ export default function AdminScreen({ navigation }) {
 
             // Calculate date range based on filter
             const now = new Date();
-            let startDate;
+            let startDate, endDate;
 
             if (dateFilter === 'day') {
                 startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Start of today 00:00
             } else if (dateFilter === 'week') {
                 startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             } else if (dateFilter === 'month') {
-                // User requested 'Month' filter to show 12 months (Current Year)
-                // 'Month' filter now shows last 30 days
-                startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                if (viewAllMonths) {
+                    // General View: Full Current Year
+                    startDate = new Date(now.getFullYear(), 0, 1);
+                    endDate = new Date(now.getFullYear(), 11, 31);
+                } else {
+                    // Specific Month View
+                    startDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+                    endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0); // Last day of month
+                }
             } else if (dateFilter === 'year') {
                 // 'Year' filter now shows last 5 years
                 startDate = new Date(now.getFullYear() - 4, 0, 1);
@@ -67,11 +75,15 @@ export default function AdminScreen({ navigation }) {
                 .gte('created_at', startDate.toISOString())
                 .order('created_at', { ascending: false });
 
+            // Apply upper limit for specific month view to strictly capture that month
+            if (dateFilter === 'month' && !viewAllMonths && endDate) {
+                salesQuery = salesQuery.lte('created_at', endDate.toISOString());
+            }
+
             let { data: sales, error: salesError } = await salesQuery;
 
             // Fallback for missing device_sig column
             if (salesError && salesError.message.includes('device_sig')) {
-                console.log('Fallback: device_sig column missing. Querying without it.');
                 const fallbackQuery = await supabase
                     .from('sales')
                     .select('id, created_at, total_amount, profit_generated, commission_amount, status')
@@ -84,12 +96,42 @@ export default function AdminScreen({ navigation }) {
             if (salesError) throw salesError;
 
             // Fetch expenses
-            const { data: expenses, error: expError } = await supabase
+            let expensesQuery = supabase
                 .from('expenses')
                 .select('amount, created_at')
                 .gte('created_at', startDate.toISOString());
 
+            if (dateFilter === 'month' && !viewAllMonths && endDate) {
+                expensesQuery = expensesQuery.lte('created_at', endDate.toISOString());
+            }
+
+            const { data: expenses, error: expError } = await expensesQuery;
+
             if (expError) throw expError;
+
+            // --- ROI HISTORY CALCULATION ---
+            // Fetch total sales before this period
+            const { data: historicalSales } = await supabase
+                .from('sales')
+                .select('total_amount, status')
+                .lt('created_at', startDate.toISOString());
+
+            // Total income before this period
+            const prevIncome = (historicalSales || []).filter(s => {
+                const st = (s.status || '').toLowerCase();
+                return st === 'completed' || st === 'exitosa' || st === 'vended' || st === '';
+            }).reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
+
+            // Fetch total expenses before this period
+            const { data: historicalExpenses } = await supabase
+                .from('expenses')
+                .select('amount')
+                .lt('created_at', startDate.toISOString());
+
+            const prevExpenses = (historicalExpenses || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+
+            const historicalBalance = prevIncome - prevExpenses;
+            // -------------------------------
 
             // Fetch sale items
             let saleItems = [];
@@ -111,8 +153,8 @@ export default function AdminScreen({ navigation }) {
 
             // Process data for charts and stats
             processChartData(finalSales);
-            processProgressData(finalSales, expenses || []);
-            calculateStats(finalSales, expenses || []);
+            processProgressData(finalSales, expenses || [], historicalBalance);
+            calculateStats(finalSales, expenses || [], historicalBalance);
             processDeviceData(finalSales);
 
             if (saleItems && saleItems.length > 0) {
@@ -130,7 +172,6 @@ export default function AdminScreen({ navigation }) {
         const now = new Date();
 
         if (filter === 'day') {
-            // Hours 0-23
             for (let i = 0; i < 24; i++) {
                 timeline.push({
                     key: i,
@@ -143,7 +184,6 @@ export default function AdminScreen({ navigation }) {
                 });
             }
         } else if (filter === 'week') {
-            // Last 7 days
             for (let i = 6; i >= 0; i--) {
                 const d = new Date(now);
                 d.setDate(d.getDate() - i);
@@ -156,16 +196,34 @@ export default function AdminScreen({ navigation }) {
                 });
             }
         } else if (filter === 'month') {
-            // Current Year (Jan-Dec) - Requested by User
-            const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-            months.forEach((m, index) => {
-                timeline.push({
-                    key: index,
-                    label: m,
-                    dateMatch: (date) => new Date(date).getMonth() === index && new Date(date).getFullYear() === now.getFullYear(),
-                    total: 0, income: 0, expense: 0
+            if (viewAllMonths) {
+                // General View: Full Current Year (Jan-Dec)
+                const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+                months.forEach((m, index) => {
+                    timeline.push({
+                        key: index,
+                        label: m,
+                        dateMatch: (date) => new Date(date).getMonth() === index && new Date(date).getFullYear() === now.getFullYear(),
+                        total: 0, income: 0, expense: 0
+                    });
                 });
-            });
+            } else {
+                // Specific Month View: Daily breakdown (1-30/31)
+                const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+                for (let i = 1; i <= daysInMonth; i++) {
+                    // For spacing labels, show every 5 days
+                    const label = (i === 1 || i % 5 === 0) ? `${i}` : '';
+                    timeline.push({
+                        key: i,
+                        label: label,
+                        dateMatch: (date) => {
+                            const d = new Date(date);
+                            return d.getDate() === i && d.getMonth() === currentDate.getMonth() && d.getFullYear() === currentDate.getFullYear();
+                        },
+                        total: 0, income: 0, expense: 0
+                    });
+                }
+            }
         } else if (filter === 'year') {
             // Last 5 Years
             for (let i = 4; i >= 0; i--) {
@@ -192,13 +250,14 @@ export default function AdminScreen({ navigation }) {
             }
         });
 
-        setSalesData({
-            labels: timeline.map(t => t.label),
-            data: timeline.map(t => t.total)
-        });
+        // Ensure we always have data to render, even if empty
+        const labels = timeline.length > 0 ? timeline.map(t => t.label) : ['No Data'];
+        const data = timeline.length > 0 ? timeline.map(t => t.total) : [0];
+
+        setSalesData({ labels, data });
     };
 
-    const processProgressData = (sales, expenses) => {
+    const processProgressData = (sales, expenses, historicalBalance = 0) => {
         const timeline = generateTimeline(dateFilter);
 
         sales.forEach(s => {
@@ -213,8 +272,8 @@ export default function AdminScreen({ navigation }) {
             if (item) item.expense += parseFloat(e.amount);
         });
 
-        // Calculate Net Balance (Cumulative / Running Total)
-        let runningTotal = 0;
+        // Calculate ROI Balance (Cumulative / Running Total starting from historical balance)
+        let runningTotal = historicalBalance;
         const netData = timeline.map(t => {
             const dailyNet = t.income - t.expense;
             runningTotal += dailyNet;
@@ -225,29 +284,29 @@ export default function AdminScreen({ navigation }) {
             labels: timeline.map(t => t.label),
             datasets: [
                 {
-                    data: netData,
-                    color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
+                    data: netData.length > 0 ? netData : [0],
+                    color: (opacity = 1) => runningTotal >= 0 ? `rgba(46, 204, 113, ${opacity})` : `rgba(231, 76, 60, ${opacity})`,
                     strokeWidth: 2
                 }
             ],
-            legend: ["Balance Neto (Ingresos - Gastos)"]
+            legend: ["Balance ROI (Progreso Acumulado)"]
         });
     };
 
-    const calculateStats = (sales, expenses) => {
-        const totalSales = (sales || []).reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
+    const calculateStats = (sales, expenses, historicalBalance = 0) => {
+        const currentSales = (sales || []).reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
         const grossProfit = (sales || []).reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
         const totalCommissions = (sales || []).reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
-        const totalExpenses = (expenses || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+        const currentExpenses = (expenses || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
 
-        // Net Profit = Gross Profit - Commissions - Expenses
-        const netProfit = grossProfit - totalCommissions - totalExpenses;
+        // All-Time ROI Balance = History + Current Period
+        const netProfit = historicalBalance + currentSales - currentExpenses;
 
         setStats({
-            totalSales,
+            totalSales: currentSales,
             totalProfit: grossProfit,
             totalCommissions,
-            totalExpenses,
+            totalExpenses: currentExpenses,
             netProfit,
             sellerCount: 1
         });
@@ -355,6 +414,11 @@ export default function AdminScreen({ navigation }) {
 
     const progressChart = useMemo(() => {
         if (!progressData?.datasets || progressData.datasets.length === 0) return null;
+        const statusColor = stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c';
+
+        // Check if data is just single 0 to avoid render error or ugly chart
+        const isDataEmpty = progressData.datasets[0].data.length === 1 && progressData.datasets[0].data[0] === 0;
+
         return (
             <LineChart
                 data={progressData}
@@ -366,10 +430,12 @@ export default function AdminScreen({ navigation }) {
                     backgroundGradientFrom: '#1e1e1e',
                     backgroundGradientTo: '#1e1e1e',
                     decimalPlaces: 0,
-                    color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
+                    color: (opacity = 1) => statusColor, // Line color
                     labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
                     style: { borderRadius: 16 },
-                    propsForDots: { r: '6', strokeWidth: '2', stroke: '#d4af37' }
+                    propsForDots: { r: '6', strokeWidth: '2', stroke: statusColor },
+                    fillShadowGradient: statusColor, // This is the "franja" (fill)
+                    fillShadowGradientOpacity: 0.2
                 }}
                 bezier
                 style={styles.chart}
@@ -378,7 +444,13 @@ export default function AdminScreen({ navigation }) {
                 }}
             />
         );
-    }, [progressData]);
+    }, [progressData, stats.netProfit]);
+
+    const changeMonth = (increment) => {
+        const newDate = new Date(currentDate);
+        newDate.setMonth(newDate.getMonth() + increment);
+        setCurrentDate(newDate);
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -391,10 +463,74 @@ export default function AdminScreen({ navigation }) {
                         <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>PANEL DE CONTROL</Text>
-                    <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={styles.expenseBtn}>
-                        <MaterialCommunityIcons name="cash-minus" size={24} color="#d4af37" />
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                        <TouchableOpacity onPress={() => navigation.navigate('Promotions')} style={styles.expenseBtn}>
+                            <MaterialCommunityIcons name="sale" size={24} color="#d4af37" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={styles.expenseBtn}>
+                            <MaterialCommunityIcons name="cash-minus" size={24} color="#d4af37" />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Date Filter Buttons */}
+                <View style={styles.filterContainer}>
+                    <TouchableOpacity
+                        style={[styles.filterBtn, dateFilter === 'day' && styles.filterBtnActive]}
+                        onPress={() => { setDateFilter('day'); setViewAllMonths(false); }}
+                    >
+                        <Text style={[styles.filterText, dateFilter === 'day' && styles.filterTextActive]}>DÍA</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.filterBtn, dateFilter === 'week' && styles.filterBtnActive]}
+                        onPress={() => { setDateFilter('week'); setViewAllMonths(false); }}
+                    >
+                        <Text style={[styles.filterText, dateFilter === 'week' && styles.filterTextActive]}>SEMANA</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.filterBtn, dateFilter === 'month' && styles.filterBtnActive]}
+                        onPress={() => setDateFilter('month')} // Keep current month view state
+                    >
+                        <Text style={[styles.filterText, dateFilter === 'month' && styles.filterTextActive]}>MES</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.filterBtn, dateFilter === 'year' && styles.filterBtnActive]}
+                        onPress={() => { setDateFilter('year'); setViewAllMonths(false); }}
+                    >
+                        <Text style={[styles.filterText, dateFilter === 'year' && styles.filterTextActive]}>AÑO</Text>
                     </TouchableOpacity>
                 </View>
+
+                {/* MONTH NAVIGATION CONTROLS */}
+                {dateFilter === 'month' && (
+                    <View style={styles.monthNavContainer}>
+                        {!viewAllMonths && (
+                            <View style={styles.monthSelector}>
+                                <TouchableOpacity onPress={() => changeMonth(-1)} style={styles.navArrow}>
+                                    <MaterialCommunityIcons name="chevron-left" size={30} color="#d4af37" />
+                                </TouchableOpacity>
+                                <Text style={styles.monthLabel}>
+                                    {currentDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase()}
+                                </Text>
+                                <TouchableOpacity onPress={() => changeMonth(1)} style={styles.navArrow}>
+                                    <MaterialCommunityIcons name="chevron-right" size={30} color="#d4af37" />
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        <TouchableOpacity
+                            style={styles.generalToggle}
+                            onPress={() => setViewAllMonths(!viewAllMonths)}
+                        >
+                            <MaterialCommunityIcons
+                                name={viewAllMonths ? "checkbox-marked" : "checkbox-blank-outline"}
+                                size={24}
+                                color="#d4af37"
+                            />
+                            <Text style={styles.generalToggleText}>Ver Año Completo</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
             </LinearGradient>
 
             <ScrollView
@@ -402,34 +538,6 @@ export default function AdminScreen({ navigation }) {
                 contentContainerStyle={styles.content}
                 refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchData} tintColor="#d4af37" />}
             >
-                {/* Date Filter Buttons */}
-                <View style={styles.filterContainer}>
-                    <TouchableOpacity
-                        style={[styles.filterBtn, dateFilter === 'day' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('day'); setTooltip({ ...tooltip, visible: false }); }}
-                    >
-                        <Text style={[styles.filterText, dateFilter === 'day' && styles.filterTextActive]}>DÍA</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.filterBtn, dateFilter === 'week' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('week'); setTooltip({ ...tooltip, visible: false }); }}
-                    >
-                        <Text style={[styles.filterText, dateFilter === 'week' && styles.filterTextActive]}>SEMANA</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.filterBtn, dateFilter === 'month' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('month'); setTooltip({ ...tooltip, visible: false }); }}
-                    >
-                        <Text style={[styles.filterText, dateFilter === 'month' && styles.filterTextActive]}>MES</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.filterBtn, dateFilter === 'year' && styles.filterBtnActive]}
-                        onPress={() => { setDateFilter('year'); setTooltip({ ...tooltip, visible: false }); }}
-                    >
-                        <Text style={[styles.filterText, dateFilter === 'year' && styles.filterTextActive]}>AÑO</Text>
-                    </TouchableOpacity>
-                </View>
-
                 {/* Stats Cards */}
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
@@ -440,7 +548,7 @@ export default function AdminScreen({ navigation }) {
                     <View style={styles.statCard}>
                         <MaterialCommunityIcons name="currency-usd" size={28} color="#2ecc71" />
                         <Text style={styles.statValue}>${stats.totalProfit.toFixed(0)}</Text>
-                        <Text style={styles.statLabel}>Ganancia Bruta</Text>
+                        <Text style={styles.statLabel}>Margen Productos</Text>
                     </View>
                 </View>
 
@@ -450,23 +558,23 @@ export default function AdminScreen({ navigation }) {
                         <Text style={styles.statValue}>${stats.totalExpenses.toFixed(0)}</Text>
                         <Text style={styles.statLabel}>Gastos Operativos</Text>
                     </View>
-                    <View style={[styles.statCard, { borderColor: '#d4af37' }]}>
-                        <MaterialCommunityIcons name="scale-balance" size={28} color="#fff" />
+                    <View style={[styles.statCard, { borderColor: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
+                        <MaterialCommunityIcons name="scale-balance" size={28} color={stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c'} />
                         <Text style={[styles.statValue, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
                             ${stats.netProfit.toFixed(0)}
                         </Text>
-                        <Text style={styles.statLabel}>Ganancia Neta</Text>
+                        <Text style={[styles.statLabel, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>Estado ROI / Balance</Text>
                     </View>
                 </View>
 
                 {/* Sales Chart */}
                 <View style={styles.chartCard}>
                     <Text style={styles.sectionTitle}>TENDENCIA DE VENTAS</Text>
-                    {salesData.data.length > 0 ? (
+                    {salesData.data.length > 0 && salesData.data.some(d => d > 0) ? (
                         <LineChart
                             data={{
                                 labels: salesData.labels,
-                                datasets: [{ data: salesData.data.length > 0 ? salesData.data : [0] }]
+                                datasets: [{ data: salesData.data }]
                             }}
                             width={screenWidth - 60}
                             height={220}
@@ -494,7 +602,7 @@ export default function AdminScreen({ navigation }) {
 
                 {/* Business Progress Chart (Net Balance) */}
                 <View style={styles.chartCard}>
-                    <Text style={styles.sectionTitle}>BALANCE NETO (Ingresos - Egresos)</Text>
+                    <Text style={styles.sectionTitle}>RECUPERACIÓN DE INVERSIÓN (ROI)</Text>
                     {progressData.datasets?.length > 0 ? (
                         <View>
                             {progressChart}
@@ -508,9 +616,9 @@ export default function AdminScreen({ navigation }) {
                                     borderRadius: 8,
                                     zIndex: 100,
                                     borderWidth: 1,
-                                    borderColor: '#d4af37'
+                                    borderColor: Number(tooltip.value) >= 0 ? '#2ecc71' : '#e74c3c'
                                 }}>
-                                    <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>
+                                    <Text style={{ color: Number(tooltip.value) >= 0 ? '#2ecc71' : '#e74c3c', fontWeight: 'bold' }}>
                                         ${Number(tooltip.value).toFixed(2)}
                                     </Text>
                                 </View>
@@ -669,4 +777,12 @@ const styles = StyleSheet.create({
     inputSuffix: { fontSize: 24, fontWeight: 'bold', color: '#d4af37', marginLeft: 10 },
     saveButton: { backgroundColor: '#d4af37', padding: 18, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
     saveButtonText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
+
+    // Month Navigation Styles
+    monthNavContainer: { paddingHorizontal: 20, paddingBottom: 15 },
+    monthSelector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 15, gap: 20 },
+    navArrow: { padding: 5 },
+    monthLabel: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 1, minWidth: 150, textAlign: 'center' },
+    generalToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#1e1e1e', padding: 10, borderRadius: 8, alignSelf: 'center', borderWidth: 1, borderColor: '#333' },
+    generalToggleText: { color: '#d4af37', fontWeight: 'bold' }
 });

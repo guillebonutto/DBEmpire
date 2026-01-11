@@ -132,16 +132,50 @@ export default function ExpensesScreen({ navigation }) {
 
         if (currentPaid >= total) return;
 
-        const { error } = await supabase
-            .from('supplier_orders')
-            .update({ installments_paid: currentPaid + 1 })
-            .eq('id', item.id);
+        const installmentAmount = item.total_cost / total;
 
-        if (error) {
-            Alert.alert('Error', 'No se pudo actualizar la cuota');
-        } else {
-            fetchOrders();
-        }
+        Alert.alert(
+            'Pagar Cuota',
+            `¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}? Se descontará de la caja.`,
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Confirmar Pago',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            // 1. Create Expense Record
+                            const { error: expenseError } = await supabase
+                                .from('expenses')
+                                .insert({
+                                    description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name}`,
+                                    amount: installmentAmount,
+                                    category: 'Inventario',
+                                    created_at: new Date().toISOString()
+                                });
+
+                            if (expenseError) throw expenseError;
+
+                            // 2. Update Order Installments
+                            const { error: updateError } = await supabase
+                                .from('supplier_orders')
+                                .update({ installments_paid: currentPaid + 1 })
+                                .eq('id', item.id);
+
+                            if (updateError) throw updateError;
+
+                            Alert.alert('✅ Pago Registrado', 'Se generó el gasto y se actualizó la cuota.');
+                            fetchFeed();
+                        } catch (error) {
+                            console.log('Error paying installment:', error);
+                            Alert.alert('Error', 'No se pudo registrar el pago. Intente nuevamente.');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const handleReceiveOrder = async (order) => {
