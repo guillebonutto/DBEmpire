@@ -11,6 +11,7 @@ const screenWidth = Dimensions.get('window').width;
 export default function AdminScreen({ navigation }) {
     const [commissionRate, setCommissionRate] = useState('10');
     const [transportRate, setTransportRate] = useState('0');
+    const [googleKey, setGoogleKey] = useState('');
     const [loading, setLoading] = useState(false);
     const [salesData, setSalesData] = useState({ labels: [], data: [] });
     const [progressData, setProgressData] = useState({ labels: [], datasets: [] });
@@ -41,8 +42,10 @@ export default function AdminScreen({ navigation }) {
             if (settingsData) {
                 const comm = settingsData.find(s => s.key === 'commission_rate');
                 const trans = settingsData.find(s => s.key === 'transport_cost');
+                const key = settingsData.find(s => s.key === 'google_api_key');
                 if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
                 if (trans) setTransportRate(parseFloat(trans.value).toString());
+                if (key) setGoogleKey(key.value);
             }
 
             // Calculate date range based on filter
@@ -412,6 +415,32 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
+    const updateGoogleKey = async () => {
+        if (!googleKey.trim()) {
+            Alert.alert('Error', 'Ingresa una API Key válida');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const { error } = await supabase
+                .from('settings')
+                .upsert(
+                    { key: 'google_api_key', value: googleKey.trim() },
+                    { onConflict: 'key' }
+                );
+
+            if (error) throw error;
+
+            Alert.alert('✅ Desbloqueado', 'Google Gemini está listo para trabajar 🧠⚡');
+        } catch (error) {
+            Alert.alert('Error', 'No se pudo guardar la API Key');
+            console.log(error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const progressChart = useMemo(() => {
         if (!progressData?.datasets || progressData.datasets.length === 0) return null;
         const statusColor = stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c';
@@ -734,6 +763,34 @@ export default function AdminScreen({ navigation }) {
                     >
                         <MaterialCommunityIcons name="content-save" size={20} color="black" />
                         <Text style={styles.saveButtonText}>GUARDAR CAMBIOS</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* AI Settings */}
+                <View style={styles.settingsCard}>
+                    <Text style={styles.sectionTitle}>GEMINI AI (Google API Key)</Text>
+                    <Text style={styles.settingsDesc}>
+                        Pega aquí tu llave de Google (gratis) para activar el Asistente de Marketing y el Escáner de Recibos.
+                    </Text>
+
+                    <View style={styles.inputContainer}>
+                        <TextInput
+                            style={[styles.input, { fontSize: 14, textAlign: 'left' }]}
+                            value={googleKey}
+                            onChangeText={setGoogleKey}
+                            placeholder="AIzaSy..."
+                            placeholderTextColor="#666"
+                            secureTextEntry
+                        />
+                    </View>
+
+                    <TouchableOpacity
+                        style={styles.saveButton}
+                        onPress={updateGoogleKey}
+                        disabled={loading}
+                    >
+                        <MaterialCommunityIcons name="google" size={20} color="black" />
+                        <Text style={styles.saveButtonText}>ACTIVAR GEMINI ♊</Text>
                     </TouchableOpacity>
                 </View>
 

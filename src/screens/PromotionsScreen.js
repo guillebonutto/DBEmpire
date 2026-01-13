@@ -4,6 +4,8 @@ import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Clipboard from 'expo-clipboard';
+import { generateMarketingCopy } from '../services/geminiService';
 
 export default function PromotionsScreen({ navigation }) {
     const [promos, setPromos] = useState([]);
@@ -11,6 +13,11 @@ export default function PromotionsScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
     const [modalVisible, setModalVisible] = useState(false);
     const [editingPromoId, setEditingPromoId] = useState(null);
+
+    // AI State
+    const [aiModalVisible, setAiModalVisible] = useState(false);
+    const [aiLoading, setAiLoading] = useState(false);
+    const [generatedCopy, setGeneratedCopy] = useState('');
 
     // Form State
     const [title, setTitle] = useState('');
@@ -36,7 +43,10 @@ export default function PromotionsScreen({ navigation }) {
             .select(`
                 *,
                 promotion_products (
-                    product_id
+                    product_id,
+                    products (
+                        name
+                    )
                 )
             `)
             .order('created_at', { ascending: false });
@@ -161,6 +171,28 @@ export default function PromotionsScreen({ navigation }) {
         await supabase.from('promotions').update({ active: !currentStatus }).eq('id', id);
     };
 
+    const handleGenerateMagic = async (promo) => {
+        setAiLoading(true);
+        setAiModalVisible(true);
+        setGeneratedCopy('');
+
+        try {
+            const productsInPromo = promo.promotion_products?.map(pp => pp.products) || [];
+            const result = await generateMarketingCopy(promo.title, promo.description, productsInPromo);
+            setGeneratedCopy(result);
+        } catch (error) {
+            Alert.alert('Error IA', error.message);
+            setAiModalVisible(false);
+        } finally {
+            setAiLoading(false);
+        }
+    };
+
+    const copyToClipboard = async () => {
+        await Clipboard.setStringAsync(generatedCopy);
+        Alert.alert('¡Copiado!', 'El texto está listo para pegar en WhatsApp.');
+    };
+
     const renderHeader = () => (
         <LinearGradient colors={['#000000', '#1a1a1a']} style={styles.header}>
             <View style={styles.headerContent}>
@@ -216,6 +248,9 @@ export default function PromotionsScreen({ navigation }) {
                             </Text>
                         </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <TouchableOpacity onPress={() => handleGenerateMagic(item)} style={{ padding: 10 }}>
+                                <MaterialCommunityIcons name="auto-fix" size={24} color="#a29bfe" />
+                            </TouchableOpacity>
                             <TouchableOpacity onPress={() => handleDeletePromo(item.id)} style={{ padding: 10 }}>
                                 <MaterialCommunityIcons name="trash-can-outline" size={24} color="#666" />
                             </TouchableOpacity>
@@ -335,7 +370,40 @@ export default function PromotionsScreen({ navigation }) {
                     </ScrollView>
                 </View>
             </Modal>
-        </SafeAreaView>
+
+            {/* AI MAGIC MODAL */}
+            <Modal visible={aiModalVisible} animationType="fade" transparent>
+                <View style={styles.aiModalOverlay}>
+                    <View style={styles.aiModalContent}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <Text style={styles.aiTitle}>✨ ASISTENTE DE MARKETING ✨</Text>
+                            <TouchableOpacity onPress={() => setAiModalVisible(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {aiLoading ? (
+                            <View style={{ padding: 40, alignItems: 'center' }}>
+                                <ActivityIndicator size="large" color="#a29bfe" />
+                                <Text style={{ color: '#a29bfe', marginTop: 20, fontStyle: 'italic' }}>
+                                    Creando mensajes persuasivos... 🧠
+                                </Text>
+                            </View>
+                        ) : (
+                            <>
+                                <ScrollView style={{ maxHeight: 400 }} contentContainerStyle={{ paddingBottom: 20 }}>
+                                    <Text style={styles.aiText}>{generatedCopy}</Text>
+                                </ScrollView>
+                                <TouchableOpacity style={styles.copyBtn} onPress={copyToClipboard}>
+                                    <MaterialCommunityIcons name="content-copy" size={20} color="black" />
+                                    <Text style={styles.copyBtnText}>COPIAR TEXTO</Text>
+                                </TouchableOpacity>
+                            </>
+                        )}
+                    </View>
+                </View>
+            </Modal>
+        </SafeAreaView >
     );
 }
 
@@ -382,8 +450,15 @@ const styles = StyleSheet.create({
     productChipText: { color: '#888', fontSize: 12, fontWeight: 'bold' },
     productChipTextSelected: { color: '#000' },
 
-    saveBtn: { backgroundColor: '#d4af37', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
     saveText: { color: 'black', fontWeight: '900', fontSize: 18, letterSpacing: 1 },
     cancelBtn: { marginTop: 20, marginBottom: 30, alignItems: 'center' },
-    cancelText: { color: '#666', fontSize: 16, fontWeight: 'bold' }
+    cancelText: { color: '#666', fontSize: 16, fontWeight: 'bold' },
+
+    // AI Modal Styles
+    aiModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
+    aiModalContent: { backgroundColor: '#1a1a1a', borderRadius: 20, padding: 25, borderWidth: 1, borderColor: '#a29bfe' },
+    aiTitle: { color: '#a29bfe', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
+    aiText: { color: '#e0e0e0', fontSize: 16, lineHeight: 24 },
+    copyBtn: { backgroundColor: '#a29bfe', padding: 15, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10 },
+    copyBtnText: { color: 'black', fontWeight: '900', fontSize: 16 }
 });

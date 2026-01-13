@@ -5,6 +5,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import { analyzeReceipt } from '../services/geminiService';
 
 const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Otro'];
 
@@ -18,6 +20,7 @@ export default function ExpensesScreen({ navigation }) {
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState('');
     const [category, setCategory] = useState('General');
+    const [scanning, setScanning] = useState(false);
 
     // Purchases (Supplier Orders) State
     const [orders, setOrders] = useState([]);
@@ -123,6 +126,52 @@ export default function ExpensesScreen({ navigation }) {
                 }
             ]
         );
+    };
+
+    const handleScanReceipt = async () => {
+        try {
+            const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+            if (permissionResult.granted === false) {
+                Alert.alert("Permiso Denegado", "Se requiere acceso a la cámara para escanear recibos.");
+                return;
+            }
+
+            const result = await ImagePicker.launchCameraAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                quality: 0.5,
+                base64: true,
+            });
+
+            if (!result.canceled) {
+                setScanning(true);
+                try {
+                    const analysis = await analyzeReceipt(result.assets[0].base64);
+
+                    if (analysis.total) setAmount(analysis.total.toString());
+                    if (analysis.vendor && analysis.items) {
+                        setDescription(`${analysis.items} (${analysis.vendor})`);
+                    } else if (analysis.vendor) {
+                        setDescription(`Compra en ${analysis.vendor}`);
+                    } else if (analysis.items) {
+                        setDescription(analysis.items);
+                    }
+
+                    if (analysis.date) {
+                        // Optional: Could set a date state if we had one for expenses
+                    }
+
+                    Alert.alert('✅ Escaneado', 'Datos extraídos correctamente. Verifica y guarda.');
+                } catch (error) {
+                    Alert.alert('Error IA', 'No se pudo analizar el recibo. Intenta sacar la foto más clara.');
+                } finally {
+                    setScanning(false);
+                }
+            }
+        } catch (error) {
+            console.log(error);
+            setScanning(false);
+        }
     };
 
     // --- PURCHASES (SUPPLIER ORDERS) LOGIC ---
@@ -375,7 +424,13 @@ export default function ExpensesScreen({ navigation }) {
             {viewMode === 'expenses' && (
                 <>
                     <View style={styles.formContainer}>
-                        <Text style={styles.sectionTitle}>Nuevo Gasto</Text>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                            <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Nuevo Gasto</Text>
+                            <TouchableOpacity onPress={handleScanReceipt} style={styles.scanButton}>
+                                {scanning ? <ActivityIndicator color="#000" size="small" /> : <MaterialCommunityIcons name="camera" size={20} color="#000" />}
+                                {!scanning && <Text style={styles.scanButtonText}>ESCANEAR</Text>}
+                            </TouchableOpacity>
+                        </View>
                         <TextInput
                             style={styles.input}
                             placeholder="Descripción (ej. Factura de Internet)"
@@ -591,5 +646,8 @@ const styles = StyleSheet.create({
     receiveBtn: { backgroundColor: '#333', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#2ecc71' },
     receiveBtnText: { color: '#2ecc71', fontWeight: '900', fontSize: 12, letterSpacing: 1 },
 
-    date: { color: '#666', fontSize: 12 }
+    date: { color: '#666', fontSize: 12 },
+
+    scanButton: { backgroundColor: '#d4af37', flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, alignItems: 'center', gap: 5 },
+    scanButtonText: { fontSize: 10, fontWeight: '900', color: '#000' }
 });
