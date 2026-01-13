@@ -29,6 +29,7 @@ export default function AdminScreen({ navigation }) {
     const [viewAllMonths, setViewAllMonths] = useState(false); // Toggle for General View
     const [tooltip, setTooltip] = useState({ visible: false, value: 0, x: 0, y: 0 });
     const [deviceData, setDeviceData] = useState([]);
+    const [profitSplit, setProfitSplit] = useState({ imperio: 70, vendedores: 30 });
 
     useEffect(() => {
         fetchData();
@@ -46,6 +47,12 @@ export default function AdminScreen({ navigation }) {
                 if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
                 if (trans) setTransportRate(parseFloat(trans.value).toString());
                 if (key) setGoogleKey(key.value);
+
+                const splitImp = settingsData.find(s => s.key === 'profit_split_imperio');
+                const splitVend = settingsData.find(s => s.key === 'profit_split_vendedores');
+                if (splitImp && splitVend) {
+                    setProfitSplit({ imperio: parseInt(splitImp.value), vendedores: parseInt(splitVend.value) });
+                }
             }
 
             // Calculate date range based on filter
@@ -499,6 +506,9 @@ export default function AdminScreen({ navigation }) {
                         <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={styles.expenseBtn}>
                             <MaterialCommunityIcons name="cash-minus" size={24} color="#d4af37" />
                         </TouchableOpacity>
+                        <TouchableOpacity onPress={() => navigation.navigate('Analytics')} style={styles.expenseBtn}>
+                            <MaterialCommunityIcons name="google-analytics" size={24} color="#d4af37" />
+                        </TouchableOpacity>
                     </View>
                 </View>
 
@@ -794,6 +804,73 @@ export default function AdminScreen({ navigation }) {
                     </TouchableOpacity>
                 </View>
 
+                {/* Profit Split & Monthly Closing */}
+                <View style={styles.settingsCard}>
+                    <Text style={styles.sectionTitle}>REPARTO DE GANANCIAS (CIERRE)</Text>
+                    <Text style={styles.settingsDesc}>
+                        Configura cómo se divide la Ganancia Neta (después de gastos y comisiones).
+                    </Text>
+
+                    <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.miniLabel}>IMPERIO %</Text>
+                            <TextInput
+                                style={[styles.input, { fontSize: 18 }]}
+                                value={profitSplit.imperio.toString()}
+                                onChangeText={(v) => setProfitSplit({ ...profitSplit, imperio: parseInt(v) || 0 })}
+                                keyboardType="numeric"
+                            />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.miniLabel}>VENDEDORES %</Text>
+                            <TextInput
+                                style={[styles.input, { fontSize: 18 }]}
+                                value={profitSplit.vendedores.toString()}
+                                onChangeText={(v) => setProfitSplit({ ...profitSplit, vendedores: parseInt(v) || 0 })}
+                                keyboardType="numeric"
+                            />
+                        </View>
+                    </View>
+
+                    <View style={styles.closingSummary}>
+                        <View style={styles.summaryRow}>
+                            <Text style={styles.summaryText}>Ganancia Neta:</Text>
+                            <Text style={styles.summaryValue}>${stats.netProfit.toFixed(0)}</Text>
+                        </View>
+                        <View style={styles.summaryRow}>
+                            <Text style={styles.summaryText}>Para el Imperio ({profitSplit.imperio}%):</Text>
+                            <Text style={[styles.summaryValue, { color: '#2ecc71' }]}>
+                                ${(stats.netProfit * (profitSplit.imperio / 100)).toFixed(0)}
+                            </Text>
+                        </View>
+                        <View style={styles.summaryRow}>
+                            <Text style={styles.summaryText}>Para Vendedores ({profitSplit.vendedores}%):</Text>
+                            <Text style={[styles.summaryValue, { color: '#3498db' }]}>
+                                ${(stats.netProfit * (profitSplit.vendedores / 100)).toFixed(0)}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <TouchableOpacity
+                        style={[styles.saveButton, { backgroundColor: '#25D366' }]}
+                        onPress={() => {
+                            const msg = `📊 *CIERRE MENSUAL - DB EMPIRE*\n\n` +
+                                `💰 Ventas Totales: $${stats.totalSales.toFixed(0)}\n` +
+                                `📉 Gastos: $${stats.totalExpenses.toFixed(0)}\n` +
+                                `🤝 Comisiones: $${stats.totalCommissions.toFixed(0)}\n` +
+                                `--------------------------\n` +
+                                `✨ *GANANCIA NETA: $${stats.netProfit.toFixed(0)}*\n\n` +
+                                `🏰 Imperio (${profitSplit.imperio}%): $${(stats.netProfit * (profitSplit.imperio / 100)).toFixed(0)}\n` +
+                                `👥 Vendedores (${profitSplit.vendedores}%): $${(stats.netProfit * (profitSplit.vendedores / 100)).toFixed(0)}\n\n` +
+                                `_Generado automáticamente por DB Empire_`;
+                            require('react-native').Linking.openURL(`whatsapp://send?text=${encodeURIComponent(msg)}`);
+                        }}
+                    >
+                        <MaterialCommunityIcons name="whatsapp" size={24} color="white" />
+                        <Text style={[styles.saveButtonText, { color: 'white' }]}>ENVIAR RESUMEN CIERRE</Text>
+                    </TouchableOpacity>
+                </View>
+
             </ScrollView>
         </SafeAreaView>
     );
@@ -841,5 +918,11 @@ const styles = StyleSheet.create({
     navArrow: { padding: 5 },
     monthLabel: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 1, minWidth: 150, textAlign: 'center' },
     generalToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#1e1e1e', padding: 10, borderRadius: 8, alignSelf: 'center', borderWidth: 1, borderColor: '#333' },
-    generalToggleText: { color: '#d4af37', fontWeight: 'bold' }
+    generalToggleText: { color: '#d4af37', fontWeight: 'bold' },
+
+    miniLabel: { color: '#666', fontSize: 10, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
+    closingSummary: { backgroundColor: '#000', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
+    summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+    summaryText: { color: '#888', fontSize: 12 },
+    summaryValue: { color: '#fff', fontSize: 14, fontWeight: 'bold' }
 });

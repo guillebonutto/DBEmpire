@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ScrollView, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
+import { CRMService } from '../services/crmService';
+import { GeminiService } from '../services/geminiService';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function ClientsScreen({ navigation }) {
     const [clients, setClients] = useState([]);
@@ -10,6 +13,8 @@ export default function ClientsScreen({ navigation }) {
     const [modalVisible, setModalVisible] = useState(false);
     const [newClient, setNewClient] = useState({ name: '', phone: '', notes: '' });
     const [searchQuery, setSearchQuery] = useState('');
+    const [inactiveClients, setInactiveClients] = useState([]);
+    const [generatingMsg, setGeneratingMsg] = useState(null); // ID of client being processed
 
     const fetchClients = async () => {
         setLoading(true);
@@ -40,11 +45,37 @@ export default function ClientsScreen({ navigation }) {
 
                 setClients(sortedClients);
                 setFilteredClients(sortedClients);
+
+                // CRM Insights: Get Inactive
+                const inactive = await CRMService.getInactiveClients(30);
+                setInactiveClients(inactive.slice(0, 5)); // Show top 5 inactive
             }
         } catch (err) {
             console.log('Error fetching clients:', err);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleRecoverClient = async (client) => {
+        setGeneratingMsg(client.id);
+        try {
+            const prompt = `Genera un mensaje de WhatsApp corto y profesional para recuperar a un cliente llamado ${client.name} que no ha comprado en 30 días. El tono debe ser amigable y ofrecer un 10% de descuento en su próxima compra. Solo devuelve el texto del mensaje.`;
+            const message = await GeminiService.generateMarketingCopy(prompt);
+
+            const url = `whatsapp://send?phone=${client.phone}&text=${encodeURIComponent(message)}`;
+            const supported = await Linking.canOpenURL(url);
+
+            if (supported) {
+                await Linking.openURL(url);
+            } else {
+                Alert.alert('Error', 'WhatsApp no está instalado o el número es inválido.');
+            }
+        } catch (err) {
+            console.log('Recovery error:', err);
+            Alert.alert('Error', 'No se pudo generar el mensaje con IA.');
+        } finally {
+            setGeneratingMsg(null);
         }
     };
 
@@ -100,6 +131,34 @@ export default function ClientsScreen({ navigation }) {
                     onChangeText={setSearchQuery}
                 />
             </View>
+
+            {/* AI Insights Section */}
+            {!searchQuery && inactiveClients.length > 0 && (
+                <View style={styles.insightsContainer}>
+                    <View style={styles.insightsHeader}>
+                        <MaterialCommunityIcons name="robot" size={18} color="#d4af37" />
+                        <Text style={styles.insightsTitle}>AI INSIGHTS: RECUPERACIÓN</Text>
+                    </View>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.insightsScroll}>
+                        {inactiveClients.map(client => (
+                            <View key={client.id} style={styles.insightCard}>
+                                <Text style={styles.insightName}>{client.name}</Text>
+                                <Text style={styles.insightReason}>Inactivo hace +30 días</Text>
+                                <TouchableOpacity
+                                    style={styles.recoverBtn}
+                                    onPress={() => handleRecoverClient(client)}
+                                    disabled={generatingMsg === client.id}
+                                >
+                                    <MaterialCommunityIcons name="whatsapp" size={14} color="#000" />
+                                    <Text style={styles.recoverBtnText}>
+                                        {generatingMsg === client.id ? '...' : 'RECUPERAR'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        ))}
+                    </ScrollView>
+                </View>
+            )}
 
             <FlatList
                 data={filteredClients}
@@ -202,4 +261,15 @@ const styles = StyleSheet.create({
     modalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
     saveText: { color: '#d4af37', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
     cancelText: { color: '#666', fontSize: 16, fontWeight: 'bold' },
+
+    // AI Insights
+    insightsContainer: { paddingVertical: 15, backgroundColor: 'rgba(212, 175, 55, 0.05)', borderBottomWidth: 1, borderBottomColor: '#222' },
+    insightsHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 10, gap: 8 },
+    insightsTitle: { color: '#d4af37', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+    insightsScroll: { paddingLeft: 20 },
+    insightCard: { backgroundColor: '#111', padding: 15, borderRadius: 12, marginRight: 15, width: 160, borderWidth: 1, borderColor: '#333' },
+    insightName: { color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
+    insightReason: { color: '#666', fontSize: 10, marginBottom: 10 },
+    recoverBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2ecc71', paddingVertical: 6, borderRadius: 6, gap: 5 },
+    recoverBtnText: { color: '#000', fontSize: 10, fontWeight: 'bold' }
 });

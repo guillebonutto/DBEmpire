@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
-import { generateMarketingCopy } from '../services/geminiService';
+import { GeminiService } from '../services/geminiService';
 
 export default function PromotionsScreen({ navigation }) {
     const [promos, setPromos] = useState([]);
@@ -178,7 +178,7 @@ export default function PromotionsScreen({ navigation }) {
 
         try {
             const productsInPromo = promo.promotion_products?.map(pp => pp.products) || [];
-            const result = await generateMarketingCopy(promo.title, promo.description, productsInPromo);
+            const result = await GeminiService.generateMarketingCopy(promo.title, promo.description, productsInPromo);
             setGeneratedCopy(result);
         } catch (error) {
             Alert.alert('Error IA', error.message);

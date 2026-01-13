@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator, Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -20,9 +20,11 @@ export default function HomeScreen({ navigation }) {
         budgetSales: 0,
         debtSupplier: 0,
         netProfit: 0,
-        lowStockCount: 0
+        lowStockCount: 0,
+        lowStockProducts: []
     });
     const [loading, setLoading] = useState(false);
+    const [aiModalVisible, setAiModalVisible] = useState(false);
 
     // Camera State
     const [permission, requestPermission] = useCameraPermissions();
@@ -81,13 +83,14 @@ export default function HomeScreen({ navigation }) {
             const { data: expenses } = await supabase.from('expenses').select('amount').gte('created_at', startOfDay);
             const totalExpenses = expenses ? expenses.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
             const { data: budgets } = await supabase.from('sales').select('total_amount').eq('status', 'budget');
-            const { data: lowStock } = await supabase.from('products').select('id').eq('active', true).lte('current_stock', 5);
+            const { data: lowStock } = await supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5);
 
             setStats({
                 todaySales,
                 budgetSales: budgets ? budgets.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
                 netProfit: grossProfit - commissions - totalExpenses,
-                lowStockCount: lowStock ? lowStock.length : 0
+                lowStockCount: lowStock ? lowStock.length : 0,
+                lowStockProducts: lowStock || []
             });
         } catch (error) {
             console.log('Stats error:', error);
@@ -141,6 +144,72 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
     );
 
+    const renderAIModal = () => (
+        <Modal
+            visible={aiModalVisible}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setAiModalVisible(false)}
+        >
+            <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                    <View style={styles.modalHeader}>
+                        <MaterialCommunityIcons name="robot-happy" size={32} color="#d4af37" />
+                        <Text style={styles.modalTitle}>EMPIRE AI COACH</Text>
+                        <TouchableOpacity onPress={() => setAiModalVisible(false)}>
+                            <MaterialCommunityIcons name="close" size={24} color="#666" />
+                        </TouchableOpacity>
+                    </View>
+
+                    <ScrollView style={styles.modalBody}>
+                        <View style={styles.aiAdviceBox}>
+                            <Text style={styles.aiAdviceText}>{getAICounsel()}</Text>
+                        </View>
+
+                        {stats.lowStockProducts.length > 0 && (
+                            <View style={styles.restockSection}>
+                                <Text style={styles.sectionSub}>PRODUCTOS A REPONER:</Text>
+                                {stats.lowStockProducts.map((item, index) => (
+                                    <View key={item.id} style={styles.restockItem}>
+                                        <View style={styles.restockInfo}>
+                                            <Text style={styles.restockName}>{item.name}</Text>
+                                            <Text style={styles.restockStock}>Stock actual: {item.current_stock}</Text>
+                                        </View>
+                                        <TouchableOpacity
+                                            style={styles.orderBtn}
+                                            onPress={() => {
+                                                setAiModalVisible(false);
+                                                navigation.navigate('NewSupplierOrder', { preselectedProduct: item });
+                                            }}
+                                        >
+                                            <Text style={styles.orderBtnText}>PEDIR</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                ))}
+                            </View>
+                        )}
+
+                        {stats.budgetSales > 0 && (
+                            <View style={styles.opportunityBox}>
+                                <MaterialCommunityIcons name="lightbulb-on" size={20} color="#f1c40f" />
+                                <Text style={styles.opportunityText}>
+                                    Tienes ${stats.budgetSales} en presupuestos. ¡Es hora de cerrar esas ventas!
+                                </Text>
+                            </View>
+                        )}
+                    </ScrollView>
+
+                    <TouchableOpacity
+                        style={styles.closeModalBtn}
+                        onPress={() => setAiModalVisible(false)}
+                    >
+                        <Text style={styles.closeModalBtnText}>ENTENDIDO</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
+    );
+
     if (isScanning) {
         return (
             <View style={styles.scannerFull}>
@@ -156,6 +225,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
             <LinearGradient colors={['#000', '#121212']} style={styles.background} />
+            {renderAIModal()}
 
             <SafeAreaView style={styles.safe}>
                 <View style={styles.header}>
@@ -193,7 +263,7 @@ export default function HomeScreen({ navigation }) {
                     {/* Minimalist Grid of Actions */}
                     <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
                     <View style={styles.actionGrid}>
-                        <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => Alert.alert('Empire AI Coach', getAICounsel())} />
+                        <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />
                         <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
                         <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
                         <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
@@ -249,5 +319,29 @@ const styles = StyleSheet.create({
     scannerLabel: { color: '#000', fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 10, letterSpacing: 1 },
 
     scannerFull: { flex: 1, backgroundColor: '#000' },
-    closeBtn: { position: 'absolute', top: 50, right: 30 }
+    closeBtn: { position: 'absolute', top: 50, right: 30 },
+
+    // Modal Styles
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
+    modalContent: { backgroundColor: '#111', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '80%', borderTopWidth: 1, borderTopColor: '#333' },
+    modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 25 },
+    modalTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+    modalBody: { marginBottom: 20 },
+    aiAdviceBox: { backgroundColor: '#1a1a1a', padding: 20, borderRadius: 15, marginBottom: 25, borderWidth: 1, borderColor: '#333' },
+    aiAdviceText: { color: '#fff', fontSize: 16, lineHeight: 24, fontWeight: '600' },
+
+    restockSection: { marginBottom: 20 },
+    sectionSub: { color: '#666', fontSize: 12, fontWeight: '900', marginBottom: 15, letterSpacing: 1 },
+    restockItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#222' },
+    restockInfo: { flex: 1 },
+    restockName: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+    restockStock: { color: '#e74c3c', fontSize: 12, marginTop: 2 },
+    orderBtn: { backgroundColor: '#d4af37', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
+    orderBtnText: { color: '#000', fontSize: 12, fontWeight: '900' },
+
+    opportunityBox: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f1c40f15', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#f1c40f30' },
+    opportunityText: { color: '#f1c40f', fontSize: 13, fontWeight: '600', flex: 1 },
+
+    closeModalBtn: { backgroundColor: '#333', padding: 18, borderRadius: 15, alignItems: 'center' },
+    closeModalBtnText: { color: '#fff', fontWeight: '900', fontSize: 16, letterSpacing: 1 }
 });

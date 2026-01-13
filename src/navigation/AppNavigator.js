@@ -24,6 +24,8 @@ import DebtsScreen from '../screens/DebtsScreen';
 import CatalogScreen from '../screens/CatalogScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
 import BulkAdjustmentScreen from '../screens/BulkAdjustmentScreen';
+import AnalyticsScreen from '../screens/AnalyticsScreen';
+import IncidentsScreen from '../screens/IncidentsScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -160,6 +162,16 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="BulkAdjustment"
                 component={BulkAdjustmentScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Analytics"
+                component={AnalyticsScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Incidents"
+                component={IncidentsScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

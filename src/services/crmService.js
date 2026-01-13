@@ -65,5 +65,43 @@ export const CRMService = {
             console.log('CRM Match error:', err);
             return [];
         }
+    },
+
+    /**
+     * Finds clients who haven't made a purchase in the last 30 days.
+     */
+    getInactiveClients: async (days = 30) => {
+        try {
+            const dateThreshold = new Date();
+            dateThreshold.setDate(dateThreshold.getDate() - days);
+
+            // 1. Get all clients
+            const { data: clients, error: clientError } = await supabase
+                .from('clients')
+                .select('id, name, phone, gender');
+
+            if (clientError) throw clientError;
+
+            // 2. Get recent sales
+            const { data: recentSales, error: salesError } = await supabase
+                .from('sales')
+                .select('client_id')
+                .gt('created_at', dateThreshold.toISOString());
+
+            if (salesError) throw salesError;
+
+            const activeClientIds = new Set(recentSales.map(s => s.client_id));
+
+            // 3. Filter inactive
+            const inactive = clients.filter(c =>
+                !activeClientIds.has(c.id) &&
+                c.id !== '00000000-0000-0000-0000-000000000000'
+            );
+
+            return inactive;
+        } catch (err) {
+            console.log('CRM Inactive error:', err);
+            return [];
+        }
     }
 };

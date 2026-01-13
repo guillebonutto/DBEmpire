@@ -13,6 +13,15 @@ import { NotificationService } from '../services/notificationService';
 import { SyncService } from '../services/syncService';
 import NetInfo from '@react-native-community/netinfo';
 
+// New Components
+import CartItem from '../components/CartItem';
+import ClientSelector from '../components/ClientSelector';
+import PromotionSelector from '../components/PromotionSelector';
+import CostBreakdown from '../components/CostBreakdown';
+import SaleTypeSelector from '../components/SaleTypeSelector';
+import ProductModal from '../components/ProductModal';
+import ClientModal from '../components/ClientModal';
+
 export default function NewSaleScreen({ navigation, route }) {
     const [cart, setCart] = useState([]);
     const [products, setProducts] = useState([]);
@@ -658,84 +667,22 @@ export default function NewSaleScreen({ navigation, route }) {
             {renderHeader()}
 
             {/* Client Search / Selection Area */}
-            <View style={styles.searchContainer}>
-                {!selectedClient ? (
-                    <View>
-                        <View style={[styles.searchBar, clientError && { borderColor: '#ff4d4d', borderWidth: 1 }]}>
-                            <MaterialCommunityIcons name="magnify" size={24} color="#666" />
-                            <TextInput
-                                style={styles.searchInput}
-                                placeholder="Buscar o Crear Cliente..."
-                                placeholderTextColor="#666"
-                                value={searchQuery}
-                                onChangeText={(text) => {
-                                    setSearchQuery(text);
-                                    if (clientError) setClientError(false);
-                                }}
-                            />
-                            {searchQuery.length > 0 && (
-                                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                                    <MaterialCommunityIcons name="close" size={20} color="#666" />
-                                </TouchableOpacity>
-                            )}
-                        </View>
-                        {clientError && (
-                            <Text style={{ color: '#ff4d4d', fontSize: 12, marginTop: 5, marginLeft: 5 }}>
-                                Por favor busque o seleccione cliente antes de continuar
-                            </Text>
-                        )}
-
-                        {/* Search Results / Create Option */}
-                        {searchQuery.length > 0 && (
-                            <View style={styles.searchResults}>
-                                {/* Create New Option */}
-                                {filteredClients.length === 0 && (
-                                    <TouchableOpacity
-                                        style={styles.createOption}
-                                        onPress={() => createClientInline(searchQuery)}
-                                    >
-                                        <View style={styles.createIcon}>
-                                            {creatingClient ? <ActivityIndicator size="small" color="#000" /> : <MaterialCommunityIcons name="plus" size={20} color="#000" />}
-                                        </View>
-                                        <Text style={styles.createText}>Crear "{searchQuery}"</Text>
-                                    </TouchableOpacity>
-                                )}
-
-                                {/* Matches */}
-                                {filteredClients.map(client => (
-                                    <TouchableOpacity
-                                        key={client.id}
-                                        style={styles.searchResultItem}
-                                        onPress={() => {
-                                            setSelectedClient(client);
-                                            setSearchQuery('');
-                                            setClientError(false);
-                                        }}
-                                    >
-                                        <MaterialCommunityIcons name="account" size={20} color="#d4af37" />
-                                        <Text style={styles.resultText}>{client.name}</Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        )}
-                    </View>
-                ) : (
-                    <View style={styles.selectedClientRow}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <View style={styles.selectedAvatar}>
-                                <Text style={{ color: '#000', fontWeight: 'bold' }}>{selectedClient.name.charAt(0)}</Text>
-                            </View>
-                            <View>
-                                <Text style={styles.selectedLabel}>CLIENTE VINCULADO</Text>
-                                <Text style={styles.selectedName}>{selectedClient.name}</Text>
-                            </View>
-                        </View>
-                        <TouchableOpacity onPress={() => setSelectedClient(null)} style={styles.removeClientBtn}>
-                            <MaterialCommunityIcons name="close" size={20} color="#fff" />
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
+            <ClientSelector
+                selectedClient={selectedClient}
+                clientError={clientError}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                setClientError={setClientError}
+                filteredClients={filteredClients}
+                onSelectClient={(client) => {
+                    setSelectedClient(client);
+                    setSearchQuery('');
+                    setClientError(false);
+                }}
+                onCreateClient={createClientInline}
+                onRemoveClient={() => setSelectedClient(null)}
+                creatingClient={creatingClient}
+            />
 
             <FlatList
                 data={cart}
@@ -743,16 +690,7 @@ export default function NewSaleScreen({ navigation, route }) {
                 style={{ flex: 1 }}
                 contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
                 renderItem={({ item }) => (
-                    <View style={styles.cartItem}>
-                        <View style={styles.itemInfo}>
-                            <Text style={styles.itemName}>{item.name}</Text>
-                            <Text style={styles.itemMeta}>Cant: {item.qty} x ${item.sale_price}</Text>
-                        </View>
-                        <Text style={styles.itemTotal}>${(item.sale_price * item.qty).toFixed(2)}</Text>
-                        <TouchableOpacity onPress={() => removeFromCart(item.id)} style={styles.removeBtn}>
-                            <MaterialCommunityIcons name="delete-outline" size={24} color="#e74c3c" />
-                        </TouchableOpacity>
-                    </View>
+                    <CartItem item={item} onRemove={removeFromCart} />
                 )}
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
@@ -764,127 +702,28 @@ export default function NewSaleScreen({ navigation, route }) {
             />
 
             {/* Promotion Selector */}
-            {promos.length > 0 && cart.length > 0 && (
-                <View style={{ backgroundColor: '#111', padding: 15, borderTopWidth: 1, borderTopColor: '#333' }}>
-                    <Text style={{ color: '#888', fontSize: 12, fontWeight: 'bold', marginBottom: 10, letterSpacing: 1 }}>APLICAR PROMOCIÓN / OFERTA:</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        <TouchableOpacity
-                            style={[
-                                styles.promoChip,
-                                selectedPromo === null && styles.promoChipSelected
-                            ]}
-                            onPress={() => setSelectedPromo(null)}
-                        >
-                            <Text style={[styles.promoChipText, selectedPromo === null && styles.promoChipTextSelected]}>NINGUNA</Text>
-                        </TouchableOpacity>
-                        {promos.map(promo => (
-                            <TouchableOpacity
-                                key={promo.id}
-                                style={[
-                                    styles.promoChip,
-                                    selectedPromo?.id === promo.id && styles.promoChipSelected
-                                ]}
-                                onPress={() => setSelectedPromo(promo)}
-                            >
-                                <MaterialCommunityIcons
-                                    name="sale"
-                                    size={14}
-                                    color={selectedPromo?.id === promo.id ? "black" : "#d4af37"}
-                                    style={{ marginRight: 5 }}
-                                />
-                                <Text style={[
-                                    styles.promoChipText,
-                                    selectedPromo?.id === promo.id && styles.promoChipTextSelected
-                                ]}>
-                                    {promo.title.toUpperCase()}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                </View>
-            )}
+            <PromotionSelector
+                promos={promos}
+                selectedPromo={selectedPromo}
+                onSelectPromo={setSelectedPromo}
+            />
 
             {/* Cost Breakdown */}
             {cart.length > 0 && (
-                <View style={{ backgroundColor: '#1a1a1a', padding: 15, borderTopWidth: 1, borderTopColor: '#333' }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <Text style={{ color: '#888', fontSize: 14 }}>Subtotal Productos:</Text>
-                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>${subtotal.toFixed(2)}</Text>
-                    </View>
-
-                    {selectedPromo ? (
-                        <View style={{ marginBottom: 8 }}>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                                <Text style={{ color: '#2ecc71', fontSize: 14, fontWeight: 'bold' }}>Promo: {selectedPromo.title}</Text>
-                                <Text style={{ color: '#2ecc71', fontSize: 14, fontWeight: 'bold' }}>-${discount.toFixed(2)}</Text>
-                            </View>
-                            {promoDetail ? <Text style={{ color: '#2ecc71', fontSize: 12, fontStyle: 'italic' }}>({promoDetail})</Text> : null}
-                        </View>
-                    ) : null}
-
-                    {/* Transport Toggle */}
-                    <TouchableOpacity
-                        style={{
-                            flexDirection: 'row',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            marginBottom: 8,
-                            padding: 8,
-                            backgroundColor: includeTransport ? '#1e2a1e' : 'transparent',
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderColor: includeTransport ? '#2ecc71' : '#333'
-                        }}
-                        onPress={() => setIncludeTransport(!includeTransport)}
-                    >
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <MaterialCommunityIcons
-                                name={includeTransport ? "checkbox-marked" : "checkbox-blank-outline"}
-                                size={20}
-                                color={includeTransport ? '#2ecc71' : '#666'}
-                                style={{ marginRight: 8 }}
-                            />
-                            <Text style={{ color: includeTransport ? '#2ecc71' : '#888', fontSize: 14 }}>Incluir Transporte:</Text>
-                        </View>
-                        <Text style={{ color: includeTransport ? '#2ecc71' : '#666', fontSize: 14, fontWeight: 'bold' }}>
-                            ${transportCost.toFixed(2)}
-                        </Text>
-                    </TouchableOpacity>
-
-                    <View style={{ height: 1, backgroundColor: '#333', marginVertical: 8 }} />
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 1 }}>TOTAL:</Text>
-                        <Text style={{ color: '#d4af37', fontSize: 18, fontWeight: '900' }}>${total.toFixed(2)}</Text>
-                    </View>
-                </View>
+                <CostBreakdown
+                    subtotal={subtotal}
+                    total={total}
+                    discount={discount}
+                    selectedPromo={selectedPromo}
+                    promoDetail={promoDetail}
+                    includeTransport={includeTransport}
+                    setIncludeTransport={setIncludeTransport}
+                    transportCost={transportCost}
+                />
             )}
 
             {/* Transaction Type Selector */}
-            <View style={styles.typeSelector}>
-                <TouchableOpacity
-                    style={[styles.typeBtn, saleType === 'completed' && styles.typeBtnActive]}
-                    onPress={() => setSaleType('completed')}
-                >
-                    <MaterialCommunityIcons name="currency-usd" size={18} color={saleType === 'completed' ? '#000' : '#888'} />
-                    <Text style={[styles.typeText, saleType === 'completed' && styles.typeTextActive]}>VENTA</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.typeBtn, saleType === 'pending' && styles.typeBtnActive]}
-                    onPress={() => setSaleType('pending')}
-                >
-                    <MaterialCommunityIcons name="clock-outline" size={18} color={saleType === 'pending' ? '#000' : '#888'} />
-                    <Text style={[styles.typeText, saleType === 'pending' && styles.typeTextActive]}>DEUDA</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.typeBtn, saleType === 'budget' && styles.typeBtnActive]}
-                    onPress={() => setSaleType('budget')}
-                >
-                    <MaterialCommunityIcons name="file-document-outline" size={18} color={saleType === 'budget' ? '#000' : '#888'} />
-                    <Text style={[styles.typeText, saleType === 'budget' && styles.typeTextActive]}>PRESUP.</Text>
-                </TouchableOpacity>
-            </View>
+            <SaleTypeSelector saleType={saleType} setSaleType={setSaleType} />
 
             <View style={styles.footer}>
                 <TouchableOpacity
@@ -927,191 +766,38 @@ export default function NewSaleScreen({ navigation, route }) {
             </View>
 
             {/* PRODUCT MODAL */}
-            <Modal visible={productModalVisible} animationType="slide" presentationStyle="pageSheet">
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Seleccionar Producto</Text>
-                    <FlatList
-                        data={products}
-                        keyExtractor={item => item.id}
-                        renderItem={({ item }) => {
-                            // Calculate dynamic availability
-                            const inCartItem = cart.find(c => c.id === item.id);
-                            const inCartQty = inCartItem ? inCartItem.qty : 0;
-                            const available = (item.current_stock || 0) - inCartQty;
-
-                            const isExpanded = expandedProductId === item.id;
-
-                            return (
-                                <View style={[styles.productRow, isExpanded && { borderColor: '#d4af37', borderWidth: 2, flexDirection: 'column', alignItems: 'stretch' }]}>
-                                    {!isExpanded ? (
-                                        <TouchableOpacity
-                                            style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flex: 1 }}
-                                            onPress={() => initiateProductSelection(item)}
-                                        >
-                                            <View>
-                                                <Text style={styles.rowTitle}>{item.name}</Text>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                    <Text style={[styles.rowSubtitle, { color: available < 5 ? '#e74c3c' : '#888' }]}>
-                                                        Disp: {available}
-                                                    </Text>
-                                                </View>
-                                            </View>
-                                            <Text style={styles.rowPrice}>${item.sale_price}</Text>
-                                        </TouchableOpacity>
-                                    ) : (
-                                        <View>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
-                                                <Text style={[styles.rowTitle, { fontSize: 18 }]}>{item.name}</Text>
-                                                <Text style={[styles.rowPrice, { fontSize: 18 }]}>${item.sale_price}</Text>
-                                            </View>
-
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#111', borderRadius: 8, padding: 10 }}>
-                                                <Text style={{ color: '#888' }}>Cantidad:</Text>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
-                                                    <TouchableOpacity
-                                                        onPress={() => adjustTempQty(-1, available)}
-                                                        style={styles.qtyBtn}
-                                                    >
-                                                        <MaterialCommunityIcons name="minus" size={24} color="#fff" />
-                                                    </TouchableOpacity>
-
-                                                    <Text style={{ color: '#fff', fontSize: 24, fontWeight: 'bold', minWidth: 40, textAlign: 'center' }}>
-                                                        {tempQty}
-                                                    </Text>
-
-                                                    <TouchableOpacity
-                                                        onPress={() => adjustTempQty(1, available)}
-                                                        style={[styles.qtyBtn, tempQty >= available && { opacity: 0.3 }]}
-                                                        disabled={tempQty >= available}
-                                                    >
-                                                        <MaterialCommunityIcons name="plus" size={24} color="#fff" />
-                                                    </TouchableOpacity>
-                                                </View>
-                                            </View>
-                                            <Text style={{ color: '#888', textAlign: 'right', marginTop: 5, fontSize: 12 }}>
-                                                Disponible: {available}
-                                            </Text>
-
-                                            <View style={{ flexDirection: 'row', marginTop: 15, gap: 10 }}>
-                                                <TouchableOpacity
-                                                    style={[styles.smallBtn, { flex: 1, backgroundColor: '#333' }]}
-                                                    onPress={() => setExpandedProductId(null)}
-                                                >
-                                                    <Text style={{ color: '#fff' }}>Cancelar</Text>
-                                                </TouchableOpacity>
-                                                <TouchableOpacity
-                                                    style={[styles.smallBtn, { flex: 2, backgroundColor: '#d4af37' }]}
-                                                    onPress={() => confirmAddToCart(item)}
-                                                >
-                                                    <Text style={{ color: '#000', fontWeight: 'bold' }}>AGREGAR (+{tempQty})</Text>
-                                                </TouchableOpacity>
-                                            </View>
-                                        </View>
-                                    )}
-                                </View>
-                            );
-                        }}
-                    />
-                    <TouchableOpacity style={styles.closeBtn} onPress={() => setProductModalVisible(false)}>
-                        <Text style={styles.closeText}>Terminar Selección</Text>
-                    </TouchableOpacity>
-                </View>
-            </Modal>
+            <ProductModal
+                visible={productModalVisible}
+                onClose={() => setProductModalVisible(false)}
+                products={products}
+                cart={cart}
+                expandedProductId={expandedProductId}
+                setExpandedProductId={setExpandedProductId}
+                tempQty={tempQty}
+                adjustTempQty={adjustTempQty}
+                initiateProductSelection={initiateProductSelection}
+                confirmAddToCart={confirmAddToCart}
+            />
 
             {/* CLIENT SELECTION MODAL */}
-            <Modal visible={clientModalVisible} animationType="slide" presentationStyle="pageSheet">
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Seleccionar Cliente</Text>
-
-                    {/* NEW CLIENT FORM OR BUTTON */}
-                    {showNewClientForm ? (
-                        <View style={styles.newClientForm}>
-                            <Text style={styles.sectionTitle}>Nuevo Cliente</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Nombre completo"
-                                placeholderTextColor="#666"
-                                value={newClientName}
-                                onChangeText={setNewClientName}
-                            />
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Teléfono"
-                                placeholderTextColor="#666"
-                                value={newClientPhone}
-                                onChangeText={setNewClientPhone}
-                                keyboardType="phone-pad"
-                            />
-                            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-                                <TouchableOpacity
-                                    style={[styles.smallBtn, { backgroundColor: '#333' }]}
-                                    onPress={() => setShowNewClientForm(false)}
-                                >
-                                    <Text style={{ color: '#fff' }}>Cancelar</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.smallBtn, { backgroundColor: '#d4af37', flex: 1 }]}
-                                    onPress={handleCreateClient}
-                                    disabled={creatingClient}
-                                >
-                                    {creatingClient ? <ActivityIndicator color="#000" /> : <Text style={{ color: '#000', fontWeight: 'bold' }}>Guardar y Usar</Text>}
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    ) : (
-                        <TouchableOpacity
-                            style={styles.newClientBtn}
-                            onPress={() => setShowNewClientForm(true)}
-                        >
-                            <MaterialCommunityIcons name="account-plus" size={24} color="#000" />
-                            <Text style={styles.newClientText}>CREAR NUEVO CLIENTE</Text>
-                        </TouchableOpacity>
-                    )}
-
-                    <View style={styles.divider} />
-
-                    <Text style={[styles.sectionTitle, { marginTop: 20 }]}>O selecciona uno existente:</Text>
-
-                    {/* Anonymous Option */}
-                    <TouchableOpacity style={styles.productRow} onPress={() => {
-                        setClientModalVisible(false);
-                        setTimeout(() => processCheckout(null), 500);
-                    }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <View style={[styles.avatar, { backgroundColor: '#333' }]}>
-                                <MaterialCommunityIcons name="incognito" size={24} color="#888" />
-                            </View>
-                            <Text style={styles.rowTitle}>Cliente Anónimo / Mostrador</Text>
-                        </View>
-                        <MaterialCommunityIcons name="chevron-right" size={24} color="#666" />
-                    </TouchableOpacity>
-
-                    <FlatList
-                        data={clients}
-                        keyExtractor={item => item.id}
-                        contentContainerStyle={{ paddingBottom: 50 }}
-                        renderItem={({ item }) => (
-                            <TouchableOpacity style={styles.productRow} onPress={() => {
-                                setClientModalVisible(false);
-                                setTimeout(() => processCheckout(item), 500);
-                            }}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                    <View style={styles.avatar}>
-                                        <Text style={{ color: 'black', fontWeight: 'bold' }}>{item.name.charAt(0)}</Text>
-                                    </View>
-                                    <Text style={styles.rowTitle}>{item.name}</Text>
-                                </View>
-                                <MaterialCommunityIcons name="chevron-right" size={24} color="#d4af37" />
-                            </TouchableOpacity>
-                        )}
-                        ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 20, color: '#666' }}>No hay otros clientes.</Text>}
-                    />
-
-                    <TouchableOpacity style={styles.closeBtn} onPress={() => setClientModalVisible(false)}>
-                        <Text style={styles.closeText}>Cancelar Venta</Text>
-                    </TouchableOpacity>
-                </View>
-            </Modal>
+            <ClientModal
+                visible={clientModalVisible}
+                onClose={() => setClientModalVisible(false)}
+                clients={clients}
+                onSelectClient={(client) => {
+                    setClientModalVisible(false);
+                    setTimeout(() => processCheckout(client), 500);
+                }}
+                showNewClientForm={showNewClientForm}
+                setShowNewClientForm={setShowNewClientForm}
+                newClientName={newClientName}
+                setNewClientName={setNewClientName}
+                newClientPhone={newClientPhone}
+                setNewClientPhone={setNewClientPhone}
+                handleCreateClient={handleCreateClient}
+                creatingClient={creatingClient}
+                processCheckout={processCheckout}
+            />
 
             {/* BARCODE SCANNER MODAL */}
             <Modal visible={isScanning} animationType="slide">
@@ -1146,13 +832,6 @@ const styles = StyleSheet.create({
     totalAmount: { color: '#d4af37', fontSize: 48, fontWeight: '900' },
     clientLabel: { color: '#fff', marginTop: 5, fontWeight: 'bold', fontSize: 14, letterSpacing: 1 },
 
-    cartItem: { backgroundColor: '#1e1e1e', padding: 15, borderRadius: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-    itemInfo: { flex: 1 },
-    itemName: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
-    itemMeta: { color: '#888', fontSize: 12, marginTop: 4 },
-    itemTotal: { fontSize: 18, fontWeight: 'bold', color: '#fff', marginHorizontal: 15 },
-    removeBtn: { padding: 5 },
-
     emptyContainer: { alignItems: 'center', marginTop: 60, opacity: 0.7 },
     emptyText: { fontSize: 18, fontWeight: '900', marginTop: 10, color: '#666' },
     emptySubtext: { fontSize: 14, color: '#444' },
@@ -1162,240 +841,5 @@ const styles = StyleSheet.create({
     addProductText: { marginLeft: 5, color: '#000', fontWeight: '900', letterSpacing: 0.5 },
     checkoutBtn: { flex: 2, backgroundColor: '#d4af37', borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.3, elevation: 10 },
     disabled: { backgroundColor: '#333' },
-    checkoutText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
-
-    // Modals
-    modalContent: { flex: 1, backgroundColor: '#121212', padding: 20, paddingTop: 40, paddingBottom: 50 },
-    modalTitle: { fontSize: 22, fontWeight: '900', marginBottom: 20, color: '#d4af37', textAlign: 'center', letterSpacing: 1 },
-    productRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1e1e1e', padding: 20, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
-    rowTitle: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
-    rowSubtitle: { color: '#888', marginTop: 4, fontSize: 12 },
-    rowPrice: { fontSize: 18, fontWeight: 'bold', color: '#d4af37' },
-    avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-    closeBtn: { marginTop: 20, padding: 15, backgroundColor: '#222', borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-    closeText: { color: '#888', fontWeight: 'bold' },
-
-    // New Client Styles
-    newClientBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#d4af37',
-        padding: 15,
-        borderRadius: 12,
-        marginBottom: 20
-    },
-    newClientText: { color: '#000', fontWeight: '900', marginLeft: 10, fontSize: 14 },
-    divider: { height: 1, backgroundColor: '#333', marginVertical: 10 },
-    sectionTitle: { color: '#666', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 15 },
-
-    newClientForm: {
-        backgroundColor: '#1e1e1e',
-        padding: 15,
-        borderRadius: 12,
-        marginBottom: 20,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    input: {
-        backgroundColor: '#111',
-        color: '#fff',
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    smallBtn: {
-        padding: 10,
-        borderRadius: 8,
-        alignItems: 'center',
-        justifyContent: 'center'
-    },
-    // New Action Row & Client Button
-    actionRow: { padding: 15, paddingBottom: 0 },
-    clientButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#1e1e1e',
-        padding: 15,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#d4af37',
-        alignSelf: 'stretch'
-    },
-    clientSelected: { backgroundColor: '#d4af37' },
-    clientButtonText: { color: '#d4af37', fontWeight: '900', marginLeft: 10, fontSize: 14, textTransform: 'uppercase', letterSpacing: 1 },
-    clientSelectedText: { color: '#000' },
-
-    // Qty Selector
-    qtyBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#333',
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: '#555'
-    },
-    // Search & Selection Styles
-    searchContainer: {
-        padding: 15,
-        paddingBottom: 5,
-        zIndex: 10
-    },
-    searchBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#1e1e1e',
-        borderRadius: 12,
-        paddingHorizontal: 15,
-        height: 50,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    searchInput: {
-        flex: 1,
-        color: '#fff',
-        marginLeft: 10,
-        fontSize: 16
-    },
-    searchResults: {
-        backgroundColor: '#1e1e1e',
-        borderRadius: 12,
-        marginTop: 5,
-        borderWidth: 1,
-        borderColor: '#333',
-        overflow: 'hidden'
-    },
-    createOption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 15,
-        backgroundColor: '#d4af37' // Highlight for create
-    },
-    createIcon: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
-        backgroundColor: 'rgba(255,255,255,0.3)',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 10
-    },
-    createText: {
-        color: '#000',
-        fontWeight: 'bold',
-        fontSize: 16
-    },
-    searchResultItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 15,
-        borderBottomWidth: 1,
-        borderBottomColor: '#333'
-    },
-    resultText: {
-        color: '#fff',
-        marginLeft: 10,
-        fontSize: 16
-    },
-
-    // Selected Client Row
-    selectedClientRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: '#1e1e1e',
-        borderRadius: 12,
-        padding: 10,
-        paddingHorizontal: 15,
-        borderWidth: 1,
-        borderColor: '#d4af37'
-    },
-    selectedAvatar: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#d4af37',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 15
-    },
-    selectedLabel: {
-        color: '#d4af37',
-        fontSize: 10,
-        fontWeight: '900',
-        letterSpacing: 1
-    },
-    selectedName: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 16
-    },
-    removeClientBtn: {
-        padding: 5,
-        backgroundColor: '#333',
-        borderRadius: 20
-    },
-
-    // Transaction Type Selector Styles
-    typeSelector: {
-        flexDirection: 'row',
-        paddingHorizontal: 20,
-        paddingBottom: 15,
-        gap: 10,
-        backgroundColor: '#1a1a1a'
-    },
-    typeBtn: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#222',
-        paddingVertical: 10,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#333',
-        gap: 6
-    },
-    typeBtnActive: {
-        backgroundColor: '#d4af37',
-        borderColor: '#d4af37'
-    },
-    typeText: {
-        color: '#888',
-        fontSize: 10,
-        fontWeight: '900'
-    },
-    typeTextActive: {
-        color: '#000'
-    },
-    // Promo Chips
-    promoChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#1a1a1a',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 20,
-        marginRight: 8,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    promoChipSelected: {
-        backgroundColor: '#d4af37',
-        borderColor: '#d4af37'
-    },
-    promoChipText: {
-        color: '#888',
-        fontSize: 10,
-        fontWeight: '900',
-        letterSpacing: 1
-    },
-    promoChipTextSelected: {
-        color: '#000'
-    }
+    checkoutText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 }
 });

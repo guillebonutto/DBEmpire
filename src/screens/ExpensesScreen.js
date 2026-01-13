@@ -6,7 +6,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { analyzeReceipt } from '../services/geminiService';
+import { GeminiService } from '../services/geminiService';
 
 const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Otro'];
 
@@ -146,7 +146,7 @@ export default function ExpensesScreen({ navigation }) {
             if (!result.canceled) {
                 setScanning(true);
                 try {
-                    const analysis = await analyzeReceipt(result.assets[0].base64);
+                    const analysis = await GeminiService.analyzeReceipt(result.assets[0].base64);
 
                     if (analysis.total) setAmount(analysis.total.toString());
                     if (analysis.vendor && analysis.items) {

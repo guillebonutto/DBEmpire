@@ -64,34 +64,36 @@ const handleGeminiRequest = async (prompt, imageBase64 = null) => {
     }
 };
 
-export const generateMarketingCopy = async (promoTitle, promoDescription, products = []) => {
-    const productNames = products.map(p => p.name).join(', ');
-    const prompt = `Eres un experto en marketing digital para WhatsApp. Escribe 3 opciones de mensajes promocionales cortos, persuasivos y con emojis, para esta oferta:
-    - Título: ${promoTitle}
-    - Descripción: ${promoDescription}
-    - Productos: ${productNames}
-    
-    Formato:
-    OPCIÓN 1: [Texto]
-    OPCIÓN 2: [Texto]
-    OPCIÓN 3: [Texto]`;
+export const GeminiService = {
+    generateMarketingCopy: async (promoTitle, promoDescription, products = []) => {
+        const productNames = products.map(p => p.name).join(', ');
+        const prompt = `Eres un experto en marketing digital para WhatsApp. Escribe 3 opciones de mensajes promocionales cortos, persuasivos y con emojis, para esta oferta:
+        - Título: ${promoTitle}
+        - Descripción: ${promoDescription}
+        - Productos: ${productNames}
+        
+        Formato:
+        OPCIÓN 1: [Texto]
+        OPCIÓN 2: [Texto]
+        OPCIÓN 3: [Texto]`;
 
-    return handleGeminiRequest(prompt);
-};
+        return handleGeminiRequest(prompt);
+    },
 
-export const analyzeReceipt = async (imageBase64) => {
-    const prompt = `Analiza esta imagen de recibo/factura y extrae los siguientes datos en formato JSON puro (sin markdown, solo el objeto JSON):
-    {
-      "total": number (el monto total pagado),
-      "date": string (fecha en formato YYYY-MM-DD, si no hay año asume el actual),
-      "vendor": string (nombre del comercio),
-      "items": string (descripción resumida de lo comprado, ej: "Cuadernos y lapiceras")
+    analyzeReceipt: async (imageBase64) => {
+        const prompt = `Analiza esta imagen de recibo/factura y extrae los siguientes datos en formato JSON puro (sin markdown, solo el objeto JSON):
+        {
+          "total": number (el monto total pagado),
+          "date": string (fecha en formato YYYY-MM-DD, si no hay año asume el actual),
+          "vendor": string (nombre del comercio),
+          "items": string (descripción resumida de lo comprado, ej: "Cuadernos y lapiceras")
+        }
+        Si no encuentras un dato, usa null.`;
+
+        const result = await handleGeminiRequest(prompt, imageBase64);
+
+        // Clean result if it comes with markdown code blocks
+        const cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();
+        return JSON.parse(cleanResult);
     }
-    Si no encuentras un dato, usa null.`;
-
-    const result = await handleGeminiRequest(prompt, imageBase64);
-
-    // Clean result if it comes with markdown code blocks
-    const cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleanResult);
 };

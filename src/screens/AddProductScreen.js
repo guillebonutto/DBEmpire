@@ -5,6 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CRMService } from '../services/crmService';
+import { GeminiService } from '../services/geminiService';
 import { Linking } from 'react-native';
 
 export default function AddProductScreen({ navigation, route }) {
@@ -29,6 +30,7 @@ export default function AddProductScreen({ navigation, route }) {
     // CRM Match State
     const [potentialClients, setPotentialClients] = useState([]);
     const [showMatchModal, setShowMatchModal] = useState(false);
+    const [generatingMsg, setGeneratingMsg] = useState(null);
 
     const [formData, setFormData] = useState({
         name: route.params?.scannedName || '',
@@ -487,11 +489,24 @@ export default function AddProductScreen({ navigation, route }) {
                                 <TouchableOpacity
                                     key={index}
                                     style={styles.clientMatchCard}
-                                    onPress={() => {
-                                        const greeting = client.gender === 'F' ? 'Estimada' : 'Estimado';
-                                        const message = `${greeting} ${client.name}, queríamos avisarle que estamos trayendo ${formData.name}, ¿estaría interesado?`;
-                                        const phone = client.phone?.replace(/[^0-9]/g, '');
-                                        Linking.openURL(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`);
+                                    onPress={async () => {
+                                        setGeneratingMsg(index);
+                                        try {
+                                            const prompt = `Genera un mensaje de WhatsApp corto y entusiasta para avisarle a un cliente llamado ${client.name} que el producto "${formData.name}" ya está disponible nuevamente. El cliente ya lo había comprado antes o compró algo similar (${client.lastPurchasedItem}). Solo devuelve el texto del mensaje.`;
+                                            const message = await GeminiService.generateMarketingCopy(prompt);
+
+                                            const phone = client.phone?.replace(/[^0-9]/g, '');
+                                            Linking.openURL(`whatsapp://send?phone=${phone}&text=${encodeURIComponent(message)}`);
+                                        } catch (err) {
+                                            console.log('Gemini error:', err);
+                                            // Fallback to simple message
+                                            const greeting = client.gender === 'F' ? 'Estimada' : 'Estimado';
+                                            const message = `${greeting} ${client.name}, queríamos avisarle que estamos trayendo ${formData.name}, ¿estaría interesado?`;
+                                            const phone = client.phone?.replace(/[^0-9]/g, '');
+                                            Linking.openURL(`whatsapp://send?phone=${phone}&text=${encodeURIComponent(message)}`);
+                                        } finally {
+                                            setGeneratingMsg(null);
+                                        }
                                     }}
                                 >
                                     <View style={{ flex: 1 }}>
