@@ -212,6 +212,45 @@ export default function AddProductScreen({ navigation, route }) {
             return;
         }
 
+        // Check for Liquidation Condition
+        if (productToEdit) {
+            const oldPrice = parseFloat(productToEdit.sale_price);
+            const newPrice = parseFloat(formData.sale_price);
+            const oldStock = parseInt(productToEdit.current_stock) || 0;
+            const newTotalStock = parseInt(formData.current_stock) || 0;
+
+            // If price changed AND we have more stock than before (meaning we added new units)
+            // And there was actually some old stock to liquidate
+            if (oldPrice !== newPrice && newTotalStock > oldStock && oldStock > 0) {
+                Alert.alert(
+                    'Cambio de Precio Detectado',
+                    `El precio ha cambiado de $${oldPrice} a $${newPrice}.\n\n¿Qué deseas hacer con las ${oldStock} unidades anteriores?`,
+                    [
+                        {
+                            text: 'Actualizar Todo',
+                            onPress: () => executeSave(false), // Normal update
+                            style: 'default'
+                        },
+                        {
+                            text: 'Liquidar Viejo Stock',
+                            onPress: () => executeSave(true), // Split product
+                            style: 'destructive' // Highlight this option
+                        },
+                        {
+                            text: 'Cancelar',
+                            style: 'cancel'
+                        }
+                    ]
+                );
+                return;
+            }
+        }
+
+        // Default save (New product or no critical change)
+        executeSave(false);
+    };
+
+    const executeSave = async (isLiquidation) => {
         setLoading(true);
         try {
             let finalImageUrl = image;
@@ -223,68 +262,108 @@ export default function AddProductScreen({ navigation, route }) {
                     finalImageUrl = uploadedUrl;
                 } else {
                     Alert.alert('Advertencia', 'No se pudo subir la imagen. Se guardará sin foto nueva.');
-                    // If we were editing and had an old image, decide whether to keep it or null. 
-                    // If image is local uri and upload fail, we probably shouldn't save the local uri to DB.
-                    // For now, let's just keep the old one if exists or null.
                     finalImageUrl = productToEdit?.image_url || null;
                 }
             }
 
-            const productPayload = {
-                name: formData.name,
+            // Common Payload Data
+            const basePayload = {
                 description: formData.description,
                 provider: formData.provider,
                 cost_price: parseFloat(formData.cost_price) || 0,
                 profit_margin_percent: parseFloat(formData.profit_margin_percent) || 0,
-                sale_price: parseFloat(formData.sale_price) || 0,
-                current_stock: parseInt(formData.current_stock) || 0,
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
                 defect_notes: formData.defect_notes,
                 image_url: finalImageUrl,
-                barcode: formData.barcode // Add barcode
             };
 
             let productId = productToEdit?.id;
-            let error;
-            if (productToEdit) {
-                // Update
+            let stockDifference = 0;
+            let costPrice = parseFloat(formData.cost_price) || 0;
+
+            if (isLiquidation && productToEdit) {
+                // --- LIQUIDATION LOGIC ---
+                // 1. Update OLD product (Liquidation)
+                const oldStock = parseInt(productToEdit.current_stock) || 0;
                 const { error: updateError } = await supabase
                     .from('products')
-                    .update(productPayload)
+                    .update({
+                        name: `${productToEdit.name} (LIQUIDACIÓN)`,
+                        barcode: `LIQ-${productToEdit.barcode || Date.now()}`,
+                        // Keep old price and old stock
+                        sale_price: productToEdit.sale_price,
+                        current_stock: oldStock,
+                        active: true // Ensure it stays active
+                    })
                     .eq('id', productToEdit.id);
-                error = updateError;
-            } else {
-                // Insert
+
+                if (updateError) throw updateError;
+
+                // 2. Create NEW product
+                const newTotalStock = parseInt(formData.current_stock) || 0;
+                const newStockOnly = newTotalStock - oldStock; // Only the new units
+                stockDifference = newStockOnly; // For expense calculation
+
                 const { data: newProd, error: insertError } = await supabase
                     .from('products')
-                    .insert([productPayload])
+                    .insert([{
+                        ...basePayload,
+                        name: formData.name, // New Name
+                        sale_price: parseFloat(formData.sale_price) || 0, // New Price
+                        current_stock: newStockOnly, // Only new stock
+                        barcode: formData.barcode // New Barcode (or kept from scan)
+                    }])
                     .select()
                     .single();
-                error = insertError;
-                if (newProd) productId = newProd.id;
-            }
 
-            if (error) throw error;
+                if (insertError) throw insertError;
+                productId = newProd.id; // Future operations on the NEW product
 
-            // --- AUTO EXPENSE & ORDER GENERATION ---
-            try {
-                const newStock = parseInt(formData.current_stock) || 0;
-                const costPrice = parseFloat(formData.cost_price) || 0;
-                let stockDifference = 0;
+                Alert.alert('Liquidación Exitosa', 'Se ha separado el stock antiguo como "Liquidación" y creado el nuevo ingreso.');
+
+            } else {
+                // --- NORMAL LOGIC (Update or Insert) ---
+                const productPayload = {
+                    ...basePayload,
+                    name: formData.name,
+                    sale_price: parseFloat(formData.sale_price) || 0,
+                    current_stock: parseInt(formData.current_stock) || 0,
+                    barcode: formData.barcode
+                };
 
                 if (productToEdit) {
-                    // Updating existing product: Calculate difference
+                    // Update
+                    const { error: updateError } = await supabase
+                        .from('products')
+                        .update(productPayload)
+                        .eq('id', productToEdit.id);
+                    if (updateError) throw updateError;
+
+                    // Calculate stock diff for expense
                     const oldStock = parseInt(productToEdit.current_stock) || 0;
+                    const newStock = parseInt(formData.current_stock) || 0;
                     if (newStock > oldStock) {
                         stockDifference = newStock - oldStock;
                     }
                 } else {
-                    // New Product: Entire stock is new
-                    stockDifference = newStock;
+                    // Insert
+                    const { data: newProd, error: insertError } = await supabase
+                        .from('products')
+                        .insert([productPayload])
+                        .select()
+                        .single();
+                    if (insertError) throw insertError;
+                    if (newProd) productId = newProd.id;
+                    
+                    stockDifference = parseInt(formData.current_stock) || 0;
                 }
+            }
 
-                if (stockDifference > 0 && costPrice > 0) {
+            // --- AUTO EXPENSE & ORDER GENERATION ---
+            // Only if we added stock and have a cost
+            if (stockDifference > 0 && costPrice > 0) {
+                try {
                     const expenseAmount = stockDifference * costPrice;
 
                     // 1. Create Expense
@@ -311,9 +390,7 @@ export default function AddProductScreen({ navigation, route }) {
                         .select()
                         .single();
 
-                    if (orderError) {
-                        console.log('Error creating auto-order:', orderError);
-                    } else if (orderData && productId) {
+                    if (!orderError && orderData && productId) {
                         // 3. Link Item
                         await supabase.from('supplier_order_items').insert({
                             supplier_order_id: orderData.id,
@@ -322,33 +399,39 @@ export default function AddProductScreen({ navigation, route }) {
                             cost_per_unit: costPrice
                         });
                     }
+                } catch (expErr) {
+                    console.log('Auto-expense error:', expErr);
+                    Alert.alert('Nota', 'Producto guardado, pero falló el registro automático del gasto.');
                 }
-            } catch (expErr) {
-                console.log('Auto-expense error:', expErr);
-                Alert.alert('Nota', 'Producto guardado, pero falló el registro automático del gasto.');
             }
             // -------------------------------
 
-            Alert.alert('Éxito', 'Producto guardado correctamente');
+            if (!isLiquidation) {
+                Alert.alert('Éxito', 'Producto guardado correctamente');
+            }
 
             // --- CRM SMART MATCH ---
-            const interested = await CRMService.findInterestedClients({
-                id: productToEdit?.id,
-                name: formData.name
-            });
+            // Only run if we have a valid productId (we should)
+            if (productId) {
+                 const interested = await CRMService.findInterestedClients({
+                    id: productId, // Use the ID of the product we just worked on (New or Updated)
+                    name: formData.name
+                });
 
-            if (interested.length > 0) {
-                setPotentialClients(interested);
-                setShowMatchModal(true);
+                if (interested.length > 0) {
+                    setPotentialClients(interested);
+                    setShowMatchModal(true);
+                } else {
+                    navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                }
             } else {
-                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                 navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
             }
             // ------------------------
+
         } catch (err) {
             console.log('Error saving product:', err);
-            // Fallback for development (If no Supabase keys)
             Alert.alert('Error', 'Hubo un error al guardar. Revisa la consola/conexión.');
-            // navigation.goBack(); // Don't go back on error
         } finally {
             setLoading(false);
         }
