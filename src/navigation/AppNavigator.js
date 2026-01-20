@@ -4,6 +4,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { View, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useState, useEffect } from 'react';
 
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -26,14 +28,24 @@ import ClientDetailScreen from '../screens/ClientDetailScreen';
 import BulkAdjustmentScreen from '../screens/BulkAdjustmentScreen';
 import AnalyticsScreen from '../screens/AnalyticsScreen';
 import IncidentsScreen from '../screens/IncidentsScreen';
+import AssetsScreen from '../screens/AssetsScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
     const insets = useSafeAreaInsets();
+    const [userRole, setUserRole] = useState('seller');
     const bottomPadding = insets.bottom > 0 ? insets.bottom : 10;
     const tabBarHeight = Platform.OS === 'ios' ? 65 + insets.bottom : 65 + (insets.bottom > 0 ? insets.bottom / 2 : 5);
+
+    useEffect(() => {
+        const getRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role) setUserRole(role);
+        };
+        getRole();
+    }, []);
 
     return (
         <Tab.Navigator
@@ -74,9 +86,14 @@ function MainTabs() {
             })}
         >
             <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
-            <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
-            <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
             <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
+
+            {userRole === 'admin' && (
+                <>
+                    <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
+                    <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
+                </>
+            )}
         </Tab.Navigator>
     );
 }
@@ -172,6 +189,11 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="Incidents"
                 component={IncidentsScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Assets"
+                component={AssetsScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

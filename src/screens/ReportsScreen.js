@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, StatusBar, Dimensions, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, StatusBar, Dimensions, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { LineChart, BarChart } from 'react-native-chart-kit';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
 
 const screenWidth = Dimensions.get('window').width;
 
 export default function ReportsScreen() {
+    const navigation = useNavigation();
     const [dailyReports, setDailyReports] = useState([]);
     const [loading, setLoading] = useState(true);
     const [monthTotal, setMonthTotal] = useState(0);
@@ -16,6 +19,14 @@ export default function ReportsScreen() {
     const [chartData, setChartData] = useState(null);
 
     useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'Los reportes son confidenciales.');
+                navigation.navigate('Home');
+            }
+        };
+        checkRole();
         fetchHistory();
     }, []);
 

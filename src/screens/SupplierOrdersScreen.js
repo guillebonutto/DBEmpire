@@ -73,6 +73,16 @@ export default function SupplierOrdersScreen({ navigation }) {
         if (error) {
             Alert.alert('Error', 'No se pudo actualizar la cuota');
         } else {
+            // Create expense entry
+            const effectiveTotal = (item.total_cost || 0) - (item.discount || 0);
+            const amountPerInstallment = effectiveTotal / total;
+
+            await supabase.from('expenses').insert({
+                description: `Cuota ${currentPaid + 1}: ${item.provider_name}`,
+                amount: amountPerInstallment,
+                category: 'Inventario'
+            });
+
             fetchOrders();
         }
     };
@@ -80,7 +90,8 @@ export default function SupplierOrdersScreen({ navigation }) {
     const renderOrderItem = ({ item }) => {
         const totalInstallments = item.installments_total || 1;
         const paidInstallments = item.installments_paid || 0;
-        const amountPerInstallment = item.total_cost / totalInstallments;
+        const effectiveTotal = (item.total_cost || 0) - (item.discount || 0);
+        const amountPerInstallment = effectiveTotal / totalInstallments;
         const isPaidOff = paidInstallments >= totalInstallments;
 
         return (
@@ -208,5 +219,8 @@ const styles = StyleSheet.create({
 
     date: { color: '#666', fontSize: 12 },
     empty: { alignItems: 'center', marginTop: 100 },
-    emptyText: { color: '#666', marginTop: 10, fontSize: 16 }
+    emptyText: { color: '#666', marginTop: 10, fontSize: 16 },
+
+    discountBadge: { backgroundColor: 'rgba(46, 204, 113, 0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 8 },
+    discountText: { color: '#2ecc71', fontSize: 10, fontWeight: 'bold' }
 });

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, Sta
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function SalesScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
@@ -70,6 +71,14 @@ export default function SalesScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
+            const checkRole = async () => {
+                const role = await AsyncStorage.getItem('user_role');
+                if (role !== 'admin') {
+                    Alert.alert('Acceso Denegado', 'El historial solo es visible para Líderes.');
+                    navigation.navigate('Home');
+                }
+            };
+            checkRole();
             fetchSalesData();
         }, [])
     );

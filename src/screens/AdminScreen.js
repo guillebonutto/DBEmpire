@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LineChart, PieChart } from 'react-native-chart-kit';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -32,6 +33,14 @@ export default function AdminScreen({ navigation }) {
     const [profitSplit, setProfitSplit] = useState({ imperio: 70, vendedores: 30 });
 
     useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'No tienes permisos para ver esta sección.');
+                navigation.replace('Main');
+            }
+        };
+        checkRole();
         fetchData();
     }, [dateFilter, currentDate, viewAllMonths]);
 
@@ -356,13 +365,19 @@ export default function AdminScreen({ navigation }) {
         const deviceMap = {};
         sales.forEach(s => {
             const sig = s.device_sig || 'Otros / Manual';
-            if (!deviceMap[sig]) deviceMap[sig] = 0;
-            deviceMap[sig] += (parseFloat(s.total_amount) || 0);
+            if (!deviceMap[sig]) deviceMap[sig] = { total: 0, commissions: 0 };
+
+            const status = (s.status || '').toLowerCase();
+            if (status === 'completed' || status === 'exitosa' || status === '' || status === 'vended') {
+                deviceMap[sig].total += (parseFloat(s.total_amount) || 0);
+                deviceMap[sig].commissions += (parseFloat(s.commission_amount) || 0);
+            }
         });
 
         const data = Object.keys(deviceMap).map(sig => ({
             sig,
-            total: deviceMap[sig]
+            total: deviceMap[sig].total,
+            commissions: deviceMap[sig].commissions
         })).sort((a, b) => b.total - a.total);
 
         setDeviceData(data);
@@ -707,9 +722,15 @@ export default function AdminScreen({ navigation }) {
                                 }}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                         <MaterialCommunityIcons name="cellphone-check" size={18} color="#d4af37" style={{ marginRight: 10 }} />
-                                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>{d.sig}</Text>
+                                        <View>
+                                            <Text style={{ color: '#fff', fontWeight: 'bold' }}>{d.sig}</Text>
+                                            <Text style={{ color: '#666', fontSize: 11 }}>Comisión: ${d.commissions.toFixed(2)}</Text>
+                                        </View>
                                     </View>
-                                    <Text style={{ color: '#d4af37', fontWeight: '900' }}>${d.total.toFixed(0)}</Text>
+                                    <View style={{ alignItems: 'flex-end' }}>
+                                        <Text style={{ color: '#d4af37', fontWeight: '900' }}>${d.total.toFixed(0)}</Text>
+                                        <Text style={{ color: '#444', fontSize: 10, fontWeight: '700' }}>VENTAS</Text>
+                                    </View>
                                 </View>
                             ))}
                         </View>

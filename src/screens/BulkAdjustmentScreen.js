@@ -2,12 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 export default function BulkAdjustmentScreen({ navigation }) {
     const [products, setProducts] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'Esta herramienta es confidencial.');
+                navigation.replace('Main');
+            }
+        };
+        checkRole();
+    }, []);
     const [percentage, setPercentage] = useState('');
     const [updating, setUpdating] = useState(false);
 

@@ -5,10 +5,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { GeminiService } from '../services/geminiService';
 
-const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Otro'];
+const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Descuento', 'Otro'];
 
 export default function ExpensesScreen({ navigation }) {
     const [viewMode, setViewMode] = useState('expenses'); // 'expenses' | 'purchases'
@@ -62,6 +63,14 @@ export default function ExpensesScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
+            const checkRole = async () => {
+                const role = await AsyncStorage.getItem('user_role');
+                if (role !== 'admin') {
+                    Alert.alert('Acceso Denegado', 'Finanzas es solo para Líderes.');
+                    navigation.navigate('Home');
+                }
+            };
+            checkRole();
             if (viewMode === 'expenses') fetchExpenses();
             else fetchOrders();
         }, [viewMode])
@@ -80,13 +89,16 @@ export default function ExpensesScreen({ navigation }) {
             return;
         }
 
+        // Si la categoría es Descuento, guardamos el monto como negativo para que reste de los totales
+        const finalAmount = category === 'Descuento' ? -Math.abs(numAmount) : numAmount;
+
         setAdding(true);
         try {
             const { error } = await supabase
                 .from('expenses')
                 .insert({
                     description: description.trim(),
-                    amount: numAmount,
+                    amount: finalAmount,
                     category
                 });
 
@@ -291,28 +303,37 @@ export default function ExpensesScreen({ navigation }) {
     };
 
     // --- RENDER ITEMS ---
-    const renderExpenseItem = ({ item }) => (
-        <View style={styles.card}>
-            <View style={styles.cardHeader}>
-                <Text style={styles.categoryBadge}>{item.category}</Text>
-                <Text style={styles.dateText}>
-                    {new Date(item.created_at).toLocaleDateString('es-ES')}
-                </Text>
+    const renderExpenseItem = ({ item }) => {
+        const isDiscount = item.category === 'Descuento' || item.amount < 0;
+
+        return (
+            <View style={styles.card}>
+                <View style={styles.cardHeader}>
+                    <Text style={[styles.categoryBadge, isDiscount && { color: '#2ecc71' }]}>
+                        {item.category}
+                    </Text>
+                    <Text style={styles.dateText}>
+                        {new Date(item.created_at).toLocaleDateString('es-ES')}
+                    </Text>
+                </View>
+                <View style={styles.cardBody}>
+                    <Text style={styles.description}>{item.description}</Text>
+                    <Text style={[styles.amount, isDiscount && { color: '#2ecc71' }]}>
+                        {isDiscount ? `+$${Math.abs(item.amount).toFixed(2)}` : `-$${parseFloat(item.amount).toFixed(2)}`}
+                    </Text>
+                </View>
+                <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteExpense(item.id)}>
+                    <Text style={styles.deleteText}>Eliminar</Text>
+                </TouchableOpacity>
             </View>
-            <View style={styles.cardBody}>
-                <Text style={styles.description}>{item.description}</Text>
-                <Text style={styles.amount}>-${parseFloat(item.amount).toFixed(2)}</Text>
-            </View>
-            <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteExpense(item.id)}>
-                <Text style={styles.deleteText}>Eliminar</Text>
-            </TouchableOpacity>
-        </View>
-    );
+        );
+    };
 
     const renderOrderItem = ({ item }) => {
         const totalInstallments = item.installments_total || 1;
         const paidInstallments = item.installments_paid || 0;
-        const amountPerInstallment = item.total_cost / totalInstallments;
+        const effectiveTotal = (item.total_cost || 0) - (item.discount || 0);
+        const amountPerInstallment = effectiveTotal / totalInstallments;
         const isPaidOff = paidInstallments >= totalInstallments;
 
         return (
@@ -325,7 +346,14 @@ export default function ExpensesScreen({ navigation }) {
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             <MaterialCommunityIcons name={item.status === 'received' ? "check-decagram" : "cube-send"} size={24} color={item.status === 'received' ? "#2ecc71" : "#d4af37"} style={{ marginRight: 10 }} />
                             <View>
-                                <Text style={styles.providerName}>{item.provider_name}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Text style={styles.providerName}>{item.provider_name}</Text>
+                                    {item.discount > 0 && (
+                                        <View style={[styles.statusBadge, { backgroundColor: 'rgba(46, 204, 113, 0.2)', marginLeft: 8 }]}>
+                                            <Text style={[styles.statusText, { color: '#2ecc71' }]}>-${item.discount.toFixed(0)}</Text>
+                                        </View>
+                                    )}
+                                </View>
                                 <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
                             </View>
                         </View>
@@ -337,8 +365,8 @@ export default function ExpensesScreen({ navigation }) {
                     {/* Cost & Installments Summary */}
                     <View style={styles.summaryContainer}>
                         <View>
-                            <Text style={styles.summaryLabel}>Total Deuda</Text>
-                            <Text style={styles.summaryValue}>${item.total_cost?.toLocaleString()}</Text>
+                            <Text style={styles.summaryLabel}>Total Pagado</Text>
+                            <Text style={styles.summaryValue}>${effectiveTotal.toLocaleString()}</Text>
                         </View>
                         <View>
                             <Text style={styles.summaryLabel}>Plan de Cuotas</Text>

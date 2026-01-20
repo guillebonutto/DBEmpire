@@ -6,6 +6,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { supabase } from '../services/supabase';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { logoBase64 } from '../assets/logoBase64';
@@ -17,6 +18,17 @@ export default function StockScreen({ navigation, route }) {
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
     const [isFastMode, setIsFastMode] = useState(false);
+
+    useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'El inventario solo es accesible para Líderes.');
+                navigation.replace('Main');
+            }
+        };
+        checkRole();
+    }, []);
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();

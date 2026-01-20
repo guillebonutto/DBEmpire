@@ -10,6 +10,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { NotificationService } from '../services/notificationService';
 import { SyncService } from '../services/syncService';
 import NetInfo from '@react-native-community/netinfo';
+import { DeviceAuthService } from '../services/deviceAuth';
+import { CRMService } from '../services/crmService';
+import { GeminiService } from '../services/geminiService';
+import { Linking } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
@@ -17,13 +21,17 @@ export default function HomeScreen({ navigation }) {
     const [userRole, setUserRole] = useState('seller');
     const [stats, setStats] = useState({
         todaySales: 0,
+        todayNetProfit: 0,
+        monthCommissions: 0,
+        monthSales: 0,
         budgetSales: 0,
-        debtSupplier: 0,
-        netProfit: 0,
+        commissionRate: 0,
         lowStockCount: 0,
         lowStockProducts: []
     });
+    const [missions, setMissions] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [generatingMission, setGeneratingMission] = useState(null);
     const [aiModalVisible, setAiModalVisible] = useState(false);
 
     // Camera State
@@ -57,41 +65,127 @@ export default function HomeScreen({ navigation }) {
     const fetchDashboardStats = async () => {
         setLoading(true);
         try {
+            // Get role directly to avoid race conditions with state
+            const currentRole = await AsyncStorage.getItem('user_role') || 'seller';
+
             const now = new Date();
             const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-            const { data: sales } = await supabase
+            const deviceSig = await DeviceAuthService.getDeviceSignature();
+
+            // Fetch Daily Sales (for Admin)
+            const { data: dailySalesData } = await supabase
                 .from('sales')
                 .select('total_amount, profit_generated, commission_amount, status')
                 .gte('created_at', startOfDay);
 
-            let todaySales = 0;
-            let grossProfit = 0;
-            let commissions = 0;
+            // Fetch Monthly Sales (for Seller Filter)
+            let monthlyQuery = supabase
+                .from('sales')
+                .select('total_amount, commission_amount, status, device_sig')
+                .gte('created_at', startOfMonth);
 
-            if (sales) {
-                sales.forEach(s => {
+            if (currentRole === 'seller' && deviceSig) {
+                monthlyQuery = monthlyQuery.eq('device_sig', deviceSig);
+            }
+            const { data: monthlySalesData } = await monthlyQuery;
+
+            // Calculate Today's Stats
+            let todaySales = 0;
+            let todayGrossProfit = 0;
+            let todayCommissionsTotal = 0;
+            if (dailySalesData) {
+                dailySalesData.forEach(s => {
                     const status = (s.status || '').toLowerCase();
-                    if (status === 'completed' || status === 'exitosa' || status === '') {
+                    if (status === 'completed' || status === 'exitosa' || status === '' || status === 'vended') {
                         todaySales += (s.total_amount || 0);
-                        grossProfit += (s.profit_generated || 0);
-                        commissions += (s.commission_amount || 0);
+                        todayGrossProfit += (s.profit_generated || 0);
+                        todayCommissionsTotal += (s.commission_amount || 0);
                     }
                 });
             }
 
+            // Calculate Seller's Monthly Stats
+            let monthSales = 0;
+            let monthCommissions = 0;
+            if (monthlySalesData) {
+                monthlySalesData.forEach(s => {
+                    const status = (s.status || '').toLowerCase();
+                    if (status === 'completed' || status === 'exitosa' || status === '' || status === 'vended') {
+                        monthSales += (s.total_amount || 0);
+                        monthCommissions += (s.commission_amount || 0);
+                    }
+                });
+            }
+
+            // Fetch Expenses (Today)
             const { data: expenses } = await supabase.from('expenses').select('amount').gte('created_at', startOfDay);
-            const totalExpenses = expenses ? expenses.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
+            const todayExpenses = expenses ? expenses.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
+
             const { data: budgets } = await supabase.from('sales').select('total_amount').eq('status', 'budget');
             const { data: lowStock } = await supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5);
 
+            // Fetch Commission Rate for display
+            const { data: settings } = await supabase.from('settings').select('value').eq('key', 'commission_rate').single();
+            const rate = settings ? parseFloat(settings.value) * 100 : 0;
+
             setStats({
                 todaySales,
+                todayNetProfit: todayGrossProfit - todayCommissionsTotal - todayExpenses,
+                monthSales,
+                monthCommissions,
                 budgetSales: budgets ? budgets.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
-                netProfit: grossProfit - commissions - totalExpenses,
+                commissionRate: rate,
                 lowStockCount: lowStock ? lowStock.length : 0,
                 lowStockProducts: lowStock || []
             });
+
+            // --- MISSION GENERATION (Only for Sellers) ---
+            if (currentRole === 'seller') {
+                const dailyMissions = [];
+
+                // 1. Client Recovery Mission
+                const inactive = await CRMService.getInactiveClients(20);
+                if (inactive && inactive.length > 0) {
+                    const target = inactive[0];
+                    dailyMissions.push({
+                        id: 'recovery',
+                        title: 'CAZADOR DE VENTAS',
+                        desc: `Contactar a ${target.name} (Sin compras hace 20 días)`,
+                        icon: 'account-clock',
+                        color: '#ff7675',
+                        target: target,
+                        type: 'crm'
+                    });
+                }
+
+                // 2. Content Mission
+                const { data: randomProduct } = await supabase.from('products').select('name').eq('active', true).limit(1).single();
+                if (randomProduct) {
+                    dailyMissions.push({
+                        id: 'content',
+                        title: 'EL GUIONISTA',
+                        desc: `Generar guion para vender: ${randomProduct.name}`,
+                        icon: 'movie-edit',
+                        color: '#74b9ff',
+                        target: randomProduct,
+                        type: 'creative'
+                    });
+                }
+
+                // 3. Goal Mission
+                dailyMissions.push({
+                    id: 'goal',
+                    title: 'META DEL DÍA',
+                    desc: monthSales > 0 ? '¡Sigue así! Supera tu récord hoy.' : '¡Hoy es el día! Logra tu primera venta.',
+                    icon: 'trophy-award',
+                    color: '#fdcb6e',
+                    type: 'info'
+                });
+
+                setMissions(dailyMissions);
+            }
         } catch (error) {
             console.log('Stats error:', error);
         } finally {
@@ -100,10 +194,52 @@ export default function HomeScreen({ navigation }) {
     };
 
     const getAICounsel = () => {
-        if (loading) return "Consultando al Oráculo...";
-        if (stats.lowStockCount > 3) return "⚠️ Stock crítico detectado. Reabastece pronto.";
-        if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales} en presupuestos pendientes.`;
-        return "Buen trabajo, Comandante. El imperio crece.";
+        if (loading) return "Analizando panorama imperial...";
+        if (userRole === 'admin') {
+            if (stats.lowStockCount > 3) return "⚠️ Hay productos críticos sin reposición. El Imperio pierde ventas.";
+            if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales} en presupuestos por cerrar.`;
+            return "Las finanzas están estables. Es momento de expandir.";
+        } else {
+            if (missions.length > 0) return `⚔️ Tienes ${missions.length} misiones pendientes. Conquista el mercado hoy.`;
+            return "Buen trabajo, Aliado. Sigue alimentando el catálogo.";
+        }
+    };
+
+    const handleMissionAction = async (mission) => {
+        if (mission.type === 'crm') {
+            setGeneratingMission(mission.id);
+            try {
+                const prompt = `Genera un mensaje de WhatsApp corto y profesional para recuperar a un cliente llamado ${mission.target.name} que no ha comprado en 20 días. El tono debe ser entusiasta y mencionar que tenemos novedades. Solo devuelve el texto.`;
+                const message = await GeminiService.handleGeneralRequest(prompt);
+                const url = `whatsapp://send?phone=${mission.target.phone}&text=${encodeURIComponent(message)}`;
+                Linking.openURL(url);
+            } catch (e) { Alert.alert('Error IA', 'No se pudo generar el mensaje'); }
+            finally { setGeneratingMission(null); }
+        } else if (mission.type === 'creative') {
+            setGeneratingMission(mission.id);
+            try {
+                const prompt = `Genera un GUION corto para un video de 15 segundos vendiendo el producto: ${mission.target.name}. 
+                Estructura: 
+                1. Gancho (Hook).
+                2. Beneficio clave.
+                3. Llamado a la acción (CTA).
+                Usa un tono viral. Devuelve texto plano sin markdown.`;
+                const script = await GeminiService.handleGeneralRequest(prompt);
+
+                Alert.alert(
+                    '🎬 Guion Generado',
+                    script,
+                    [
+                        { text: 'OK' },
+                        {
+                            text: 'ENVIAR A MI PC (WA)',
+                            onPress: () => Linking.openURL(`whatsapp://send?text=${encodeURIComponent("🚀 GUION PARA MI PC:\n\n" + script)}`)
+                        }
+                    ]
+                );
+            } catch (e) { Alert.alert('Error IA', 'No se pudo generar el guion'); }
+            finally { setGeneratingMission(null); }
+        }
     };
 
     useFocusEffect(useCallback(() => { fetchDashboardStats(); }, []));
@@ -233,7 +369,7 @@ export default function HomeScreen({ navigation }) {
                         <Text style={styles.brandName}>EMPIRE 👑</Text>
                         <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'Aliado'}</Text>
                     </View>
-                    <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login'); }}>
+                    <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
                         <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
                     </TouchableOpacity>
                 </View>
@@ -246,29 +382,80 @@ export default function HomeScreen({ navigation }) {
                         <Text style={styles.insightText}>{getAICounsel()}</Text>
                     </View>
 
-                    {/* Stats Bricks Clean */}
-                    <View style={styles.statsGrid}>
-                        <View style={styles.statBrick}>
-                            <Text style={styles.statLab}>Ventas Hoy</Text>
-                            <Text style={styles.statVal}>${stats.todaySales}</Text>
+                    {/* Stats Bricks Clean - ADMIN ONLY */}
+                    {userRole === 'admin' ? (
+                        <View style={styles.statsGrid}>
+                            <View style={styles.statBrick}>
+                                <Text style={styles.statLab}>Ventas Hoy</Text>
+                                <Text style={styles.statVal}>${stats.todaySales}</Text>
+                            </View>
+                            <View style={styles.statBrick}>
+                                <Text style={styles.statLab}>Balance Neto</Text>
+                                <Text style={[styles.statVal, { color: stats.todayNetProfit >= 0 ? '#00ff88' : '#ff4444' }]}>
+                                    ${stats.todayNetProfit}
+                                </Text>
+                            </View>
                         </View>
-                        <View style={styles.statBrick}>
-                            <Text style={styles.statLab}>Balance Neto</Text>
-                            <Text style={[styles.statVal, { color: stats.netProfit >= 0 ? '#00ff88' : '#ff4444' }]}>
-                                ${stats.netProfit}
-                            </Text>
+                    ) : (
+                        /* PREMIUM COMMISSION BOX - SELLER ONLY */
+                        <View style={styles.commissionContainer}>
+                            <LinearGradient
+                                colors={['#d4af3720', '#d4af3705']}
+                                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                                style={styles.commissionBox}
+                            >
+                                <View style={styles.commissionHeader}>
+                                    <MaterialCommunityIcons name="star-circle" size={20} color="#d4af37" />
+                                    <Text style={styles.commissionLab}>MI COMISIÓN ACUMULADA (MES)</Text>
+                                </View>
+                                <Text style={styles.commissionVal}>${stats.monthCommissions.toFixed(2)}</Text>
+                                <Text style={styles.commissionSub}>Comisión del {stats.commissionRate}% sobre tus ventas directas</Text>
+                            </LinearGradient>
                         </View>
-                    </View>
+                    )}
+
+                    {/* DAILY MISSIONS - SELLER ONLY */}
+                    {userRole === 'seller' && missions.length > 0 && (
+                        <View style={styles.missionsSection}>
+                            <Text style={styles.sectionLabel}>MISIONES DEL DÍA ⚔️</Text>
+                            {missions.map(m => (
+                                <TouchableOpacity
+                                    key={m.id}
+                                    style={styles.missionCard}
+                                    onPress={() => handleMissionAction(m)}
+                                >
+                                    <View style={[styles.missionIcon, { backgroundColor: m.color + '20' }]}>
+                                        <MaterialCommunityIcons name={m.icon} size={22} color={m.color} />
+                                    </View>
+                                    <View style={styles.missionInfo}>
+                                        <Text style={styles.missionTitle}>{m.title}</Text>
+                                        <Text style={styles.missionDesc}>{m.desc}</Text>
+                                    </View>
+                                    {generatingMission === m.id ? (
+                                        <ActivityIndicator color={m.color} />
+                                    ) : (
+                                        m.type !== 'info' && <MaterialCommunityIcons name="chevron-right" size={20} color="#333" />
+                                    )}
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    )}
 
                     {/* Minimalist Grid of Actions */}
                     <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
                     <View style={styles.actionGrid}>
-                        <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />
+                        {userRole === 'admin' && <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />}
                         <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
+                        <MinimalModule title="Assets" icon="video-plus" color="#a29bfe" onPress={() => navigation.navigate('Assets')} />
                         <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
-                        <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
+                        <MinimalModule title="Inventario" icon="package-variant-closed" color="#e67e22" onPress={() => navigation.navigate('Inventario')} />
+                        {userRole === 'admin' && (
+                            <>
+                                <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
+                                <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
+                            </>
+                        )}
                         <MinimalModule title="Presupuesto" icon="file-document-edit" color="#e67e22" onPress={() => navigation.navigate('NewSale', { mode: 'quote' })} />
-                        <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
                     </View>
 
                     {/* Primary Action: Minimalist Giant Scanner */}
@@ -303,9 +490,23 @@ const styles = StyleSheet.create({
     statsGrid: { flexDirection: 'row', gap: 12, paddingHorizontal: 25, marginTop: 20 },
     statBrick: { flex: 1, backgroundColor: '#0a0a0a', padding: 18, borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' },
     statLab: { color: '#555', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-    statVal: { color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 6 },
+    statVal: { color: '#fff', fontSize: 24, fontWeight: '900', marginTop: 8 },
 
-    sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, paddingHorizontal: 25, marginTop: 30, marginBottom: 15 },
+    missionsSection: { marginTop: 25, paddingHorizontal: 25 },
+    missionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a0a0a', padding: 15, borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#1a1a1a' },
+    missionIcon: { width: 45, height: 45, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    missionInfo: { flex: 1, marginLeft: 15 },
+    missionTitle: { color: '#888', fontSize: 9, fontWeight: '900', letterSpacing: 1, marginBottom: 2 },
+    missionDesc: { color: '#eee', fontSize: 13, fontWeight: '700' },
+
+    commissionContainer: { paddingHorizontal: 25, marginTop: 20 },
+    commissionBox: { padding: 25, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(212,175,55,0.3)', alignItems: 'center' },
+    commissionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 15 },
+    commissionLab: { color: '#d4af37', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
+    commissionVal: { color: '#fff', fontSize: 36, fontWeight: '900', textShadowColor: 'rgba(212,175,55,0.5)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
+    commissionSub: { color: '#666', fontSize: 12, fontWeight: '600', marginTop: 15, textAlign: 'center' },
+
+    sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 15, paddingHorizontal: 25, marginTop: 20 },
 
     actionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, gap: 10 },
     miniCard: { width: (width - 60) / 3, backgroundColor: '#0a0a0a', padding: 15, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },

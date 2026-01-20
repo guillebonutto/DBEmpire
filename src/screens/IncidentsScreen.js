@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, StatusBar, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
+import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const INCIDENT_TYPES = [
     { id: 'faltante_caja', label: 'Faltó plata', icon: 'cash-remove', color: '#e74c3c' },
@@ -41,9 +43,19 @@ export default function IncidentsScreen({ navigation }) {
     const showAmount = type === 'faltante_caja' || type === 'devolucion_producto';
     const showReturnOptions = type === 'devolucion_producto';
 
-    useEffect(() => {
-        fetchIncidents();
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            const checkRole = async () => {
+                const role = await AsyncStorage.getItem('user_role');
+                if (role !== 'admin') {
+                    Alert.alert('Acceso Denegado', 'Esta sección es confidencial.');
+                    navigation.navigate('Home');
+                }
+            };
+            checkRole();
+            fetchIncidents();
+        }, [])
+    );
 
     const fetchIncidents = async () => {
         setLoading(true);

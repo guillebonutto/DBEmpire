@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -18,6 +19,14 @@ export default function AnalyticsScreen({ navigation }) {
     });
 
     useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'Esta sección es confidencial.');
+                navigation.replace('Main');
+            }
+        };
+        checkRole();
         fetchAnalytics();
     }, []);
 

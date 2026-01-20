@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal } from 'react-native';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -12,6 +13,17 @@ export default function AddProductScreen({ navigation, route }) {
     const productToEdit = route.params?.product;
 
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'Solo los Líderes pueden agregar productos.');
+                navigation.replace('Main');
+            }
+        };
+        checkRole();
+    }, []);
     const [image, setImage] = useState(route.params?.scannedImage || null);
 
     // Scanner State

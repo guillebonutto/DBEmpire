@@ -46,6 +46,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const [selectedPromo, setSelectedPromo] = useState(null);
     const [loading, setLoading] = useState(false);
     const [commissionRate, setCommissionRate] = useState(0.10);
+    const [isLeaderSale, setIsLeaderSale] = useState(false);
     const [transportCost, setTransportCost] = useState(0);
     const [includeTransport, setIncludeTransport] = useState(false);
 
@@ -279,7 +280,10 @@ export default function NewSaleScreen({ navigation, route }) {
 
         const total = subtotal - discount + (includeTransport ? transportCost : 0);
         const finalProfit = totalProfit - discount; // Discount reduces profit
-        const commission = currentUserRole === 'seller' ? finalProfit * commissionRate : 0;
+
+        // Multi-tier commission: 10% standard, 5% if it's a Leader sale closed by César
+        const currentRate = isLeaderSale ? 0.05 : commissionRate;
+        const commission = finalProfit * currentRate; // Calculate for all, filter by device in Home
 
         return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail };
     };
@@ -493,6 +497,7 @@ export default function NewSaleScreen({ navigation, route }) {
                 commission_amount: commission,
                 status: saleType,
                 device_sig: deviceSig,
+                is_leader_sale: isLeaderSale,
                 promotion_id: selectedPromo ? selectedPromo.id : null
             };
 
@@ -725,6 +730,28 @@ export default function NewSaleScreen({ navigation, route }) {
             {/* Transaction Type Selector */}
             <SaleTypeSelector saleType={saleType} setSaleType={setSaleType} />
 
+            {/* COMMISSION SPLIT TOGGLE - Outside footer for better layout */}
+            <View style={styles.commissionSplitCard}>
+                <TouchableOpacity
+                    style={[styles.splitToggle, isLeaderSale && styles.splitToggleActive]}
+                    onPress={() => setIsLeaderSale(!isLeaderSale)}
+                >
+                    <MaterialCommunityIcons
+                        name={isLeaderSale ? "shield-check" : "shield-outline"}
+                        size={20}
+                        color={isLeaderSale ? "#00ff88" : "#666"}
+                    />
+                    <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={[styles.splitTitle, isLeaderSale && { color: '#00ff88' }]}>
+                            Venta cerrada por el Líder (César)
+                        </Text>
+                        <Text style={styles.splitDesc}>
+                            {isLeaderSale ? 'Comisión reducida al 5%' : 'Comisión completa del 10%'}
+                        </Text>
+                    </View>
+                </TouchableOpacity>
+            </View>
+
             <View style={styles.footer}>
                 <TouchableOpacity
                     style={[styles.addProductBtn, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37' }]}
@@ -759,7 +786,7 @@ export default function NewSaleScreen({ navigation, route }) {
                     ) : (
                         <Text style={styles.checkoutText}>
                             {saleType === 'completed' ? `COBRAR ($${total.toFixed(0)})` :
-                                saleType === 'pending' ? `GUARDAR DEUDA` : `CREAR PRESUPUESTO`}
+                                saleType === 'pending' ? `GUARDAR DEUDA` : `CREAR PRESUPUESO`}
                         </Text>
                     )}
                 </TouchableOpacity>
@@ -841,5 +868,11 @@ const styles = StyleSheet.create({
     addProductText: { marginLeft: 5, color: '#000', fontWeight: '900', letterSpacing: 0.5 },
     checkoutBtn: { flex: 2, backgroundColor: '#d4af37', borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.3, elevation: 10 },
     disabled: { backgroundColor: '#333' },
-    checkoutText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 }
+    checkoutText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
+
+    commissionSplitCard: { marginHorizontal: 25, marginBottom: 10 },
+    splitToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#1a1a1a' },
+    splitToggleActive: { borderColor: '#00ff8840', backgroundColor: '#00ff8805' },
+    splitTitle: { color: '#888', fontSize: 13, fontWeight: '700' },
+    splitDesc: { color: '#444', fontSize: 11, fontWeight: '600', marginTop: 2 },
 });

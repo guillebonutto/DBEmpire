@@ -1,18 +1,31 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function NewSupplierOrderScreen({ navigation, route }) {
     const [provider, setProvider] = useState('');
     const [tracking, setTracking] = useState('');
     const [itemsDesc, setItemsDesc] = useState('');
     const [cost, setCost] = useState('');
+    const [discount, setDiscount] = useState('0');
     const [installmentsTotal, setInstallmentsTotal] = useState('1');
     const [installmentsPaid, setInstallmentsPaid] = useState('0');
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const checkRole = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            if (role !== 'admin') {
+                Alert.alert('Acceso Denegado', 'Las compras al proveedor son confidenciales.');
+                navigation.replace('Main');
+            }
+        };
+        checkRole();
+    }, []);
 
     // Product Linking State
     const [products, setProducts] = useState([]);
@@ -30,6 +43,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             setTracking(order.tracking_number || '');
             setItemsDesc(order.items_description || '');
             setCost(order.total_cost?.toString() || '');
+            setDiscount(order.discount?.toString() || '0');
             setInstallmentsTotal(order.installments_total?.toString() || '1');
             setInstallmentsPaid(order.installments_paid?.toString() || '0');
 
@@ -74,6 +88,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 tracking_number: tracking || null,
                 items_description: itemsDesc,
                 total_cost: parseFloat(cost) || 0,
+                discount: parseFloat(discount) || 0,
                 installments_total: parseInt(installmentsTotal) || 1,
                 installments_paid: parseInt(installmentsPaid) || 0,
             };
@@ -91,14 +106,25 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 if (error) throw error;
             } else {
                 // INSERT
-                const { data, error } = await supabase
+                const { data: newOrder, error: insertError } = await supabase
                     .from('supplier_orders')
                     .insert({ ...payload, status: 'pending' })
                     .select()
                     .single();
 
-                if (error) throw error;
-                orderId = data.id;
+                if (insertError) throw insertError;
+                orderId = newOrder.id;
+
+                // Add to expenses if there are initial installments paid
+                if (payload.installments_paid > 0) {
+                    const amountPerInstallment = (payload.total_cost - payload.discount) / payload.installments_total;
+                    const totalPaidNow = amountPerInstallment * payload.installments_paid;
+                    await supabase.from('expenses').insert({
+                        description: `Pago inicial: ${provider} (${itemsDesc})`,
+                        amount: totalPaidNow,
+                        category: 'Inventario'
+                    });
+                }
             }
 
             // Handle Linked Items (Delete all and re-insert for simplicity on edit)
@@ -218,6 +244,25 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     onChangeText={setCost}
                 />
 
+                <Text style={styles.label}>Descuento (Monto Fijo $)</Text>
+                <TextInput
+                    style={[styles.input, { color: '#2ecc71', borderColor: discount > 0 ? '#2ecc71' : '#222' }]}
+                    placeholder="0.00"
+                    placeholderTextColor="#666"
+                    keyboardType="numeric"
+                    value={discount}
+                    onChangeText={setDiscount}
+                />
+
+                {parseFloat(discount) > 0 && (
+                    <View style={styles.summaryBox}>
+                        <Text style={styles.summaryLabel}>Total a Pagar Final:</Text>
+                        <Text style={styles.summaryValue}>
+                            ${((parseFloat(cost) || 0) - (parseFloat(discount) || 0)).toFixed(2)}
+                        </Text>
+                    </View>
+                )}
+
                 <View style={styles.row}>
                     <View style={{ flex: 1, marginRight: 10 }}>
                         <Text style={styles.label}>Cuotas Totales</Text>
@@ -318,5 +363,9 @@ const styles = StyleSheet.create({
     modalItemText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
     modalItemSub: { color: '#666', fontSize: 12 },
     closeModal: { marginTop: 15, alignItems: 'center', padding: 10 },
-    closeText: { color: '#e74c3c', fontWeight: 'bold' }
+    closeText: { color: '#e74c3c', fontWeight: 'bold' },
+
+    summaryBox: { backgroundColor: 'rgba(46, 204, 113, 0.1)', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(46, 204, 113, 0.3)', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    summaryLabel: { color: '#888', fontSize: 12, fontWeight: 'bold' },
+    summaryValue: { color: '#2ecc71', fontSize: 18, fontWeight: 'bold' }
 });

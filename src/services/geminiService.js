@@ -95,5 +95,9 @@ export const GeminiService = {
         // Clean result if it comes with markdown code blocks
         const cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();
         return JSON.parse(cleanResult);
+    },
+
+    handleGeneralRequest: async (prompt, imageBase64 = null) => {
+        return handleGeminiRequest(prompt, imageBase64);
     }
 };

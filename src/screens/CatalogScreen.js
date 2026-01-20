@@ -45,17 +45,42 @@ export default function CatalogScreen({ navigation }) {
         }
     };
 
+    const handleShareProduct = async (item) => {
+        const text = `👑 *DIGITAL BOOST EMPIRE* 👑\n\n` +
+            `🔹 *${item.name.toUpperCase()}*\n` +
+            `💰 *Precio: $${item.sale_price}*\n\n` +
+            `${item.description ? item.description + '\n\n' : ''}` +
+            `🚀 ¡Pide el tuyo ahora antes de que se agote!`;
+
+        try {
+            await Share.share({
+                message: text,
+                title: item.name
+            });
+        } catch (error) {
+            alert(error.message);
+        }
+    };
+
     const renderItem = ({ item }) => (
         <View style={styles.card}>
-            {item.image_url ? (
-                <Image source={{ uri: item.image_url }} style={styles.image} />
-            ) : (
-                <View style={styles.imagePlaceholder}>
-                    <MaterialCommunityIcons name="image-off" size={30} color="#444" />
-                </View>
-            )}
+            <View>
+                {item.image_url ? (
+                    <Image source={{ uri: item.image_url }} style={styles.image} />
+                ) : (
+                    <View style={styles.imagePlaceholder}>
+                        <MaterialCommunityIcons name="image-off" size={30} color="#444" />
+                    </View>
+                )}
+                <TouchableOpacity
+                    style={styles.shareItemBtn}
+                    onPress={() => handleShareProduct(item)}
+                >
+                    <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
+                </TouchableOpacity>
+            </View>
             <View style={styles.info}>
-                <Text style={styles.name}>{item.name}</Text>
+                <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
                 <Text style={styles.price}>${item.sale_price}</Text>
                 <Text style={styles.stock}>En stock: {item.current_stock}</Text>
             </View>
@@ -115,5 +140,21 @@ const styles = StyleSheet.create({
     stock: { fontSize: 10, color: '#666', marginTop: 2 },
     floatBtn: { position: 'absolute', bottom: 30, alignSelf: 'center', borderRadius: 30, elevation: 10, overflow: 'hidden' },
     floatGradient: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingVertical: 15, gap: 10 },
-    floatText: { color: '#000', fontWeight: '900', fontSize: 14, letterSpacing: 0.5 }
+    floatText: { color: '#000', fontWeight: '900', fontSize: 14, letterSpacing: 0.5 },
+
+    shareItemBtn: {
+        position: 'absolute',
+        top: 10,
+        right: 10,
+        backgroundColor: '#d4af37',
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        elevation: 5,
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 3
+    }
 });

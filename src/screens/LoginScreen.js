@@ -9,12 +9,18 @@ import { BlurView } from 'expo-blur';
 const { width } = Dimensions.get('window');
 import { DeviceAuthService } from '../services/deviceAuth';
 
-export default function LoginScreen({ navigation }) {
+export default function LoginScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
 
     // Hardware & Session Recognition Logic
     React.useEffect(() => {
         const performAuthCheck = async () => {
+            // If we're coming from a logout, don't auto-login immediately
+            if (route.params?.fromLogout) {
+                console.log('Manual logout detected, skipping hardware auto-login.');
+                return;
+            }
+
             setLoading(true);
             try {
                 // 1. Try recognition by Hardware (Ultra fast & No clicks)
