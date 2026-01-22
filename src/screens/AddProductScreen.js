@@ -33,6 +33,8 @@ export default function AddProductScreen({ navigation, route }) {
     const [permission, requestPermission] = useCameraPermissions();
     const [isScanning, setIsScanning] = useState(false);
     const [scanned, setScanned] = useState(false);
+    const [scanningMode, setScanningMode] = useState('main'); // 'main' or 'bundle'
+    const [lastScannedInfo, setLastScannedInfo] = useState(null); // Feedback for bundle scan
 
     // Bundle / Combo State
     const [isBundle, setIsBundle] = useState(false);
@@ -674,6 +676,7 @@ export default function AddProductScreen({ navigation, route }) {
                                 return;
                             }
                         }
+                        setScanningMode('main');
                         setScanned(false);
                         setIsScanning(true);
                     }}
@@ -958,6 +961,45 @@ export default function AddProductScreen({ navigation, route }) {
                             barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
                         }}
                         onBarcodeScanned={scanned ? undefined : async ({ data }) => {
+                            if (scanningMode === 'bundle') {
+                                setScanned(true); // Temporarily pause
+
+                                // 1. Search in local inventory
+                                const found = allProducts.find(p => p.barcode === data);
+                                if (found) {
+                                    setBundleItems(prev => {
+                                        const exists = prev.find(i => i.id === found.id);
+                                        if (exists) return prev.map(i => i.id === found.id ? { ...i, qty: i.qty + 1 } : i);
+                                        return [...prev, { id: found.id, name: found.name, qty: 1 }];
+                                    });
+                                    setLastScannedInfo({ name: found.name, image: found.image_url, source: 'Inventario' });
+                                    setTimeout(() => { setScanned(false); setLastScannedInfo(null); }, 1500);
+                                } else {
+                                    // 2. Not in inventory - Try external lookup for recognition
+                                    setLastScannedInfo({ name: 'Buscando...', source: 'Nube' });
+                                    try {
+                                        const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${data}.json`);
+                                        const result = await response.json();
+                                        if (result.status === 1) {
+                                            const pName = result.product.product_name || result.product.product_name_es || 'Desconocido';
+                                            setLastScannedInfo({
+                                                name: pName,
+                                                image: result.product.image_url,
+                                                source: 'Nuevo (No en Inventario)'
+                                            });
+                                            // We don't add to kit because it doesn't exist in inventory, 
+                                            // but we show the info so the user knows what it is.
+                                        } else {
+                                            setLastScannedInfo({ name: 'Código no registrado', source: 'Error' });
+                                        }
+                                    } catch (e) {
+                                        setLastScannedInfo({ name: 'Error de red', source: 'Error' });
+                                    }
+                                    setTimeout(() => { setScanned(false); setLastScannedInfo(null); }, 2000);
+                                }
+                                return;
+                            }
+
                             setScanned(true);
                             handleChange('barcode', data);
                             setIsScanning(false);
@@ -1004,8 +1046,30 @@ export default function AddProductScreen({ navigation, route }) {
                     >
                         <MaterialCommunityIcons name="close" size={30} color="white" />
                     </TouchableOpacity>
-                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center' }}>
-                        <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>Apunta al código de barras</Text>
+                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center', alignItems: 'center', width: '100%' }}>
+                        {lastScannedInfo ? (
+                            <View style={{ backgroundColor: 'rgba(0,0,0,0.8)', padding: 15, borderRadius: 20, alignItems: 'center', borderWidth: 1, borderColor: '#d4af37', width: '80%' }}>
+                                {lastScannedInfo.image && (
+                                    <Image source={{ uri: lastScannedInfo.image }} style={{ width: 60, height: 60, borderRadius: 10, marginBottom: 10 }} />
+                                )}
+                                <Text style={{ color: '#d4af37', fontWeight: '900', textAlign: 'center' }}>{lastScannedInfo.name}</Text>
+                                <Text style={{ color: '#fff', fontSize: 10 }}>{lastScannedInfo.source}</Text>
+                            </View>
+                        ) : (
+                            <View style={{ alignItems: 'center' }}>
+                                <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>
+                                    {scanningMode === 'bundle' ? `Escaneando Kit (${bundleItems.length} items)` : 'Apunta al código de barras'}
+                                </Text>
+                                {scanningMode === 'bundle' && (
+                                    <TouchableOpacity
+                                        style={{ marginTop: 20, backgroundColor: '#d4af37', paddingHorizontal: 30, paddingVertical: 12, borderRadius: 25 }}
+                                        onPress={() => setIsScanning(false)}
+                                    >
+                                        <Text style={{ color: '#000', fontWeight: 'bold' }}>TERMINAR Y VOLVER</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        )}
                     </View>
                 </View>
             </Modal>
@@ -1021,13 +1085,25 @@ export default function AddProductScreen({ navigation, route }) {
                             </TouchableOpacity>
                         </View>
 
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Buscar producto..."
-                            placeholderTextColor="#444"
-                            value={searchProd}
-                            onChangeText={setSearchProd}
-                        />
+                        <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                            <TextInput
+                                style={[styles.input, { flex: 1 }]}
+                                placeholder="Buscar producto..."
+                                placeholderTextColor="#444"
+                                value={searchProd}
+                                onChangeText={setSearchProd}
+                            />
+                            <TouchableOpacity
+                                style={{ width: 50, height: 50, backgroundColor: '#0a0a0a', borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' }}
+                                onPress={() => {
+                                    setScanningMode('bundle');
+                                    setScanned(false);
+                                    setIsScanning(true);
+                                }}
+                            >
+                                <MaterialCommunityIcons name="barcode-scan" size={24} color="#d4af37" />
+                            </TouchableOpacity>
+                        </View>
 
                         <FlatList
                             data={allProducts.filter(p => !searchProd || p.name.toLowerCase().includes(searchProd.toLowerCase()))}
