@@ -19,15 +19,16 @@ export default function AnalyticsScreen({ navigation }) {
     });
 
     useEffect(() => {
-        const checkRole = async () => {
+        const init = async () => {
             const role = await AsyncStorage.getItem('user_role');
             if (role !== 'admin') {
                 Alert.alert('Acceso Denegado', 'Esta sección es confidencial.');
                 navigation.replace('Main');
+                return;
             }
+            fetchAnalytics();
         };
-        checkRole();
-        fetchAnalytics();
+        init();
     }, []);
 
     const fetchAnalytics = async () => {
@@ -51,7 +52,7 @@ export default function AnalyticsScreen({ navigation }) {
         // Fetch sales items from last 30 days by joining with sales table
         const { data: items, error } = await supabase
             .from('sale_items')
-            .select('quantity, product_id, products(*), sales!inner(created_at)')
+            .select('quantity, product_id, products(id, name, sale_price), sales!inner(created_at)')
             .gte('sales.created_at', thirtyDaysAgo.toISOString());
 
         if (error) throw error;
@@ -209,6 +210,13 @@ export default function AnalyticsScreen({ navigation }) {
                     </TouchableOpacity>
                 </View>
             </LinearGradient>
+
+            {loading && !starProduct && (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <ActivityIndicator size="large" color="#d4af37" />
+                    <Text style={{ color: '#666', marginTop: 10 }}>Analizando Imperio...</Text>
+                </View>
+            )}
 
             <ScrollView
                 style={styles.content}

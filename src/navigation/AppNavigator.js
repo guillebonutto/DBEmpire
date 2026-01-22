@@ -36,8 +36,9 @@ const Tab = createBottomTabNavigator();
 function MainTabs() {
     const insets = useSafeAreaInsets();
     const [userRole, setUserRole] = useState('seller');
-    const bottomPadding = insets.bottom > 0 ? insets.bottom : 10;
-    const tabBarHeight = Platform.OS === 'ios' ? 65 + insets.bottom : 65 + (insets.bottom > 0 ? insets.bottom / 2 : 5);
+    const isAndroid = Platform.OS === 'android';
+    const bottomPadding = insets.bottom > 0 ? insets.bottom : (isAndroid ? 15 : 10);
+    const tabBarHeight = 65 + (insets.bottom > 0 ? insets.bottom : (isAndroid ? 10 : 0));
 
     useEffect(() => {
         const getRole = async () => {
@@ -87,20 +88,24 @@ function MainTabs() {
         >
             <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
             <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
-
-            {userRole === 'admin' && (
-                <>
-                    <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
-                    <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
-                </>
-            )}
+            {userRole === 'admin' ? (
+                <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
+            ) : null}
+            {userRole === 'admin' ? (
+                <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
+            ) : null}
         </Tab.Navigator>
     );
 }
 
 export default function AppNavigator() {
     return (
-        <Stack.Navigator initialRouteName="Login">
+        <Stack.Navigator
+            initialRouteName="Login"
+            screenOptions={{
+                headerShown: false
+            }}
+        >
             <Stack.Screen
                 name="Login"
                 component={LoginScreen}

@@ -10,7 +10,9 @@ import { GeminiService } from '../services/geminiService';
 import { Linking } from 'react-native';
 
 export default function AddProductScreen({ navigation, route }) {
-    const productToEdit = route.params?.product;
+    // Wizard Mode: Detect "Product to Edit" either from params or from Queue
+    const queueItem = route.params?.importQueue ? route.params.importQueue[route.params.importIndex] : null;
+    const productToEdit = queueItem?.product || route.params?.product;
 
     const [loading, setLoading] = useState(false);
 
@@ -23,6 +25,7 @@ export default function AddProductScreen({ navigation, route }) {
             }
         };
         checkRole();
+        requestPermission(); // Warm up camera
     }, []);
     const [image, setImage] = useState(route.params?.scannedImage || null);
 
@@ -108,6 +111,52 @@ export default function AddProductScreen({ navigation, route }) {
             }
         }
     }, [route.params?.scannedBarcode, route.params?.scannedName]);
+
+    // Wizard Mode: Pre-fill from Import Queue
+    useEffect(() => {
+        if (queueItem) {
+            const { product, name, cost, quantity, provider, barcode } = queueItem;
+
+            if (product) {
+                // LINKED PRODUCT (Edit Mode with New Cost/Stock)
+                // Start with product data, override with new shipment info
+                const currentStock = parseInt(product.current_stock) || 0;
+                const newQty = parseInt(quantity) || 0;
+
+                setFormData(prev => ({
+                    ...prev,
+                    name: product.name,
+                    description: product.description || '',
+                    provider: provider || product.provider || '',
+                    cost_price: cost?.toString() || product.cost_price?.toString(), // Use NEW cost
+                    profit_margin_percent: product.profit_margin_percent?.toString() || '30',
+                    sale_price: product.sale_price?.toString() || '', // Keep old sale price initially? Or let calc update it? 
+                    // IMPORTANT: If we update cost, the "useEffect" for calc might trigger. 
+                    // We want to give the user the chance to SEE the new calculated price.
+                    current_stock: (currentStock + newQty).toString(), // PRE-FILL TOTAL NEW STOCK
+                    defect_notes: product.defect_notes || '',
+                    barcode: product.barcode || ''
+                }));
+                if (product.image_url) setImage(product.image_url);
+
+                // Calc overheads
+                setOverheadInternet(product.internet_cost?.toString() || '');
+                setOverheadElectricity(product.electricity_cost?.toString() || '');
+
+            } else {
+                // UNLINKED PRODUCT (New)
+                setFormData(prev => ({
+                    ...prev,
+                    name: name || '',
+                    cost_price: cost?.toString() || '',
+                    current_stock: quantity?.toString() || '',
+                    provider: provider || prev.provider,
+                    barcode: '',
+                    profit_margin_percent: '30'
+                }));
+            }
+        }
+    }, [route.params?.importIndex]);
 
     // Load data if editing
     useEffect(() => {
@@ -355,14 +404,14 @@ export default function AddProductScreen({ navigation, route }) {
                         .single();
                     if (insertError) throw insertError;
                     if (newProd) productId = newProd.id;
-                    
+
                     stockDifference = parseInt(formData.current_stock) || 0;
                 }
             }
 
             // --- AUTO EXPENSE & ORDER GENERATION ---
-            // Only if we added stock and have a cost
-            if (stockDifference > 0 && costPrice > 0) {
+            // Only if we added stock and have a cost, AND we are NOT in Import Wizard mode (to avoid double accounting)
+            if (stockDifference > 0 && costPrice > 0 && !route.params?.importQueue) {
                 try {
                     const expenseAmount = stockDifference * costPrice;
 
@@ -413,7 +462,7 @@ export default function AddProductScreen({ navigation, route }) {
             // --- CRM SMART MATCH ---
             // Only run if we have a valid productId (we should)
             if (productId) {
-                 const interested = await CRMService.findInterestedClients({
+                const interested = await CRMService.findInterestedClients({
                     id: productId, // Use the ID of the product we just worked on (New or Updated)
                     name: formData.name
                 });
@@ -425,9 +474,41 @@ export default function AddProductScreen({ navigation, route }) {
                     navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
                 }
             } else {
-                 navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
             }
             // ------------------------
+
+            // --- WIZARD MODE NAVIGATION ---
+            if (route.params?.importQueue && productId) {
+                const currentItem = route.params.importQueue[route.params.importIndex];
+
+                // 1. Link back to the Supplier Order Item
+                const { error: linkError } = await supabase
+                    .from('supplier_order_items')
+                    .update({ product_id: productId })
+                    .eq('id', currentItem.id);
+
+                if (linkError) console.log('Error linking product to order item:', linkError);
+
+                // 2. Determine Next Step
+                const nextIndex = route.params.importIndex + 1;
+                if (nextIndex < route.params.importQueue.length) {
+                    Alert.alert('✅ Siguiente', 'Producto registrado. Vamos con el próximo...');
+                    navigation.replace('AddProduct', {
+                        importQueue: route.params.importQueue,
+                        importIndex: nextIndex
+                    });
+                } else {
+                    Alert.alert('🎉 Importación Completa', 'Todos los productos nuevos han sido registrados e ingresados al inventario.');
+                    navigation.navigate('SupplierOrders'); // Or go back to specific screen
+                }
+            } else {
+                // Normal Exit
+                if (productId) { // Only if success
+                    navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                }
+            }
+            // ------------------------------
 
         } catch (err) {
             console.log('Error saving product:', err);
@@ -767,6 +848,9 @@ export default function AddProductScreen({ navigation, route }) {
                     <CameraView
                         style={{ flex: 1 }}
                         facing="back"
+                        barcodeScannerSettings={{
+                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
+                        }}
                         onBarcodeScanned={scanned ? undefined : async ({ data }) => {
                             setScanned(true);
                             handleChange('barcode', data);

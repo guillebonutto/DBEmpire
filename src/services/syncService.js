@@ -65,12 +65,13 @@ export const SyncService = {
                     const { error: itemsError } = await supabase.from('sale_items').insert(items);
                     if (itemsError) throw itemsError;
 
-                    // Update stock for each item
-                    for (const item of sale.items) {
+                    // Update stock for each item in parallel
+                    const stockUpdates = sale.items.map(async (item) => {
                         const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.id).single();
                         const currentStock = prod?.current_stock || 0;
-                        await supabase.from('products').update({ current_stock: currentStock - item.qty }).eq('id', item.id);
-                    }
+                        return supabase.from('products').update({ current_stock: currentStock - item.qty }).eq('id', item.id);
+                    });
+                    await Promise.all(stockUpdates);
 
                 } catch (err) {
                     console.error('Error syncing individual sale, keeping in queue:', err);

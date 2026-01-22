@@ -63,16 +63,19 @@ export default function ExpensesScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
-            const checkRole = async () => {
+            const checkAndFetch = async () => {
                 const role = await AsyncStorage.getItem('user_role');
                 if (role !== 'admin') {
                     Alert.alert('Acceso Denegado', 'Finanzas es solo para Líderes.');
                     navigation.navigate('Home');
+                    return;
                 }
+
+                if (viewMode === 'expenses') await fetchExpenses();
+                else await fetchOrders();
             };
-            checkRole();
-            if (viewMode === 'expenses') fetchExpenses();
-            else fetchOrders();
+
+            checkAndFetch();
         }, [viewMode])
     );
 
@@ -226,7 +229,7 @@ export default function ExpensesScreen({ navigation }) {
                             if (updateError) throw updateError;
 
                             Alert.alert('✅ Pago Registrado', 'Se generó el gasto y se actualizó la cuota.');
-                            fetchFeed();
+                            fetchOrders();
                         } catch (error) {
                             console.log('Error paying installment:', error);
                             Alert.alert('Error', 'No se pudo registrar el pago. Intente nuevamente.');
@@ -249,17 +252,19 @@ export default function ExpensesScreen({ navigation }) {
                 onPress: async () => {
                     setLoading(true);
                     try {
-                        // 1. Update Stock
+                        // 1. Update Stock in Parallel
                         if (order.supplier_order_items && order.supplier_order_items.length > 0) {
-                            for (const item of order.supplier_order_items) {
+                            const updatePromises = order.supplier_order_items.map(async (item) => {
                                 if (item.product_id) {
                                     const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.product_id).single();
                                     if (prod) {
                                         const newStock = (prod.current_stock || 0) + (item.quantity || 0);
-                                        await supabase.from('products').update({ current_stock: newStock }).eq('id', item.product_id);
+                                        return supabase.from('products').update({ current_stock: newStock }).eq('id', item.product_id);
                                     }
                                 }
-                            }
+                                return Promise.resolve();
+                            });
+                            await Promise.all(updatePromises);
                         }
 
                         // 2. Mark as Received
@@ -303,7 +308,7 @@ export default function ExpensesScreen({ navigation }) {
     };
 
     // --- RENDER ITEMS ---
-    const renderExpenseItem = ({ item }) => {
+    const renderExpenseItem = useCallback(({ item }) => {
         const isDiscount = item.category === 'Descuento' || item.amount < 0;
 
         return (
@@ -327,9 +332,9 @@ export default function ExpensesScreen({ navigation }) {
                 </TouchableOpacity>
             </View>
         );
-    };
+    }, []);
 
-    const renderOrderItem = ({ item }) => {
+    const renderOrderItem = useCallback(({ item }) => {
         const totalInstallments = item.installments_total || 1;
         const paidInstallments = item.installments_paid || 0;
         const effectiveTotal = (item.total_cost || 0) - (item.discount || 0);
@@ -415,7 +420,7 @@ export default function ExpensesScreen({ navigation }) {
                 </View>
             </TouchableOpacity>
         );
-    };
+    }, []);
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -447,6 +452,14 @@ export default function ExpensesScreen({ navigation }) {
                     </TouchableOpacity>
                 </View>
             </LinearGradient>
+
+            {/* LOADING OVERLAY (Optional but helpful if list is empty and loading) */}
+            {loading && expenses.length === 0 && orders.length === 0 && (
+                <View style={styles.loadingOverlay}>
+                    <ActivityIndicator size="large" color="#d4af37" />
+                    <Text style={{ color: '#666', marginTop: 10 }}>Cargando datos...</Text>
+                </View>
+            )}
 
             {/* EXPENSES VIEW */}
             {viewMode === 'expenses' && (
@@ -508,10 +521,14 @@ export default function ExpensesScreen({ navigation }) {
                         renderItem={renderExpenseItem}
                         contentContainerStyle={styles.listContent}
                         ListHeaderComponent={<Text style={styles.listTitle}>Historial Reciente</Text>}
-                        ListEmptyComponent={<Text style={styles.emptyText}>No hay gastos registrados</Text>}
+                        ListEmptyComponent={!loading ? <Text style={styles.emptyText}>No hay gastos registrados</Text> : null}
                         refreshControl={
                             <RefreshControl refreshing={loading} onRefresh={fetchExpenses} tintColor="#d4af37" colors={['#d4af37']} />
                         }
+                        initialNumToRender={10}
+                        maxToRenderPerBatch={10}
+                        windowSize={5}
+                        removeClippedSubviews={true}
                     />
                 </>
             )}
@@ -536,10 +553,14 @@ export default function ExpensesScreen({ navigation }) {
                         keyExtractor={item => item.id}
                         renderItem={renderOrderItem}
                         contentContainerStyle={styles.listContent}
-                        ListEmptyComponent={<Text style={styles.emptyText}>No hay órdenes de compra.</Text>}
+                        ListEmptyComponent={!loading ? <Text style={styles.emptyText}>No hay órdenes de compra.</Text> : null}
                         refreshControl={
                             <RefreshControl refreshing={loading} onRefresh={fetchOrders} tintColor="#d4af37" colors={['#d4af37']} />
                         }
+                        initialNumToRender={5}
+                        maxToRenderPerBatch={5}
+                        windowSize={3}
+                        removeClippedSubviews={true}
                     />
                 </>
             )}
@@ -677,5 +698,6 @@ const styles = StyleSheet.create({
     date: { color: '#666', fontSize: 12 },
 
     scanButton: { backgroundColor: '#d4af37', flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, alignItems: 'center', gap: 5 },
-    scanButtonText: { fontSize: 10, fontWeight: '900', color: '#000' }
+    scanButtonText: { fontSize: 10, fontWeight: '900', color: '#000' },
+    loadingOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }
 });

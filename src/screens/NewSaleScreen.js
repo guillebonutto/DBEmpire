@@ -63,82 +63,56 @@ export default function NewSaleScreen({ navigation, route }) {
         AsyncStorage.getItem('user_role').then(role => {
             if (role) setCurrentUserRole(role);
         });
-        fetchData();
-        fetchCommissionRate();
 
-        // Handle preselected product from Home screen barcode scan
-        if (route.params?.preselectedProduct) {
-            const product = route.params.preselectedProduct;
-            setCart(prev => {
-                const existing = prev.find(item => item.id === product.id);
-                if (existing) {
-                    return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
-                }
-                return [...prev, { ...product, qty: 1 }];
-            });
-            navigation.setParams({ preselectedProduct: null });
-        }
+        // Use requestAnimationFrame for param handling to avoid blocking transition
+        requestAnimationFrame(() => {
+            if (route.params?.preselectedProduct) {
+                const product = route.params.preselectedProduct;
+                setCart(prev => {
+                    const existing = prev.find(item => item.id === product.id);
+                    if (existing) {
+                        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+                    }
+                    return [...prev, { ...product, qty: 1 }];
+                });
+                navigation.setParams({ preselectedProduct: null });
+            }
 
-        // Handle specific mode (e.g. Presupuesto from Home)
-        if (route.params?.mode) {
-            if (route.params.mode === 'quote') setSaleType('budget');
-            navigation.setParams({ mode: null });
-        }
+            if (route.params?.mode === 'quote') {
+                setSaleType('budget');
+                navigation.setParams({ mode: null });
+            }
+        });
     }, [route.params?.preselectedProduct, route.params?.mode]);
 
-    const fetchCommissionRate = async () => {
+    const fetchInitialData = async () => {
+        setLoading(true);
         try {
-            const { data: commData } = await supabase
-                .from('settings')
-                .select('value')
-                .eq('key', 'commission_rate')
-                .single();
-
-            if (commData) {
-                setCommissionRate(parseFloat(commData.value));
-            }
-
-            // Fetch transport cost (now a fixed amount, not percentage)
-            const { data: transData } = await supabase
-                .from('settings')
-                .select('value')
-                .eq('key', 'transport_cost')
-                .single();
-
-            if (transData) {
-                setTransportCost(parseFloat(transData.value) || 0);
-            }
-        } catch (error) {
-            console.log('Using default rates:', error);
-        }
-    };
-
-    const fetchData = async () => {
-        try {
-            const productsReq = supabase.from('products').select('*').eq('active', true).order('name');
-            const clientsReq = supabase.from('clients').select('*').order('created_at', { ascending: false });
-            const promosReq = supabase
-                .from('promotions')
-                .select(`
-                    *,
-                    promotion_products (
-                        product_id
-                    )
-                `)
-                .eq('active', true)
-                .order('created_at', { ascending: false });
-
-            const [productsRes, clientsRes, promosRes] = await Promise.all([productsReq, clientsReq, promosReq]);
+            const [productsRes, clientsRes, promosRes, commRes, transRes] = await Promise.all([
+                supabase.from('products').select('*').eq('active', true).order('name'),
+                supabase.from('clients').select('*').order('created_at', { ascending: false }),
+                supabase.from('promotions').select('*, promotion_products(product_id)').eq('active', true).order('created_at', { ascending: false }),
+                supabase.from('settings').select('value').eq('key', 'commission_rate').single(),
+                supabase.from('settings').select('value').eq('key', 'transport_cost').single()
+            ]);
 
             if (productsRes.data) setProducts(productsRes.data);
             if (clientsRes.data) setClients(clientsRes.data || []);
             if (promosRes.data) setPromos(promosRes.data || []);
-        } catch (e) { console.log(e); }
+            if (commRes.data) setCommissionRate(parseFloat(commRes.data.value));
+            if (transRes.data) setTransportCost(parseFloat(transRes.data.value) || 0);
+
+        } catch (error) {
+            console.log('Error fetching initial data:', error);
+        } finally {
+            setLoading(false);
+        }
     };
 
     useFocusEffect(
         useCallback(() => {
-            fetchData();
+            fetchInitialData();
+            requestPermission();
         }, [])
     );
 
@@ -288,7 +262,7 @@ export default function NewSaleScreen({ navigation, route }) {
         return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail };
     };
 
-    const { subtotal, total, totalProfit, commission, discount, promoDetail } = calculateTotals();
+    const { subtotal, total, totalProfit, commission, discount, promoDetail } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, includeTransport, isLeaderSale, commissionRate]);
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
 
@@ -380,10 +354,12 @@ export default function NewSaleScreen({ navigation, route }) {
         }
     };
 
-    // Filter clients for search
-    const filteredClients = searchQuery.length > 0
-        ? clients.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
-        : [];
+    // Filter clients for search (Memoized for performance)
+    const filteredClients = React.useMemo(() => {
+        if (!searchQuery) return [];
+        const lowQuery = searchQuery.toLowerCase();
+        return clients.filter(c => c.name.toLowerCase().includes(lowQuery));
+    }, [searchQuery, clients]);
 
     const generateReceiptPDF = async (saleData, client, cart) => {
         try {
@@ -693,6 +669,10 @@ export default function NewSaleScreen({ navigation, route }) {
                 data={cart}
                 keyExtractor={item => item.id}
                 style={{ flex: 1 }}
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
                 contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
                 renderItem={({ item }) => (
                     <CartItem item={item} onRemove={removeFromCart} />
@@ -833,6 +813,9 @@ export default function NewSaleScreen({ navigation, route }) {
                         style={{ flex: 1 }}
                         facing="back"
                         onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                        barcodeScannerSettings={{
+                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
+                        }}
                     />
                     <TouchableOpacity
                         style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}

@@ -33,12 +33,18 @@ export default function ClientsScreen({ navigation }) {
             if (salesError) throw salesError;
 
             if (clientsData) {
-                // Calculate Totals
-                const clientMap = clientsData.map(client => {
-                    const clientSales = salesData ? salesData.filter(s => s.client_id === client.id) : [];
-                    const totalSpent = clientSales.reduce((acc, curr) => acc + (curr.total_amount || 0), 0);
-                    return { ...client, totalSpent };
-                });
+                // Optimized Calculation: Group sales by client first (O(S + C))
+                const salesByClient = (salesData || []).reduce((acc, sale) => {
+                    if (sale.client_id) {
+                        acc[sale.client_id] = (acc[sale.client_id] || 0) + (sale.total_amount || 0);
+                    }
+                    return acc;
+                }, {});
+
+                const clientMap = clientsData.map(client => ({
+                    ...client,
+                    totalSpent: salesByClient[client.id] || 0
+                }));
 
                 // Sort by Total Spent (Ranking)
                 const sortedClients = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
@@ -163,6 +169,10 @@ export default function ClientsScreen({ navigation }) {
             <FlatList
                 data={filteredClients}
                 keyExtractor={(item) => item.id.toString()}
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
                 renderItem={({ item, index }) => {
                     // Determine Rank Badge
                     let badge = null;

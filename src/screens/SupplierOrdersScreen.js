@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Linking, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
@@ -29,7 +29,10 @@ export default function SupplierOrdersScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
-            fetchOrders();
+            const init = async () => {
+                await fetchOrders();
+            };
+            init();
         }, [])
     );
 
@@ -53,10 +56,120 @@ export default function SupplierOrdersScreen({ navigation }) {
         ]);
     };
 
-    const handleStatusChange = async (item) => {
-        const newStatus = item.status === 'received' ? 'pending' : 'received';
-        await supabase.from('supplier_orders').update({ status: newStatus }).eq('id', item.id);
-        fetchOrders();
+    const handleReceiveOrder = async (order) => {
+        if (order.status === 'received') return;
+
+        Alert.alert(
+            'Recibir Mercadería',
+            '¿Confirmas que llegó este pedido? Se actualizará el inventario.',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Confirmar Recepción',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            // 1. Get Items
+                            const { data: items, error: itemsError } = await supabase
+                                .from('supplier_order_items')
+                                .select('*')
+                                .eq('supplier_order_id', order.id);
+
+                            if (itemsError) throw itemsError;
+
+                            const linkedItems = items.filter(i => i.product_id);
+                            const unlinkedItems = items.filter(i => !i.product_id);
+
+                            // 2. Separate Items (Auto-Update vs Wizard)
+                            const itemsToAutoUpdate = [];
+                            const itemsToReview = [];
+
+                            // Process Linked Items in Parallel
+                            const productCheckPromises = linkedItems.map(async (item) => {
+                                const { data: product } = await supabase
+                                    .from('products')
+                                    .select('*')
+                                    .eq('id', item.product_id)
+                                    .single();
+
+                                if (product) {
+                                    const currentCost = parseFloat(product.cost_price) || 0;
+                                    const newCost = parseFloat(item.cost_per_unit) || 0;
+
+                                    if (Math.abs(currentCost - newCost) > 0.01) {
+                                        itemsToReview.push({
+                                            id: item.id,
+                                            product: product,
+                                            cost: item.cost_per_unit,
+                                            quantity: item.quantity,
+                                            provider: order.provider_name
+                                        });
+                                    } else {
+                                        itemsToAutoUpdate.push({ item, product });
+                                    }
+                                }
+                            });
+                            await Promise.all(productCheckPromises);
+
+                            // Add Unlinked Items to Review Queue
+                            unlinkedItems.forEach(item => {
+                                itemsToReview.push({
+                                    id: item.id,
+                                    name: item.temp_product_name,
+                                    cost: item.cost_per_unit,
+                                    quantity: item.quantity,
+                                    provider: order.provider_name,
+                                    isNew: true
+                                });
+                            });
+
+                            // 3. Execute Auto-Updates in Parallel
+                            const autoUpdatePromises = itemsToAutoUpdate.map(({ item, product }) => {
+                                const newStock = (parseInt(product.current_stock) || 0) + parseInt(item.quantity);
+                                return supabase
+                                    .from('products')
+                                    .update({ current_stock: newStock })
+                                    .eq('id', item.product_id);
+                            });
+                            await Promise.all(autoUpdatePromises);
+
+                            // 4. Update Order Status
+                            await supabase
+                                .from('supplier_orders')
+                                .update({ status: 'received' })
+                                .eq('id', order.id);
+
+
+                            // 5. Navigate to Wizard if needed
+                            if (itemsToReview.length > 0) {
+                                Alert.alert(
+                                    '📦 Revisión Necesaria',
+                                    `Se detectaron ${itemsToReview.length} productos nuevos o con cambio de precio. Te guiaremos para actualizarlos.`,
+                                    [
+                                        {
+                                            text: 'Comenzar',
+                                            onPress: () => {
+                                                navigation.navigate('AddProduct', {
+                                                    importQueue: itemsToReview,
+                                                    importIndex: 0
+                                                });
+                                            }
+                                        }
+                                    ]
+                                );
+                            } else {
+                                Alert.alert('✅ Éxito', 'Inventario actualizado correctamente.');
+                                fetchOrders();
+                            }
+                        } catch (err) {
+                            Alert.alert('Error', 'Falló la recepción: ' + err.message);
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const handlePayInstallment = async (item) => {
@@ -87,7 +200,7 @@ export default function SupplierOrdersScreen({ navigation }) {
         }
     };
 
-    const renderOrderItem = ({ item }) => {
+    const renderOrderItem = useCallback(({ item }) => {
         const totalInstallments = item.installments_total || 1;
         const paidInstallments = item.installments_paid || 0;
         const effectiveTotal = (item.total_cost || 0) - (item.discount || 0);
@@ -111,6 +224,15 @@ export default function SupplierOrdersScreen({ navigation }) {
                         <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
                             <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
                         </View>
+                        {item.status === 'pending' && (
+                            <TouchableOpacity
+                                style={styles.receiveBtn}
+                                onPress={() => handleReceiveOrder(item)}
+                            >
+                                <MaterialCommunityIcons name="package-variant-closed" size={16} color="#000" />
+                                <Text style={styles.receiveBtnText}>RECIBIR</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
 
                     {/* Cost & Installments Summary */}
@@ -159,7 +281,7 @@ export default function SupplierOrdersScreen({ navigation }) {
                 </View>
             </TouchableOpacity>
         );
-    };
+    }, []);
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -175,6 +297,13 @@ export default function SupplierOrdersScreen({ navigation }) {
                 </TouchableOpacity>
             </View>
 
+            {loading && orders.length === 0 && (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <ActivityIndicator size="large" color="#d4af37" />
+                    <Text style={{ color: '#666', marginTop: 10 }}>Cargando Importaciones...</Text>
+                </View>
+            )}
+
             <FlatList
                 data={orders}
                 keyExtractor={item => item.id}
@@ -187,6 +316,10 @@ export default function SupplierOrdersScreen({ navigation }) {
                         <Text style={styles.emptyText}>No hay pedidos a proveedores.</Text>
                     </View>
                 }
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
             />
         </SafeAreaView>
     );
@@ -202,8 +335,10 @@ const styles = StyleSheet.create({
     card: { backgroundColor: '#1e1e1e', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
     cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, alignItems: 'center' },
     providerName: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-    statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 5 },
+    statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 5, marginRight: 10 },
     statusText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+    receiveBtn: { flexDirection: 'row', backgroundColor: '#2ecc71', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, alignItems: 'center' },
+    receiveBtnText: { color: '#000', fontWeight: 'bold', fontSize: 10, marginLeft: 4 },
 
     summaryContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#252525', padding: 10, borderRadius: 8, marginBottom: 15 },
     summaryLabel: { color: '#888', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 },

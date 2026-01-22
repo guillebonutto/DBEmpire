@@ -186,6 +186,10 @@ export default function ReportsScreen() {
                     data={dailyReports}
                     keyExtractor={item => item.date}
                     renderItem={renderItem}
+                    initialNumToRender={10}
+                    maxToRenderPerBatch={10}
+                    windowSize={5}
+                    removeClippedSubviews={true}
                     contentContainerStyle={styles.list}
                     ListEmptyComponent={<Text style={styles.empty}>No hay historial disponible aún.</Text>}
                 />

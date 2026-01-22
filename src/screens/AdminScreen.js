@@ -47,8 +47,45 @@ export default function AdminScreen({ navigation }) {
     const fetchData = async () => {
         setLoading(true);
         try {
-            // Fetch settings
-            const { data: settingsData } = await supabase.from('settings').select('*');
+            // 1. Prepare Date Range
+            const now = new Date();
+            let startDate, endDate;
+
+            if (dateFilter === 'day') {
+                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            } else if (dateFilter === 'week') {
+                startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            } else if (dateFilter === 'month') {
+                if (viewAllMonths) {
+                    startDate = new Date(now.getFullYear(), 0, 1);
+                    endDate = new Date(now.getFullYear(), 11, 31);
+                } else {
+                    startDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+                    endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+                }
+            } else if (dateFilter === 'year') {
+                startDate = new Date(now.getFullYear() - 4, 0, 1);
+            }
+
+            const startISO = startDate.toISOString();
+            const endISO = endDate ? endDate.toISOString() : null;
+
+            // 2. Parallel Fetch
+            const [
+                { data: settingsData },
+                salesRes,
+                expensesRes,
+                { data: histSales },
+                { data: histExp }
+            ] = await Promise.all([
+                supabase.from('settings').select('*'),
+                supabase.from('sales').select('id, created_at, total_amount, profit_generated, commission_amount, status, device_sig').gte('created_at', startISO).lte('created_at', endISO || '9999-12-31').order('created_at', { ascending: false }),
+                supabase.from('expenses').select('amount, created_at').gte('created_at', startISO).lte('created_at', endISO || '9999-12-31'),
+                supabase.from('sales').select('total_amount, status').lt('created_at', startISO),
+                supabase.from('expenses').select('amount').lt('created_at', startISO)
+            ]);
+
+            // Handle Settings
             if (settingsData) {
                 const comm = settingsData.find(s => s.key === 'commission_rate');
                 const trans = settingsData.find(s => s.key === 'transport_cost');
@@ -64,102 +101,36 @@ export default function AdminScreen({ navigation }) {
                 }
             }
 
-            // Calculate date range based on filter
-            const now = new Date();
-            let startDate, endDate;
+            let sales = salesRes.data;
+            let salesError = salesRes.error;
 
-            if (dateFilter === 'day') {
-                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Start of today 00:00
-            } else if (dateFilter === 'week') {
-                startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-            } else if (dateFilter === 'month') {
-                if (viewAllMonths) {
-                    // General View: Full Current Year
-                    startDate = new Date(now.getFullYear(), 0, 1);
-                    endDate = new Date(now.getFullYear(), 11, 31);
-                } else {
-                    // Specific Month View
-                    startDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-                    endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0); // Last day of month
-                }
-            } else if (dateFilter === 'year') {
-                // 'Year' filter now shows last 5 years
-                startDate = new Date(now.getFullYear() - 4, 0, 1);
-            }
-
-            // Fetch all sales
-            let salesQuery = supabase
-                .from('sales')
-                .select('id, created_at, total_amount, profit_generated, commission_amount, status, device_sig')
-                .gte('created_at', startDate.toISOString())
-                .order('created_at', { ascending: false });
-
-            // Apply upper limit for specific month view to strictly capture that month
-            if (dateFilter === 'month' && !viewAllMonths && endDate) {
-                salesQuery = salesQuery.lte('created_at', endDate.toISOString());
-            }
-
-            let { data: sales, error: salesError } = await salesQuery;
-
-            // Fallback for missing device_sig column
+            // Fallback for missing device_sig
             if (salesError && salesError.message.includes('device_sig')) {
-                const fallbackQuery = await supabase
-                    .from('sales')
-                    .select('id, created_at, total_amount, profit_generated, commission_amount, status')
-                    .gte('created_at', startDate.toISOString())
-                    .order('created_at', { ascending: false });
-                sales = fallbackQuery.data;
-                salesError = fallbackQuery.error;
+                const retry = await supabase.from('sales').select('id, created_at, total_amount, profit_generated, commission_amount, status').gte('created_at', startISO).lte('created_at', endISO || '9999-12-31').order('created_at', { ascending: false });
+                sales = retry.data;
+                salesError = retry.error;
             }
-
             if (salesError) throw salesError;
 
-            // Fetch expenses
-            let expensesQuery = supabase
-                .from('expenses')
-                .select('amount, created_at')
-                .gte('created_at', startDate.toISOString());
+            const expenses = expensesRes.data || [];
+            if (expensesRes.error) throw expensesRes.error;
 
-            if (dateFilter === 'month' && !viewAllMonths && endDate) {
-                expensesQuery = expensesQuery.lte('created_at', endDate.toISOString());
-            }
-
-            const { data: expenses, error: expError } = await expensesQuery;
-
-            if (expError) throw expError;
-
-            // --- ROI HISTORY CALCULATION ---
-            // Fetch total sales before this period
-            const { data: historicalSales } = await supabase
-                .from('sales')
-                .select('total_amount, status')
-                .lt('created_at', startDate.toISOString());
-
-            // Total income before this period
-            const prevIncome = (historicalSales || []).filter(s => {
+            // ROI HISTORY
+            const prevIncome = (histSales || []).filter(s => {
                 const st = (s.status || '').toLowerCase();
                 return st === 'completed' || st === 'exitosa' || st === 'vended' || st === '';
             }).reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
 
-            // Fetch total expenses before this period
-            const { data: historicalExpenses } = await supabase
-                .from('expenses')
-                .select('amount')
-                .lt('created_at', startDate.toISOString());
-
-            const prevExpenses = (historicalExpenses || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
-
+            const prevExpenses = (histExp || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
             const historicalBalance = prevIncome - prevExpenses;
-            // -------------------------------
 
-            // Fetch sale items
+            // Fetch sale items (Still separate because it depends on sales)
             let saleItems = [];
             if (sales && sales.length > 0) {
-                const saleIds = sales.map(s => s.id);
                 const { data: items } = await supabase
                     .from('sale_items')
                     .select('quantity, products(name)')
-                    .in('sale_id', saleIds);
+                    .in('sale_id', sales.map(s => s.id));
                 saleItems = items || [];
             }
 

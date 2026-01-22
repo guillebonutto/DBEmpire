@@ -62,7 +62,7 @@ export default function CatalogScreen({ navigation }) {
         }
     };
 
-    const renderItem = ({ item }) => (
+    const renderItem = React.useCallback(({ item }) => (
         <View style={styles.card}>
             <View>
                 {item.image_url ? (
@@ -85,7 +85,7 @@ export default function CatalogScreen({ navigation }) {
                 <Text style={styles.stock}>En stock: {item.current_stock}</Text>
             </View>
         </View>
-    );
+    ), []);
 
     return (
         <View style={styles.container}>
@@ -110,6 +110,10 @@ export default function CatalogScreen({ navigation }) {
                         keyExtractor={item => item.id}
                         contentContainerStyle={styles.list}
                         numColumns={2}
+                        initialNumToRender={10}
+                        maxToRenderPerBatch={10}
+                        windowSize={5}
+                        removeClippedSubviews={true}
                     />
                 )}
 

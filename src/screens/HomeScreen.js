@@ -17,6 +17,16 @@ import { Linking } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
+const MinimalModule = React.memo(({ title, icon, color, isNew, onPress }) => (
+    <TouchableOpacity style={styles.miniCard} onPress={onPress} activeOpacity={0.7}>
+        <View style={[styles.miniIcon, { backgroundColor: color + '15', borderColor: color + '40' }]}>
+            <MaterialCommunityIcons name={icon} size={24} color={color} />
+        </View>
+        <Text style={styles.miniTitle}>{title}</Text>
+        {isNew && <View style={styles.miniBadge} />}
+    </TouchableOpacity>
+));
+
 export default function HomeScreen({ navigation }) {
     const [userRole, setUserRole] = useState('seller');
     const [stats, setStats] = useState({
@@ -40,13 +50,13 @@ export default function HomeScreen({ navigation }) {
     const [scanned, setScanned] = useState(false);
 
     useEffect(() => {
-        AsyncStorage.getItem('user_role').then(role => {
+        const init = async () => {
+            const role = await AsyncStorage.getItem('user_role');
             if (role) setUserRole(role);
-        });
-        NotificationService.requestPermissions();
-
-        // Initial sync attempt
-        SyncService.syncPending();
+            NotificationService.requestPermissions();
+            SyncService.syncPending();
+        };
+        init();
 
         // Listen for reconnect
         const unsubscribe = NetInfo.addEventListener(state => {
@@ -59,6 +69,9 @@ export default function HomeScreen({ navigation }) {
             }
         });
 
+        // Pre-request camera permissions to speed up opening
+        requestPermission();
+
         return () => unsubscribe();
     }, []);
 
@@ -67,29 +80,29 @@ export default function HomeScreen({ navigation }) {
         try {
             // Get role directly to avoid race conditions with state
             const currentRole = await AsyncStorage.getItem('user_role') || 'seller';
-
             const now = new Date();
             const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
             const deviceSig = await DeviceAuthService.getDeviceSignature();
 
-            // Fetch Daily Sales (for Admin)
-            const { data: dailySalesData } = await supabase
-                .from('sales')
-                .select('total_amount, profit_generated, commission_amount, status')
-                .gte('created_at', startOfDay);
-
-            // Fetch Monthly Sales (for Seller Filter)
-            let monthlyQuery = supabase
-                .from('sales')
-                .select('total_amount, commission_amount, status, device_sig')
-                .gte('created_at', startOfMonth);
-
-            if (currentRole === 'seller' && deviceSig) {
-                monthlyQuery = monthlyQuery.eq('device_sig', deviceSig);
-            }
-            const { data: monthlySalesData } = await monthlyQuery;
+            // Parallel fetch for basic stats
+            const [
+                { data: dailySalesData },
+                { data: monthlySalesData },
+                { data: expensesData },
+                { data: budgetsData },
+                { data: lowStockData },
+                { data: settingsData }
+            ] = await Promise.all([
+                supabase.from('sales').select('total_amount, profit_generated, commission_amount, status').gte('created_at', startOfDay),
+                (currentRole === 'seller' && deviceSig)
+                    ? supabase.from('sales').select('total_amount, commission_amount, status, device_sig').gte('created_at', startOfMonth).eq('device_sig', deviceSig)
+                    : supabase.from('sales').select('total_amount, commission_amount, status, device_sig').gte('created_at', startOfMonth),
+                supabase.from('expenses').select('amount').gte('created_at', startOfDay),
+                supabase.from('sales').select('total_amount').eq('status', 'budget'),
+                supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5),
+                supabase.from('settings').select('value').eq('key', 'commission_rate').single()
+            ]);
 
             // Calculate Today's Stats
             let todaySales = 0;
@@ -119,34 +132,32 @@ export default function HomeScreen({ navigation }) {
                 });
             }
 
-            // Fetch Expenses (Today)
-            const { data: expenses } = await supabase.from('expenses').select('amount').gte('created_at', startOfDay);
-            const todayExpenses = expenses ? expenses.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
+            const todayExpenses = expensesData ? expensesData.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
+            const rate = settingsData ? parseFloat(settingsData.value) * 100 : 0;
 
-            const { data: budgets } = await supabase.from('sales').select('total_amount').eq('status', 'budget');
-            const { data: lowStock } = await supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5);
-
-            // Fetch Commission Rate for display
-            const { data: settings } = await supabase.from('settings').select('value').eq('key', 'commission_rate').single();
-            const rate = settings ? parseFloat(settings.value) * 100 : 0;
-
-            setStats({
+            const newStats = {
                 todaySales,
                 todayNetProfit: todayGrossProfit - todayCommissionsTotal - todayExpenses,
                 monthSales,
                 monthCommissions,
-                budgetSales: budgets ? budgets.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
+                budgetSales: budgetsData ? budgetsData.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
                 commissionRate: rate,
-                lowStockCount: lowStock ? lowStock.length : 0,
-                lowStockProducts: lowStock || []
-            });
+                lowStockCount: lowStockData ? lowStockData.length : 0,
+                lowStockProducts: lowStockData || []
+            };
+            setStats(newStats);
 
             // --- MISSION GENERATION (Only for Sellers) ---
             if (currentRole === 'seller') {
                 const dailyMissions = [];
 
+                // Parallel mission data fetching
+                const [inactive, { data: randomProduct }] = await Promise.all([
+                    CRMService.getInactiveClients(20),
+                    supabase.from('products').select('name').eq('active', true).limit(1).single()
+                ]);
+
                 // 1. Client Recovery Mission
-                const inactive = await CRMService.getInactiveClients(20);
                 if (inactive && inactive.length > 0) {
                     const target = inactive[0];
                     dailyMissions.push({
@@ -161,7 +172,6 @@ export default function HomeScreen({ navigation }) {
                 }
 
                 // 2. Content Mission
-                const { data: randomProduct } = await supabase.from('products').select('name').eq('active', true).limit(1).single();
                 if (randomProduct) {
                     dailyMissions.push({
                         id: 'content',
@@ -193,7 +203,7 @@ export default function HomeScreen({ navigation }) {
         }
     };
 
-    const getAICounsel = () => {
+    const getAICounsel = useCallback(() => {
         if (loading) return "Analizando panorama imperial...";
         if (userRole === 'admin') {
             if (stats.lowStockCount > 3) return "⚠️ Hay productos críticos sin reposición. El Imperio pierde ventas.";
@@ -203,7 +213,7 @@ export default function HomeScreen({ navigation }) {
             if (missions.length > 0) return `⚔️ Tienes ${missions.length} misiones pendientes. Conquista el mercado hoy.`;
             return "Buen trabajo, Aliado. Sigue alimentando el catálogo.";
         }
-    };
+    }, [loading, userRole, stats.lowStockCount, stats.budgetSales, missions.length]);
 
     const handleMissionAction = async (mission) => {
         if (mission.type === 'crm') {
@@ -269,16 +279,6 @@ export default function HomeScreen({ navigation }) {
             setScanned(false);
         }
     };
-
-    const MinimalModule = ({ title, icon, color, isNew, onPress }) => (
-        <TouchableOpacity style={styles.miniCard} onPress={onPress} activeOpacity={0.7}>
-            <View style={[styles.miniIcon, { backgroundColor: color + '15', borderColor: color + '40' }]}>
-                <MaterialCommunityIcons name={icon} size={24} color={color} />
-            </View>
-            <Text style={styles.miniTitle}>{title}</Text>
-            {isNew && <View style={styles.miniBadge} />}
-        </TouchableOpacity>
-    );
 
     const renderAIModal = () => (
         <Modal
@@ -349,7 +349,13 @@ export default function HomeScreen({ navigation }) {
     if (isScanning) {
         return (
             <View style={styles.scannerFull}>
-                <CameraView style={StyleSheet.absoluteFillObject} onBarcodeScanned={scanned ? undefined : handleBarcodeScanned} />
+                <CameraView
+                    style={StyleSheet.absoluteFillObject}
+                    onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                    barcodeScannerSettings={{
+                        barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
+                    }}
+                />
                 <TouchableOpacity style={styles.closeBtn} onPress={() => setIsScanning(false)}>
                     <MaterialCommunityIcons name="close-circle" size={50} color="#fff" />
                 </TouchableOpacity>
@@ -363,7 +369,7 @@ export default function HomeScreen({ navigation }) {
             <LinearGradient colors={['#000', '#121212']} style={styles.background} />
             {renderAIModal()}
 
-            <SafeAreaView style={styles.safe}>
+            <SafeAreaView style={styles.safe} edges={['top']}>
                 <View style={styles.header}>
                     <View>
                         <Text style={styles.brandName}>EMPIRE 👑</Text>
@@ -481,7 +487,7 @@ const styles = StyleSheet.create({
     brandName: { color: '#d4af37', fontSize: 22, fontWeight: '900', letterSpacing: 2 },
     headerRole: { color: '#666', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginTop: 2 },
 
-    scroll: { paddingBottom: 120 },
+    scroll: { paddingBottom: 0 },
 
     insightBox: { marginHorizontal: 25, flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 12, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#1a1a1a', overflow: 'hidden' },
     insightGrad: { ...StyleSheet.absoluteFillObject },

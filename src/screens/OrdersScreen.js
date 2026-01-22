@@ -75,7 +75,7 @@ export default function OrdersScreen({ navigation }) {
         );
     };
 
-    const renderOrderItem = ({ item }) => (
+    const renderOrderItem = useCallback(({ item }) => (
         <View style={styles.card}>
             <View style={styles.cardHeader}>
                 <View>
@@ -111,7 +111,7 @@ export default function OrdersScreen({ navigation }) {
                 </TouchableOpacity>
             </View>
         </View>
-    );
+    ), []);
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -139,6 +139,10 @@ export default function OrdersScreen({ navigation }) {
                         <Text style={styles.emptyText}>No hay pedidos pendientes.</Text>
                     </View>
                 }
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
             />
         </SafeAreaView>
     );

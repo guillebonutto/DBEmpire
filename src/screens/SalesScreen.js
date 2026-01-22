@@ -227,6 +227,10 @@ export default function SalesScreen({ navigation }) {
             <FlatList
                 data={recentSales}
                 keyExtractor={item => item.id}
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
                 renderItem={renderSaleItem}
                 contentContainerStyle={styles.list}
                 refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchSalesData} />}

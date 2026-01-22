@@ -29,7 +29,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
     // Product Linking State
     const [products, setProducts] = useState([]);
-    const [selectedProducts, setSelectedProducts] = useState([]); // { product, quantity, cost }
+    const [selectedProducts, setSelectedProducts] = useState([]); // { product, quantity, cost, isNew, tempName }
     const [showProductModal, setShowProductModal] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -55,15 +55,30 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const loadLinkedItems = async (orderId) => {
         const { data, error } = await supabase
             .from('supplier_order_items')
-            .select('product_id, quantity, cost_per_unit, products(id, name, current_stock)')
+            .select('product_id, quantity, cost_per_unit, temp_product_name, products(id, name, current_stock)')
             .eq('supplier_order_id', orderId);
 
         if (data) {
-            const formatted = data.map(item => ({
-                product: item.products,
-                quantity: item.quantity.toString(),
-                cost: item.cost_per_unit.toString()
-            }));
+            const formatted = data.map(item => {
+                if (item.products) {
+                    // Linked Product
+                    return {
+                        product: item.products,
+                        quantity: item.quantity.toString(),
+                        cost: item.cost_per_unit.toString(),
+                        isNew: false
+                    };
+                } else {
+                    // Unlinked Product (New)
+                    return {
+                        product: { id: null, name: item.temp_product_name },
+                        quantity: item.quantity.toString(),
+                        cost: item.cost_per_unit.toString(),
+                        isNew: true,
+                        tempName: item.temp_product_name
+                    };
+                }
+            });
             setSelectedProducts(formatted);
         }
     };
@@ -73,7 +88,45 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
         if (data) setProducts(data);
     };
 
-    // ... (rest of helper functions addProductToOrder, etc. - unchanged)
+    // Auto-calculate Total Cost based on Products
+    useEffect(() => {
+        const total = selectedProducts.reduce((sum, item) => {
+            const qty = parseFloat(item.quantity) || 0;
+            const unitCost = parseFloat(item.cost) || 0;
+            return sum + (qty * unitCost);
+        }, 0);
+        setCost(total > 0 ? total.toFixed(2) : '');
+    }, [selectedProducts]);
+
+    const addProductToOrder = (product, isNew = false, tempName = '') => {
+        const newProduct = isNew
+            ? { product: { id: null, name: tempName }, quantity: '1', cost: '0', isNew: true, tempName }
+            : { product, quantity: '1', cost: product.cost_price?.toString() || '0', isNew: false };
+
+        setSelectedProducts([...selectedProducts, newProduct]);
+        setShowProductModal(false);
+        setSearchQuery('');
+    };
+
+    const updateProductItem = (id, field, value) => {
+        // Handle both linked (id) and unlinked (tempName)
+        // We use a unique key approach or find index
+        const updated = selectedProducts.map(p => {
+            const pId = p.product.id || p.tempName;
+            const targetId = id; // id passed is either product.id or tempName
+
+            if (pId === targetId) {
+                return { ...p, [field]: value };
+            }
+            return p;
+        });
+        setSelectedProducts(updated);
+    };
+
+    const removeProductItem = (id) => {
+        const filtered = selectedProducts.filter(p => (p.product.id || p.tempName) !== id);
+        setSelectedProducts(filtered);
+    };
 
     const handleSave = async () => {
         if (!provider) {
@@ -135,7 +188,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             if (selectedProducts.length > 0 && orderId) {
                 const itemsPayload = selectedProducts.map(p => ({
                     supplier_order_id: orderId,
-                    product_id: p.product.id,
+                    product_id: p.isNew ? null : p.product.id,
+                    temp_product_name: p.isNew ? p.tempName : null,
                     quantity: parseInt(p.quantity) || 1,
                     cost_per_unit: parseFloat(p.cost) || 0
                 }));
@@ -202,7 +256,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                                 placeholderTextColor="#666"
                                 keyboardType="numeric"
                                 value={item.quantity}
-                                onChangeText={v => updateProductItem(item.product.id, 'quantity', v)}
+                                onChangeText={v => updateProductItem(item.product.id || item.tempName, 'quantity', v)}
                             />
                             <TextInput
                                 style={[styles.miniInput, { width: 80 }]}
@@ -210,9 +264,9 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                                 placeholderTextColor="#666"
                                 keyboardType="numeric"
                                 value={item.cost}
-                                onChangeText={v => updateProductItem(item.product.id, 'cost', v)}
+                                onChangeText={v => updateProductItem(item.product.id || item.tempName, 'cost', v)}
                             />
-                            <TouchableOpacity onPress={() => removeProductItem(item.product.id)} style={{ justifyContent: 'center' }}>
+                            <TouchableOpacity onPress={() => removeProductItem(item.product.id || item.tempName)} style={{ justifyContent: 'center' }}>
                                 <MaterialCommunityIcons name="close-circle" size={24} color="#e74c3c" />
                             </TouchableOpacity>
                         </View>
@@ -221,7 +275,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
                 <TouchableOpacity style={styles.addProdBtn} onPress={() => setShowProductModal(true)}>
                     <MaterialCommunityIcons name="plus" size={20} color="#000" />
-                    <Text style={styles.addProdText}>AGREGAR PRODUCTO DE INVENTARIO</Text>
+                    <Text style={styles.addProdText}>AGREGAR PRODUCTO / ITEM</Text>
                 </TouchableOpacity>
 
                 <Text style={styles.label}>Descripción Adicional / Notas</Text>
@@ -322,6 +376,15 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                                     <Text style={styles.modalItemSub}>Stock: {p.current_stock}</Text>
                                 </TouchableOpacity>
                             ))}
+                            {searchQuery.length > 0 && (
+                                <TouchableOpacity
+                                    style={[styles.modalItem, { borderTopWidth: 2, borderTopColor: '#d4af37' }]}
+                                    onPress={() => addProductToOrder(null, true, searchQuery)}
+                                >
+                                    <Text style={[styles.modalItemText, { color: '#d4af37' }]}>+ AGREGAR COMO NUEVO: "{searchQuery}"</Text>
+                                    <Text style={styles.modalItemSub}>Producto no registrado en inventario</Text>
+                                </TouchableOpacity>
+                            )}
                         </ScrollView>
                         <TouchableOpacity style={styles.closeModal} onPress={() => setShowProductModal(false)}>
                             <Text style={styles.closeText}>CERRAR</Text>

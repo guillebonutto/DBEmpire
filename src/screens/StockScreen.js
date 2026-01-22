@@ -12,22 +12,21 @@ import * as Sharing from 'expo-sharing';
 import { logoBase64 } from '../assets/logoBase64';
 
 export default function StockScreen({ navigation, route }) {
+    const [userRole, setUserRole] = useState('seller');
     const [products, setProducts] = useState([]);
     const [filteredProducts, setFilteredProducts] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
     const [isFastMode, setIsFastMode] = useState(false);
-
     useEffect(() => {
-        const checkRole = async () => {
+        const getRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
-                Alert.alert('Acceso Denegado', 'El inventario solo es accesible para Líderes.');
-                navigation.replace('Main');
-            }
+            if (role) setUserRole(role);
         };
-        checkRole();
+        getRole();
+        // Warm up permissions
+        requestPermission();
     }, []);
 
     // Scanner
@@ -146,23 +145,20 @@ export default function StockScreen({ navigation, route }) {
         );
     };
 
-    useEffect(() => {
-        if (searchQuery) {
-            const filtered = products.filter(p =>
-                p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                (p.provider && p.provider.toLowerCase().includes(searchQuery.toLowerCase())) ||
-                (p.barcode && String(p.barcode).includes(searchQuery))
-            );
-            setFilteredProducts(filtered);
-        } else {
-            setFilteredProducts(products);
-        }
+    const filteredProductsList = React.useMemo(() => {
+        if (!searchQuery) return products;
+        const lowQuery = searchQuery.toLowerCase();
+        return products.filter(p =>
+            p.name.toLowerCase().includes(lowQuery) ||
+            (p.provider && p.provider.toLowerCase().includes(lowQuery)) ||
+            (p.barcode && String(p.barcode).includes(searchQuery))
+        );
     }, [searchQuery, products]);
 
     useFocusEffect(
         useCallback(() => {
             fetchProducts();
-        }, [route.params?.refresh, showHiddenStock])
+        }, [showHiddenStock])
     );
 
     const renderProductItem = ({ item }) => {
@@ -174,8 +170,12 @@ export default function StockScreen({ navigation, route }) {
         return (
             <TouchableOpacity
                 style={styles.productCard}
-                onPress={() => navigation.navigate('AddProduct', { product: item })}
-                activeOpacity={0.7}
+                onPress={() => {
+                    if (userRole === 'admin') {
+                        navigation.navigate('AddProduct', { product: item });
+                    }
+                }}
+                activeOpacity={userRole === 'admin' ? 0.7 : 1}
             >
                 <LinearGradient colors={['#1a1a1a', '#0d0d0d']} style={styles.cardInner}>
                     <View style={styles.imageWrapper}>
@@ -186,12 +186,14 @@ export default function StockScreen({ navigation, route }) {
                                 <MaterialCommunityIcons name="image-off-outline" size={24} color="#333" />
                             </View>
                         )}
-                        <TouchableOpacity
-                            style={styles.deleteBadge}
-                            onPress={() => handleDelete(item)}
-                        >
-                            <MaterialCommunityIcons name="delete-outline" size={14} color="#e74c3c" />
-                        </TouchableOpacity>
+                        {userRole === 'admin' && (
+                            <TouchableOpacity
+                                style={styles.deleteBadge}
+                                onPress={() => handleDelete(item)}
+                            >
+                                <MaterialCommunityIcons name="delete-outline" size={14} color="#e74c3c" />
+                            </TouchableOpacity>
+                        )}
                         <View style={[styles.stockGlow, { backgroundColor: stockColor + '20', borderColor: stockColor + '60' }]}>
                             <Text style={[styles.stockText, { color: stockColor }]}>{stock}</Text>
                         </View>
@@ -389,36 +391,40 @@ export default function StockScreen({ navigation, route }) {
                     <Text style={styles.title}>INVENTARIO</Text>
                 </View>
                 <View style={styles.headerActions}>
-                    <TouchableOpacity
-                        style={[styles.headerBtn, isFastMode && { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }]}
-                        onPress={() => setIsFastMode(!isFastMode)}
-                    >
-                        <MaterialCommunityIcons name="lightning-bolt" size={22} color={isFastMode ? "#2ecc71" : "#666"} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.headerBtn, showHiddenStock && styles.headerBtnActive]}
-                        onPress={() => setShowHiddenStock(!showHiddenStock)}
-                    >
-                        <MaterialCommunityIcons name={showHiddenStock ? "eye" : "eye-off"} size={22} color={showHiddenStock ? "#d4af37" : "#666"} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={styles.headerBtn}
-                        onPress={() => navigation.navigate('BulkAdjustment')}
-                    >
-                        <MaterialCommunityIcons name="calculator" size={22} color="#d4af37" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={styles.headerBtn}
-                        onPress={exportToPDF}
-                    >
-                        <MaterialCommunityIcons name="file-pdf-box" size={22} color="#d4af37" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={styles.headerBtn}
-                        onPress={generateQRLabels}
-                    >
-                        <MaterialCommunityIcons name="qrcode-scan" size={22} color="#d4af37" />
-                    </TouchableOpacity>
+                    {userRole === 'admin' && (
+                        <>
+                            <TouchableOpacity
+                                style={[styles.headerBtn, isFastMode && { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }]}
+                                onPress={() => setIsFastMode(!isFastMode)}
+                            >
+                                <MaterialCommunityIcons name="lightning-bolt" size={22} color={isFastMode ? "#2ecc71" : "#666"} />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.headerBtn, showHiddenStock && styles.headerBtnActive]}
+                                onPress={() => setShowHiddenStock(!showHiddenStock)}
+                            >
+                                <MaterialCommunityIcons name={showHiddenStock ? "eye" : "eye-off"} size={22} color={showHiddenStock ? "#d4af37" : "#666"} />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.headerBtn}
+                                onPress={() => navigation.navigate('BulkAdjustment')}
+                            >
+                                <MaterialCommunityIcons name="calculator" size={22} color="#d4af37" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.headerBtn}
+                                onPress={exportToPDF}
+                            >
+                                <MaterialCommunityIcons name="file-pdf-box" size={22} color="#d4af37" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.headerBtn}
+                                onPress={generateQRLabels}
+                            >
+                                <MaterialCommunityIcons name="qrcode-scan" size={22} color="#d4af37" />
+                            </TouchableOpacity>
+                        </>
+                    )}
                 </View>
             </View>
 
@@ -450,20 +456,26 @@ export default function StockScreen({ navigation, route }) {
                     </TouchableOpacity>
                 </View>
 
-                <TouchableOpacity
-                    style={styles.addButton}
-                    onPress={() => navigation.navigate('AddProduct')}
-                >
-                    <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
-                        <MaterialCommunityIcons name="plus" size={28} color="#000" />
-                    </LinearGradient>
-                </TouchableOpacity>
+                {userRole === 'admin' && (
+                    <TouchableOpacity
+                        style={styles.addButton}
+                        onPress={() => navigation.navigate('AddProduct')}
+                    >
+                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
+                            <MaterialCommunityIcons name="plus" size={28} color="#000" />
+                        </LinearGradient>
+                    </TouchableOpacity>
+                )}
             </View>
 
             <FlatList
-                data={filteredProducts}
+                data={filteredProductsList}
                 keyExtractor={(item) => item.id}
                 renderItem={renderProductItem}
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
                 contentContainerStyle={styles.listContent}
                 refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchProducts} tintColor="#d4af37" />}
                 ListEmptyComponent={
@@ -480,6 +492,9 @@ export default function StockScreen({ navigation, route }) {
                         style={{ flex: 1 }}
                         facing="back"
                         onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                        barcodeScannerSettings={{
+                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
+                        }}
                     />
                     <TouchableOpacity
                         style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}

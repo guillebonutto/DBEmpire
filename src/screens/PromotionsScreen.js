@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Modal, ActivityIndicator, StatusBar, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Modal, ActivityIndicator, StatusBar, ScrollView, Alert } from 'react-native';
 import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -265,6 +265,10 @@ export default function PromotionsScreen({ navigation }) {
                     </TouchableOpacity>
                 )}
                 ListEmptyComponent={<Text style={styles.empty}>No hay promociones activas.</Text>}
+                initialNumToRender={5}
+                maxToRenderPerBatch={5}
+                windowSize={3}
+                removeClippedSubviews={true}
             />
 
             <TouchableOpacity style={styles.fab} onPress={() => { resetForm(); setModalVisible(true); }}>
