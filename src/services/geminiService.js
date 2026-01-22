@@ -99,5 +99,15 @@ export const GeminiService = {
 
     handleGeneralRequest: async (prompt, imageBase64 = null) => {
         return handleGeminiRequest(prompt, imageBase64);
+    },
+
+    generateProductMarketing: async (productName, salePrice) => {
+        const prompt = `Genera un copy publicitario irresistible para WhatsApp e Instagram para este producto: "${productName}". 
+        Precio: $${salePrice}. 
+        Destaca que es de "Digital Boost Empire" (el imperio de la tecnología). 
+        Usa emojis, frases cortas de alto impacto y un llamado a la acción fuerte (CTA). 
+        No incluyas etiquetas técnicas aburridas, enfócate en el deseo de tenerlo.`;
+
+        return handleGeminiRequest(prompt);
     }
 };

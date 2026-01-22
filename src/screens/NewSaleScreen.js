@@ -543,6 +543,39 @@ export default function NewSaleScreen({ navigation, route }) {
                 try {
                     const lowStockProducts = [];
                     for (const item of cart) {
+                        // --- BUNDLE STOCK DEDUCTION LOGIC ---
+                        if (item.description?.startsWith('[[BUNDLE:')) {
+                            try {
+                                const parts = item.description.split(']]');
+                                const jsonStr = parts[0].replace('[[BUNDLE:', '');
+                                const bundleData = JSON.parse(jsonStr);
+
+                                // Deduct each item in the bundle
+                                for (const bundleItem of bundleData.items) {
+                                    const { data: childProd } = await supabase
+                                        .from('products')
+                                        .select('current_stock, name')
+                                        .eq('id', bundleItem.id)
+                                        .single();
+
+                                    if (childProd) {
+                                        const childrenToDeduct = bundleItem.qty * item.qty;
+                                        const newChildStock = (childProd.current_stock || 0) - childrenToDeduct;
+                                        await supabase.from('products').update({ current_stock: newChildStock }).eq('id', bundleItem.id);
+
+                                        if (newChildStock <= 5) {
+                                            if (!lowStockProducts.find(p => p.name === childProd.name)) {
+                                                lowStockProducts.push({ name: childProd.name, stock: newChildStock });
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                console.log('Bundle deduction error:', e);
+                            }
+                        }
+                        // -------------------------------------
+
                         const newStock = (item.current_stock || 0) - item.qty;
                         await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
 

@@ -36,9 +36,31 @@ export default function SupplierOrdersScreen({ navigation }) {
         }, [])
     );
 
-    const handleTrack = (trackingNumber) => {
-        if (!trackingNumber) return;
-        const url = `https://t.17track.net/en#nums=${trackingNumber}`;
+    const handleTrack = (order) => {
+        const tracking = order.tracking_number;
+        const provider = (order.provider_name || '').toLowerCase();
+        const courier = (order.notes || '').toLowerCase();
+
+        if (!tracking) {
+            Alert.alert('Sin Seguimiento', 'Este pedido no tiene un número de seguimiento asociado.');
+            return;
+        }
+
+        let url;
+        if (provider.includes('temu')) {
+            if (courier.includes('oca')) {
+                url = `https://www.oca.com.ar/Seguimiento/BuscarEnvio/paquetes/${tracking.trim()}`;
+            } else if (courier.includes('andreani')) {
+                url = `https://seguimiento.andreani.com/envio/${tracking.trim()}`;
+            } else if (courier.includes('via cargo')) {
+                url = `https://www.viacargo.com.ar/tracking`;
+            } else {
+                url = 'https://postal.ninja/es/p/tracking/temu';
+            }
+        } else {
+            url = 'https://parcelsapp.com/es/shops/aliexpress';
+        }
+
         Linking.openURL(url);
     };
 
@@ -221,19 +243,40 @@ export default function SupplierOrdersScreen({ navigation }) {
                                 <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
                             </View>
                         </View>
-                        <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
-                            <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
+                                <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
+                            </View>
+                            {item.status === 'pending' && (
+                                <TouchableOpacity
+                                    style={styles.receiveBtn}
+                                    onPress={() => handleReceiveOrder(item)}
+                                >
+                                    <MaterialCommunityIcons name="package-variant-closed" size={16} color="#000" />
+                                    <Text style={styles.receiveBtnText}>RECIBIR</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
-                        {item.status === 'pending' && (
-                            <TouchableOpacity
-                                style={styles.receiveBtn}
-                                onPress={() => handleReceiveOrder(item)}
-                            >
-                                <MaterialCommunityIcons name="package-variant-closed" size={16} color="#000" />
-                                <Text style={styles.receiveBtnText}>RECIBIR</Text>
-                            </TouchableOpacity>
-                        )}
                     </View>
+
+                    {/* Tracking Info Row (Always visible for pending) */}
+                    {item.status !== 'received' && (
+                        <View style={styles.trackingRow}>
+                            <MaterialCommunityIcons name="truck-delivery" size={20} color={item.tracking_number ? "#d4af37" : "#444"} />
+                            <View style={{ flex: 1, marginLeft: 10 }}>
+                                <Text style={styles.trackingLabel}>NRO. SEGUIMIENTO</Text>
+                                <Text style={[styles.trackingNumber, !item.tracking_number && { color: '#444' }]}>
+                                    {item.tracking_number || 'Sin asignar'}
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                style={[styles.trackBtnFixed, !item.tracking_number && styles.trackBtnDisabled]}
+                                onPress={() => handleTrack(item)}
+                            >
+                                <Text style={styles.trackBtnTextFixed}>RASTREAR</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
 
                     {/* Cost & Installments Summary */}
                     <View style={styles.summaryContainer}>
@@ -279,7 +322,7 @@ export default function SupplierOrdersScreen({ navigation }) {
                         </TouchableOpacity>
                     )}
                 </View>
-            </TouchableOpacity>
+            </TouchableOpacity >
         );
     }, []);
 
@@ -339,6 +382,22 @@ const styles = StyleSheet.create({
     statusText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
     receiveBtn: { flexDirection: 'row', backgroundColor: '#2ecc71', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, alignItems: 'center' },
     receiveBtnText: { color: '#000', fontWeight: 'bold', fontSize: 10, marginLeft: 4 },
+    trackBtnFixed: { backgroundColor: '#d4af37', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
+    trackBtnDisabled: { backgroundColor: '#333' },
+    trackBtnTextFixed: { color: '#000', fontSize: 11, fontWeight: '900' },
+
+    trackingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#151515',
+        padding: 12,
+        borderRadius: 10,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: '#222'
+    },
+    trackingLabel: { color: '#666', fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
+    trackingNumber: { color: '#d4af37', fontSize: 13, fontWeight: 'bold' },
 
     summaryContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#252525', padding: 10, borderRadius: 8, marginBottom: 15 },
     summaryLabel: { color: '#888', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 },

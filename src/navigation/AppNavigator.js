@@ -29,6 +29,7 @@ import BulkAdjustmentScreen from '../screens/BulkAdjustmentScreen';
 import AnalyticsScreen from '../screens/AnalyticsScreen';
 import IncidentsScreen from '../screens/IncidentsScreen';
 import AssetsScreen from '../screens/AssetsScreen';
+import RestockAdvisorScreen from '../screens/RestockAdvisorScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -199,6 +200,11 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="Assets"
                 component={AssetsScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="RestockAdvisor"
+                component={RestockAdvisorScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

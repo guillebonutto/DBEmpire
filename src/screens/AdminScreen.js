@@ -492,8 +492,14 @@ export default function AdminScreen({ navigation }) {
                         <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={styles.expenseBtn}>
                             <MaterialCommunityIcons name="cash-minus" size={24} color="#d4af37" />
                         </TouchableOpacity>
+                        <TouchableOpacity onPress={() => navigation.navigate('SupplierOrders')} style={styles.expenseBtn}>
+                            <MaterialCommunityIcons name="cube-send" size={24} color="#d4af37" />
+                        </TouchableOpacity>
                         <TouchableOpacity onPress={() => navigation.navigate('Analytics')} style={styles.expenseBtn}>
                             <MaterialCommunityIcons name="google-analytics" size={24} color="#d4af37" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => navigation.navigate('RestockAdvisor')} style={styles.expenseBtn}>
+                            <MaterialCommunityIcons name="truck-delivery" size={24} color="#d4af37" />
                         </TouchableOpacity>
                     </View>
                 </View>

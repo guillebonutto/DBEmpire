@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { logoBase64 } from '../assets/logoBase64';
+import { GeminiService } from '../services/geminiService';
 
 export default function StockScreen({ navigation, route }) {
     const [userRole, setUserRole] = useState('seller');
@@ -19,6 +20,12 @@ export default function StockScreen({ navigation, route }) {
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
     const [isFastMode, setIsFastMode] = useState(false);
+
+    // Marketing Assistant State
+    const [marketingModalVisible, setMarketingModalVisible] = useState(false);
+    const [selectedProductForMarketing, setSelectedProductForMarketing] = useState(null);
+    const [marketingCopy, setMarketingCopy] = useState('');
+    const [loadingMarketing, setLoadingMarketing] = useState(false);
     useEffect(() => {
         const getRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
@@ -72,6 +79,37 @@ export default function StockScreen({ navigation, route }) {
             Alert.alert("No encontrado", `No se encontró producto con código: ${data}`);
             setIsScanning(false);
         }
+    };
+
+    const handleGenerateMarketing = async (product) => {
+        setSelectedProductForMarketing(product);
+        setMarketingModalVisible(true);
+        setLoadingMarketing(true);
+        setMarketingCopy('');
+        try {
+            const copy = await GeminiService.generateProductMarketing(product.name, product.sale_price);
+            setMarketingCopy(copy);
+        } catch (error) {
+            Alert.alert('Error IA', 'No se pudo generar el texto publicitario.');
+            setMarketingModalVisible(false);
+        } finally {
+            setLoadingMarketing(false);
+        }
+    };
+
+    const handleShareMarketing = async () => {
+        try {
+            await Share.share({
+                message: marketingCopy,
+            });
+        } catch (error) {
+            console.log(error);
+        }
+    };
+
+    const handleCopyMarketing = () => {
+        Clipboard.setString(marketingCopy);
+        Alert.alert('Copiado', 'Texto copiado al portapapeles.');
     };
 
     const fetchProducts = async () => {
@@ -216,6 +254,16 @@ export default function StockScreen({ navigation, route }) {
                             </View>
                         </View>
                     </View>
+
+                    {/* Marketing Action Button */}
+                    <TouchableOpacity
+                        style={styles.marketingBtn}
+                        onPress={() => handleGenerateMarketing(item)}
+                    >
+                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.marketingIconBg}>
+                            <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
+                        </LinearGradient>
+                    </TouchableOpacity>
                 </LinearGradient>
             </TouchableOpacity>
         );
@@ -507,6 +555,53 @@ export default function StockScreen({ navigation, route }) {
                     </View>
                 </View>
             </Modal>
+            <Modal
+                visible={marketingModalVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setMarketingModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.marketingModalContent}>
+                        <View style={styles.marketingHeader}>
+                            <MaterialCommunityIcons name="robot" size={32} color="#d4af37" />
+                            <View style={{ marginLeft: 15, flex: 1 }}>
+                                <Text style={styles.marketingTitle}>AI MARKETING ASSISTANT</Text>
+                                <Text style={styles.marketingSubtitle}>{selectedProductForMarketing?.name}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setMarketingModalVisible(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.marketingBody}>
+                            {loadingMarketing ? (
+                                <View style={styles.loadingBox}>
+                                    <ActivityIndicator size="large" color="#d4af37" />
+                                    <Text style={styles.loadingText}>Generando copy irresistible...</Text>
+                                </View>
+                            ) : (
+                                <ScrollView style={styles.copyContainer} showsVerticalScrollIndicator={false}>
+                                    <Text style={styles.copyText}>{marketingCopy}</Text>
+                                </ScrollView>
+                            )}
+                        </View>
+
+                        {!loadingMarketing && (
+                            <View style={styles.marketingFooter}>
+                                <TouchableOpacity style={styles.copyBtn} onPress={handleCopyMarketing}>
+                                    <MaterialCommunityIcons name="content-copy" size={20} color="#fff" />
+                                    <Text style={styles.actionBtnText}>COPIAR</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.shareBtn} onPress={handleShareMarketing}>
+                                    <MaterialCommunityIcons name="whatsapp" size={24} color="#000" />
+                                    <Text style={[styles.actionBtnText, { color: '#000' }]}>COMPARTIR ESTADO</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -557,4 +652,23 @@ const styles = StyleSheet.create({
     emptyContainer: { alignItems: 'center', marginTop: 100 },
     emptyText: { fontSize: 18, color: '#444', fontWeight: '900', letterSpacing: 1 },
     emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' },
+
+    marketingBtn: { position: 'absolute', right: 12, bottom: 12, zIndex: 5 },
+    marketingIconBg: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.5, elevation: 5 },
+
+    // Marketing Modal Styles
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },
+    marketingModalContent: { backgroundColor: '#111', borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#333', maxHeight: '80%' },
+    marketingHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+    marketingTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+    marketingSubtitle: { color: '#888', fontSize: 13, fontWeight: '600', marginTop: 2 },
+    marketingBody: { marginVertical: 10, minHeight: 150 },
+    loadingBox: { height: 150, justifyContent: 'center', alignItems: 'center' },
+    loadingText: { color: '#d4af37', marginTop: 15, fontWeight: 'bold' },
+    copyContainer: { backgroundColor: '#0a0a0a', padding: 20, borderRadius: 15, borderWidth: 1, borderColor: '#222' },
+    copyText: { color: '#ccc', fontSize: 15, lineHeight: 22, fontWeight: '600' },
+    marketingFooter: { flexDirection: 'row', gap: 10, marginTop: 20 },
+    copyBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#222', padding: 15, borderRadius: 12, gap: 8 },
+    shareBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d4af37', padding: 15, borderRadius: 12, gap: 10 },
+    actionBtnText: { color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 0.5 },
 });

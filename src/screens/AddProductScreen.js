@@ -34,6 +34,13 @@ export default function AddProductScreen({ navigation, route }) {
     const [isScanning, setIsScanning] = useState(false);
     const [scanned, setScanned] = useState(false);
 
+    // Bundle / Combo State
+    const [isBundle, setIsBundle] = useState(false);
+    const [bundleItems, setBundleItems] = useState([]);
+    const [allProducts, setAllProducts] = useState([]);
+    const [showBundlePicker, setShowBundlePicker] = useState(false);
+    const [searchProd, setSearchProd] = useState('');
+
     // Overhead State
     const [overheadInternet, setOverheadInternet] = useState('');
     const [overheadElectricity, setOverheadElectricity] = useState('');
@@ -111,6 +118,54 @@ export default function AddProductScreen({ navigation, route }) {
             }
         }
     }, [route.params?.scannedBarcode, route.params?.scannedName]);
+
+    useEffect(() => {
+        if (productToEdit) {
+            if (productToEdit.description?.startsWith('[[BUNDLE:')) {
+                try {
+                    const parts = productToEdit.description.split(']]');
+                    const jsonStr = parts[0].replace('[[BUNDLE:', '');
+                    const data = JSON.parse(jsonStr);
+                    setBundleItems(data.items || []);
+                    setIsBundle(true);
+
+                    // Clean description for the form (removing the tag)
+                    setFormData(prev => ({ ...prev, description: parts.slice(1).join(']]').trim() }));
+                } catch (e) {
+                    console.log('Error parsing bundle:', e);
+                }
+            }
+        }
+    }, [productToEdit]);
+
+    const fetchAllProducts = async () => {
+        const { data } = await supabase.from('products').select('id, name, sale_price').eq('active', true).order('name');
+        setAllProducts(data || []);
+    };
+
+    useEffect(() => {
+        if (isBundle && allProducts.length === 0) {
+            fetchAllProducts();
+        }
+    }, [isBundle]);
+
+    const toggleBundleItem = (prod) => {
+        setBundleItems(prev => {
+            const exists = prev.find(i => i.id === prod.id);
+            if (exists) return prev.filter(i => i.id !== prod.id);
+            return [...prev, { id: prod.id, name: prod.name, qty: 1 }];
+        });
+    };
+
+    const updateBundleItemQty = (id, delta) => {
+        setBundleItems(prev => prev.map(item => {
+            if (item.id === id) {
+                const newQty = item.qty + delta;
+                return { ...item, qty: newQty < 1 ? 1 : newQty };
+            }
+            return item;
+        }));
+    };
 
     // Wizard Mode: Pre-fill from Import Queue
     useEffect(() => {
@@ -316,8 +371,15 @@ export default function AddProductScreen({ navigation, route }) {
             }
 
             // Common Payload Data
+            let finalDescription = formData.description;
+            if (isBundle && bundleItems.length > 0) {
+                // Remove existing bundle tags if any (prevent nesting)
+                const cleanDesc = formData.description.replace(/^\[\[BUNDLE:.*?\]\]/s, '').trim();
+                finalDescription = `[[BUNDLE:${JSON.stringify({ items: bundleItems })}]] ${cleanDesc}`;
+            }
+
             const basePayload = {
-                description: formData.description,
+                description: finalDescription,
                 provider: formData.provider,
                 cost_price: parseFloat(formData.cost_price) || 0,
                 profit_margin_percent: parseFloat(formData.profit_margin_percent) || 0,
@@ -810,6 +872,50 @@ export default function AddProductScreen({ navigation, route }) {
                 </View>
             </View>
 
+            {/* COMBO / BUNDLE SECTION */}
+            <View style={{ marginTop: 20, padding: 15, backgroundColor: '#0a0a0a', borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <View>
+                        <Text style={{ color: '#d4af37', fontSize: 13, fontWeight: '900' }}>¿ES UN COMBO / KIT?</Text>
+                        <Text style={{ color: '#555', fontSize: 10 }}>Descuenta stock de varios productos</Text>
+                    </View>
+                    <Switch
+                        value={isBundle}
+                        onValueChange={setIsBundle}
+                        trackColor={{ false: '#333', true: '#d4af37' }}
+                        thumbColor={isBundle ? '#fff' : '#666'}
+                    />
+                </View>
+
+                {isBundle && (
+                    <View style={{ marginTop: 15 }}>
+                        {bundleItems.map(item => (
+                            <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', padding: 10, borderRadius: 8, marginBottom: 5 }}>
+                                <Text style={{ color: '#fff', flex: 1, fontSize: 12 }}>{item.name}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                    <TouchableOpacity onPress={() => updateBundleItemQty(item.id, -1)}>
+                                        <MaterialCommunityIcons name="minus-circle-outline" size={20} color="#666" />
+                                    </TouchableOpacity>
+                                    <Text style={{ color: '#d4af37', fontWeight: 'bold', width: 20, textAlign: 'center' }}>{item.qty}</Text>
+                                    <TouchableOpacity onPress={() => updateBundleItemQty(item.id, 1)}>
+                                        <MaterialCommunityIcons name="plus-circle-outline" size={20} color="#666" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={() => toggleBundleItem(item)} style={{ marginLeft: 5 }}>
+                                        <MaterialCommunityIcons name="delete" size={20} color="#e74c3c" />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        ))}
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#1a1a1a', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 10, borderWidth: 1, borderStyle: 'dashed', borderColor: '#d4af37' }}
+                            onPress={() => setShowBundlePicker(true)}
+                        >
+                            <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ AGREGAR PRODUCTO AL KIT</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+            </View>
+
             <Text style={styles.label}>Descripción / Notas</Text>
             <TextInput
                 style={[styles.input, styles.textArea]}
@@ -900,6 +1006,56 @@ export default function AddProductScreen({ navigation, route }) {
                     </TouchableOpacity>
                     <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center' }}>
                         <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>Apunta al código de barras</Text>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* BUNDLE ITEM PICKER MODAL */}
+            <Modal visible={showBundlePicker} animationType="slide" transparent>
+                <View style={[styles.modalOverlay, { padding: 0 }]}>
+                    <View style={[styles.modalContent, { height: '80%', borderTopLeftRadius: 30, borderTopRightRadius: 30, marginTop: 'auto', backgroundColor: '#111' }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <Text style={styles.modalTitle}>SELECCIONAR PRODUCTOS</Text>
+                            <TouchableOpacity onPress={() => setShowBundlePicker(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Buscar producto..."
+                            placeholderTextColor="#444"
+                            value={searchProd}
+                            onChangeText={setSearchProd}
+                        />
+
+                        <FlatList
+                            data={allProducts.filter(p => !searchProd || p.name.toLowerCase().includes(searchProd.toLowerCase()))}
+                            keyExtractor={item => item.id}
+                            style={{ marginTop: 20 }}
+                            renderItem={({ item }) => {
+                                const isSelected = bundleItems.find(bi => bi.id === item.id);
+                                return (
+                                    <TouchableOpacity
+                                        style={{ flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: isSelected ? '#d4af3710' : '#0a0a0a', borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: isSelected ? '#d4af37' : '#1a1a1a' }}
+                                        onPress={() => toggleBundleItem(item)}
+                                    >
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ color: isSelected ? '#d4af37' : '#fff', fontWeight: 'bold' }}>{item.name}</Text>
+                                            <Text style={{ color: '#555', fontSize: 12 }}>${item.sale_price}</Text>
+                                        </View>
+                                        {isSelected && <MaterialCommunityIcons name="check-circle" size={24} color="#d4af37" />}
+                                    </TouchableOpacity>
+                                );
+                            }}
+                        />
+
+                        <TouchableOpacity
+                            style={[styles.saveButton, { marginTop: 20, marginBottom: 10 }]}
+                            onPress={() => setShowBundlePicker(false)}
+                        >
+                            <Text style={styles.saveButtonText}>LISTO</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </Modal>

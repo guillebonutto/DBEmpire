@@ -14,7 +14,9 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const [discount, setDiscount] = useState('0');
     const [installmentsTotal, setInstallmentsTotal] = useState('1');
     const [installmentsPaid, setInstallmentsPaid] = useState('0');
+    const [courier, setCourier] = useState(''); // Andreani, OCA, Via Cargo
     const [loading, setLoading] = useState(false);
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
 
     useEffect(() => {
         const checkRole = async () => {
@@ -46,6 +48,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             setDiscount(order.discount?.toString() || '0');
             setInstallmentsTotal(order.installments_total?.toString() || '1');
             setInstallmentsPaid(order.installments_paid?.toString() || '0');
+            setCourier(order.notes || '');
 
             // Allow editing status from here too if needed, or keep it simple
             loadLinkedItems(order.id);
@@ -80,6 +83,9 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 }
             });
             setSelectedProducts(formatted);
+            setTimeout(() => setIsInitialLoad(false), 500);
+        } else {
+            setIsInitialLoad(false);
         }
     };
 
@@ -88,14 +94,21 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
         if (data) setProducts(data);
     };
 
-    // Auto-calculate Total Cost based on Products
+    // Auto-calculate Total Cost based on Products (only if not initial load or manual override)
     useEffect(() => {
+        if (isInitialLoad && route.params?.orderToEdit) {
+            return;
+        }
+
         const total = selectedProducts.reduce((sum, item) => {
             const qty = parseFloat(item.quantity) || 0;
             const unitCost = parseFloat(item.cost) || 0;
             return sum + (qty * unitCost);
         }, 0);
-        setCost(total > 0 ? total.toFixed(2) : '');
+
+        if (total > 0) {
+            setCost(total.toFixed(2));
+        }
     }, [selectedProducts]);
 
     const addProductToOrder = (product, isNew = false, tempName = '') => {
@@ -144,6 +157,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 discount: parseFloat(discount) || 0,
                 installments_total: parseInt(installmentsTotal) || 1,
                 installments_paid: parseInt(installmentsPaid) || 0,
+                notes: courier,
             };
 
             let orderId;
@@ -231,6 +245,19 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     value={provider}
                     onChangeText={setProvider}
                 />
+
+                <Text style={styles.label}>Empresa de Transporte</Text>
+                <View style={styles.courierContainer}>
+                    {['Andreani', 'OCA', 'Via Cargo'].map(c => (
+                        <TouchableOpacity
+                            key={c}
+                            style={[styles.courierPill, courier === c && styles.courierPillActive]}
+                            onPress={() => setCourier(courier === c ? '' : c)}
+                        >
+                            <Text style={[styles.courierText, courier === c && styles.courierTextActive]}>{c}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
 
                 <Text style={styles.label}>Número de Seguimiento (Tracking)</Text>
                 <View style={styles.trackingRow}>
@@ -358,41 +385,43 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             </ScrollView>
 
             {/* Product Selection Modal */}
-            {showProductModal && (
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>Seleccionar Producto</Text>
-                        <TextInput
-                            style={styles.searchInput}
-                            placeholder="Buscar..."
-                            placeholderTextColor="#666"
-                            value={searchQuery}
-                            onChangeText={setSearchQuery}
-                        />
-                        <ScrollView>
-                            {products.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => (
-                                <TouchableOpacity key={p.id} style={styles.modalItem} onPress={() => addProductToOrder(p)}>
-                                    <Text style={styles.modalItemText}>{p.name}</Text>
-                                    <Text style={styles.modalItemSub}>Stock: {p.current_stock}</Text>
-                                </TouchableOpacity>
-                            ))}
-                            {searchQuery.length > 0 && (
-                                <TouchableOpacity
-                                    style={[styles.modalItem, { borderTopWidth: 2, borderTopColor: '#d4af37' }]}
-                                    onPress={() => addProductToOrder(null, true, searchQuery)}
-                                >
-                                    <Text style={[styles.modalItemText, { color: '#d4af37' }]}>+ AGREGAR COMO NUEVO: "{searchQuery}"</Text>
-                                    <Text style={styles.modalItemSub}>Producto no registrado en inventario</Text>
-                                </TouchableOpacity>
-                            )}
-                        </ScrollView>
-                        <TouchableOpacity style={styles.closeModal} onPress={() => setShowProductModal(false)}>
-                            <Text style={styles.closeText}>CERRAR</Text>
-                        </TouchableOpacity>
+            {
+                showProductModal && (
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>Seleccionar Producto</Text>
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder="Buscar..."
+                                placeholderTextColor="#666"
+                                value={searchQuery}
+                                onChangeText={setSearchQuery}
+                            />
+                            <ScrollView>
+                                {products.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).map(p => (
+                                    <TouchableOpacity key={p.id} style={styles.modalItem} onPress={() => addProductToOrder(p)}>
+                                        <Text style={styles.modalItemText}>{p.name}</Text>
+                                        <Text style={styles.modalItemSub}>Stock: {p.current_stock}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                                {searchQuery.length > 0 && (
+                                    <TouchableOpacity
+                                        style={[styles.modalItem, { borderTopWidth: 2, borderTopColor: '#d4af37' }]}
+                                        onPress={() => addProductToOrder(null, true, searchQuery)}
+                                    >
+                                        <Text style={[styles.modalItemText, { color: '#d4af37' }]}>+ AGREGAR COMO NUEVO: "{searchQuery}"</Text>
+                                        <Text style={styles.modalItemSub}>Producto no registrado en inventario</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </ScrollView>
+                            <TouchableOpacity style={styles.closeModal} onPress={() => setShowProductModal(false)}>
+                                <Text style={styles.closeText}>CERRAR</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                </View>
-            )}
-        </SafeAreaView>
+                )
+            }
+        </SafeAreaView >
     );
 }
 
@@ -430,5 +459,11 @@ const styles = StyleSheet.create({
 
     summaryBox: { backgroundColor: 'rgba(46, 204, 113, 0.1)', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(46, 204, 113, 0.3)', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     summaryLabel: { color: '#888', fontSize: 12, fontWeight: 'bold' },
-    summaryValue: { color: '#2ecc71', fontSize: 18, fontWeight: 'bold' }
+    summaryValue: { color: '#2ecc71', fontSize: 18, fontWeight: 'bold' },
+
+    courierContainer: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+    courierPill: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#1e1e1e', borderWidth: 1, borderColor: '#333', alignItems: 'center' },
+    courierPillActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    courierText: { color: '#666', fontWeight: 'bold', fontSize: 12 },
+    courierTextActive: { color: '#000', fontWeight: '900' },
 });
