@@ -222,7 +222,7 @@ export default function AssetsScreen({ navigation }) {
                             style={[styles.toggleBtn, isPcMode && styles.toggleActive]}
                         >
                             <MaterialCommunityIcons
-                                name={isPcMode ? "desktop-mac" : "cellphone"}
+                                name={isPcMode ? "monitor" : "cellphone"}
                                 size={20}
                                 color={isPcMode ? "#d4af37" : "#666"}
                             />
