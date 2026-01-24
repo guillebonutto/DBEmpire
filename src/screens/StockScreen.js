@@ -11,6 +11,8 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { logoBase64 } from '../assets/logoBase64';
 import { GeminiService } from '../services/geminiService';
+import { CRMService } from '../services/crmService';
+import { SecurityService } from '../services/securityService';
 
 export default function StockScreen({ navigation, route }) {
     const [userRole, setUserRole] = useState('seller');
@@ -26,6 +28,12 @@ export default function StockScreen({ navigation, route }) {
     const [selectedProductForMarketing, setSelectedProductForMarketing] = useState(null);
     const [marketingCopy, setMarketingCopy] = useState('');
     const [loadingMarketing, setLoadingMarketing] = useState(false);
+
+    // Smart Match State
+    const [buyersModalVisible, setBuyersModalVisible] = useState(false);
+    const [potentialBuyers, setPotentialBuyers] = useState([]);
+    const [loadingBuyers, setLoadingBuyers] = useState(false);
+    const [selectedProductForMatch, setSelectedProductForMatch] = useState(null);
     useEffect(() => {
         const getRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
@@ -112,6 +120,46 @@ export default function StockScreen({ navigation, route }) {
         Alert.alert('Copiado', 'Texto copiado al portapapeles.');
     };
 
+    const handleFindBuyers = async (product) => {
+        setSelectedProductForMatch(product);
+        setBuyersModalVisible(true);
+        setLoadingBuyers(true);
+        try {
+            const matches = await CRMService.findInterestedClients(product);
+            setPotentialBuyers(matches);
+        } catch (error) {
+            Alert.alert('Error', 'No se pudieron buscar compradores.');
+        } finally {
+            setLoadingBuyers(false);
+        }
+    };
+
+    const handleContactBuyer = async (client, product) => {
+        try {
+            // Generate customized pitch
+            const prompt = `
+            Genera un mensaje de WhatsApp CÓRTO y casual para ${client.name}.
+            
+            Contexto:
+            - Soy su vendedor de confianza.
+            - Hace un tiempo compró: "${client.lastPurchasedItem}".
+            - Acaba de entrar: "${product.name}" a $${product.sale_price}.
+            
+            Objetivo:
+            - Contarle que entró esto porque creo que le va a gustar (basado en lo que compró antes).
+            - Sin ser pesado. Ofrecer reservárselo.
+            
+            Solo devuelve el texto del mensaje.
+            `;
+
+            const message = await GeminiService.handleGeneralRequest(prompt);
+            const url = `whatsapp://send?phone=${client.phone}&text=${encodeURIComponent(message)}`;
+            Linking.openURL(url);
+        } catch (e) {
+            Alert.alert('Error', 'No se pudo abrir WhatsApp');
+        }
+    };
+
     const fetchProducts = async () => {
         setLoading(true);
         try {
@@ -169,6 +217,7 @@ export default function StockScreen({ navigation, route }) {
                                     throw deleteError;
                                 }
                             } else {
+                                await SecurityService.logActivity('DELETE_PRODUCT', `Eliminó producto: ${product.name}`, { productId: product.id });
                                 Alert.alert('✅ Eliminado', 'Producto eliminado correctamente');
                             }
                             fetchProducts();
@@ -256,14 +305,25 @@ export default function StockScreen({ navigation, route }) {
                     </View>
 
                     {/* Marketing Action Button */}
-                    <TouchableOpacity
-                        style={styles.marketingBtn}
-                        onPress={() => handleGenerateMarketing(item)}
-                    >
-                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.marketingIconBg}>
-                            <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
-                        </LinearGradient>
-                    </TouchableOpacity>
+                    <View style={styles.actionButtonsContainer}>
+                        <TouchableOpacity
+                            style={styles.iconBtn}
+                            onPress={() => handleFindBuyers(item)}
+                        >
+                            <LinearGradient colors={['#3498db', '#2980b9']} style={styles.iconBtnBg}>
+                                <MaterialCommunityIcons name="target-account" size={18} color="#fff" />
+                            </LinearGradient>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.iconBtn}
+                            onPress={() => handleGenerateMarketing(item)}
+                        >
+                            <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.iconBtnBg}>
+                                <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    </View>
                 </LinearGradient>
             </TouchableOpacity>
         );
@@ -602,6 +662,66 @@ export default function StockScreen({ navigation, route }) {
                     </View>
                 </View>
             </Modal>
+
+            {/* Smart Buyers Modal */}
+            <Modal
+                visible={buyersModalVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setBuyersModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.marketingModalContent}>
+                        <View style={styles.marketingHeader}>
+                            <MaterialCommunityIcons name="target-account" size={32} color="#3498db" />
+                            <View style={{ marginLeft: 15, flex: 1 }}>
+                                <Text style={[styles.marketingTitle, { color: '#3498db' }]}>RADAR DE COMPRADORES</Text>
+                                <Text style={styles.marketingSubtitle}>{selectedProductForMatch?.name}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setBuyersModalVisible(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.marketingBody}>
+                            {loadingBuyers ? (
+                                <View style={styles.loadingBox}>
+                                    <ActivityIndicator size="large" color="#3498db" />
+                                    <Text style={[styles.loadingText, { color: '#3498db' }]}>Escaneando base de datos...</Text>
+                                </View>
+                            ) : (
+                                <FlatList
+                                    data={potentialBuyers}
+                                    keyExtractor={item => item.id}
+                                    ListEmptyComponent={
+                                        <Text style={{ color: '#666', textAlign: 'center', marginTop: 20 }}>
+                                            No se encontraron coincidencias obvias.
+                                        </Text>
+                                    }
+                                    renderItem={({ item }) => (
+                                        <View style={{
+                                            flexDirection: 'row', alignItems: 'center',
+                                            backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, marginBottom: 10,
+                                            borderWidth: 1, borderColor: '#222'
+                                        }}>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.name}</Text>
+                                                <Text style={{ color: '#666', fontSize: 11 }}>{item.reason} ({item.lastPurchasedItem})</Text>
+                                            </View>
+                                            <TouchableOpacity
+                                                style={{ backgroundColor: '#2ecc71', padding: 8, borderRadius: 8 }}
+                                                onPress={() => handleContactBuyer(item, selectedProductForMatch)}
+                                            >
+                                                <MaterialCommunityIcons name="whatsapp" size={20} color="#000" />
+                                            </TouchableOpacity>
+                                        </View>
+                                    )}
+                                />
+                            )}
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -653,8 +773,9 @@ const styles = StyleSheet.create({
     emptyText: { fontSize: 18, color: '#444', fontWeight: '900', letterSpacing: 1 },
     emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' },
 
-    marketingBtn: { position: 'absolute', right: 12, bottom: 12, zIndex: 5 },
-    marketingIconBg: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.5, elevation: 5 },
+    actionButtonsContainer: { position: 'absolute', right: 12, bottom: 12, zIndex: 5, flexDirection: 'row', gap: 8 },
+    iconBtn: { shadowColor: '#000', shadowOpacity: 0.5, elevation: 5 },
+    iconBtnBg: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
 
     // Marketing Modal Styles
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },

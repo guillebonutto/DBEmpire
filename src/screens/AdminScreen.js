@@ -31,6 +31,8 @@ export default function AdminScreen({ navigation }) {
     const [tooltip, setTooltip] = useState({ visible: false, value: 0, x: 0, y: 0 });
     const [deviceData, setDeviceData] = useState([]);
     const [profitSplit, setProfitSplit] = useState({ imperio: 70, vendedores: 30 });
+    const [totalDebt, setTotalDebt] = useState(0);
+    const [nextMonthlyPayment, setNextMonthlyPayment] = useState(0);
 
     useEffect(() => {
         const checkRole = async () => {
@@ -76,14 +78,34 @@ export default function AdminScreen({ navigation }) {
                 salesRes,
                 expensesRes,
                 { data: histSales },
-                { data: histExp }
+                { data: histExp },
+                supplierOrdersRes
             ] = await Promise.all([
                 supabase.from('settings').select('*'),
                 supabase.from('sales').select('id, created_at, total_amount, profit_generated, commission_amount, status, device_sig').gte('created_at', startISO).lte('created_at', endISO || '9999-12-31').order('created_at', { ascending: false }),
                 supabase.from('expenses').select('amount, created_at').gte('created_at', startISO).lte('created_at', endISO || '9999-12-31'),
                 supabase.from('sales').select('total_amount, status').lt('created_at', startISO),
-                supabase.from('expenses').select('amount').lt('created_at', startISO)
+                supabase.from('expenses').select('amount').lt('created_at', startISO),
+                supabase.from('supplier_orders').select('*')
             ]);
+
+            // Supplier Debt Calculation
+            if (supplierOrdersRes.data) {
+                let debt = 0;
+                let monthly = 0;
+                supplierOrdersRes.data.forEach(order => {
+                    const totalInst = order.installments_total || 1;
+                    const paidInst = order.installments_paid || 0;
+                    if (paidInst < totalInst) {
+                        const effectiveTotal = (parseFloat(order.total_cost) || 0) - (parseFloat(order.discount) || 0);
+                        const perIns = effectiveTotal / totalInst;
+                        debt += perIns * (totalInst - paidInst);
+                        monthly += perIns;
+                    }
+                });
+                setTotalDebt(debt);
+                setNextMonthlyPayment(monthly);
+            }
 
             // Handle Settings
             if (settingsData) {
@@ -501,6 +523,9 @@ export default function AdminScreen({ navigation }) {
                         <TouchableOpacity onPress={() => navigation.navigate('RestockAdvisor')} style={styles.expenseBtn}>
                             <MaterialCommunityIcons name="truck-delivery" size={24} color="#d4af37" />
                         </TouchableOpacity>
+                        <TouchableOpacity onPress={() => navigation.navigate('ActivityLog')} style={styles.expenseBtn}>
+                            <MaterialCommunityIcons name="shield-account" size={24} color="#d4af37" />
+                        </TouchableOpacity>
                     </View>
                 </View>
 
@@ -597,6 +622,32 @@ export default function AdminScreen({ navigation }) {
                         <Text style={[styles.statLabel, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>Estado ROI / Balance</Text>
                     </View>
                 </View>
+
+                {/* Debt Projection Card */}
+                {totalDebt > 0 && (
+                    <TouchableOpacity
+                        style={[styles.chartCard, { borderLeftWidth: 5, borderLeftColor: '#e74c3c' }]}
+                        onPress={() => navigation.navigate('SupplierOrders')}
+                    >
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <View>
+                                <Text style={[styles.sectionTitle, { marginBottom: 5 }]}>DEUDA TOTAL A PROVEEDORES</Text>
+                                <Text style={{ color: '#e74c3c', fontSize: 24, fontWeight: '900' }}>
+                                    ${totalDebt.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
+                                </Text>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                                <Text style={{ color: '#666', fontSize: 10, fontWeight: 'bold' }}>ESTE MES:</Text>
+                                <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>
+                                    ${nextMonthlyPayment.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
+                                </Text>
+                            </View>
+                        </View>
+                        <Text style={{ color: '#555', fontSize: 11, marginTop: 10, fontStyle: 'italic' }}>
+                            Monto pendiente de todas las importaciones en cuotas.
+                        </Text>
+                    </TouchableOpacity>
+                )}
 
                 {/* Sales Chart */}
                 <View style={styles.chartCard}>

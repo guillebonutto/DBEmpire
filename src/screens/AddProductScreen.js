@@ -141,7 +141,11 @@ export default function AddProductScreen({ navigation, route }) {
     }, [productToEdit]);
 
     const fetchAllProducts = async () => {
-        const { data } = await supabase.from('products').select('id, name, sale_price').eq('active', true).order('name');
+        const { data } = await supabase
+            .from('products')
+            .select('id, name, sale_price, barcode, image_url')
+            .eq('active', true)
+            .order('name');
         setAllProducts(data || []);
     };
 
@@ -167,6 +171,42 @@ export default function AddProductScreen({ navigation, route }) {
             }
             return item;
         }));
+    };
+
+    const handleQuickAddProduct = async (info) => {
+        setLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from('products')
+                .insert([{
+                    name: info.name,
+                    barcode: info.barcode,
+                    image_url: info.image,
+                    active: true,
+                    cost_price: 0,
+                    sale_price: 0,
+                    current_stock: 0,
+                    description: 'Creado automáticamente desde escáner de Kit'
+                }])
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            if (data) {
+                // Actualizar lista local para que futuras búsquedas lo encuentren
+                setAllProducts(prev => [...prev, data]);
+                // Añadir al bundle
+                setBundleItems(prev => [...prev, { id: data.id, name: data.name, qty: 1 }]);
+                setLastScannedInfo(null);
+                setScanned(false);
+            }
+        } catch (err) {
+            console.log('Quick add error:', err);
+            Alert.alert('Error', 'No se pudo crear el producto automáticamente.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     // Wizard Mode: Pre-fill from Import Queue
@@ -475,7 +515,8 @@ export default function AddProductScreen({ navigation, route }) {
 
             // --- AUTO EXPENSE & ORDER GENERATION ---
             // Only if we added stock and have a cost, AND we are NOT in Import Wizard mode (to avoid double accounting)
-            if (stockDifference > 0 && costPrice > 0 && !route.params?.importQueue) {
+            // AND it is NOT a bundle (bundles are virtual compositions, expenses are on components)
+            if (stockDifference > 0 && costPrice > 0 && !route.params?.importQueue && !isBundle) {
                 try {
                     const expenseAmount = stockDifference * costPrice;
 
@@ -964,8 +1005,23 @@ export default function AddProductScreen({ navigation, route }) {
                             if (scanningMode === 'bundle') {
                                 setScanned(true); // Temporarily pause
 
-                                // 1. Search in local inventory
-                                const found = allProducts.find(p => p.barcode === data);
+                                // 1. Search in local inventory (robust match)
+                                let found = allProducts.find(p =>
+                                    p.barcode && p.barcode.toString().trim() === data.trim()
+                                );
+
+                                // 1.5 Fallback: If not found in memory, try a quick DB search 
+                                // (just in case the local list is stale or was limited)
+                                if (!found) {
+                                    const { data: dbProd } = await supabase
+                                        .from('products')
+                                        .select('id, name, sale_price, barcode, image_url')
+                                        .eq('barcode', data.trim())
+                                        .eq('active', true)
+                                        .single();
+                                    if (dbProd) found = dbProd;
+                                }
+
                                 if (found) {
                                     setBundleItems(prev => {
                                         const exists = prev.find(i => i.id === found.id);
@@ -985,17 +1041,18 @@ export default function AddProductScreen({ navigation, route }) {
                                             setLastScannedInfo({
                                                 name: pName,
                                                 image: result.product.image_url,
-                                                source: 'Nuevo (No en Inventario)'
+                                                source: 'Nuevo (No en Inventario)',
+                                                barcode: data
                                             });
-                                            // We don't add to kit because it doesn't exist in inventory, 
-                                            // but we show the info so the user knows what it is.
+                                            // No auto-dismiss here so user can click "Quick Add"
                                         } else {
                                             setLastScannedInfo({ name: 'Código no registrado', source: 'Error' });
+                                            setTimeout(() => { setScanned(false); setLastScannedInfo(null); }, 2000);
                                         }
                                     } catch (e) {
                                         setLastScannedInfo({ name: 'Error de red', source: 'Error' });
+                                        setTimeout(() => { setScanned(false); setLastScannedInfo(null); }, 2000);
                                     }
-                                    setTimeout(() => { setScanned(false); setLastScannedInfo(null); }, 2000);
                                 }
                                 return;
                             }
@@ -1053,7 +1110,31 @@ export default function AddProductScreen({ navigation, route }) {
                                     <Image source={{ uri: lastScannedInfo.image }} style={{ width: 60, height: 60, borderRadius: 10, marginBottom: 10 }} />
                                 )}
                                 <Text style={{ color: '#d4af37', fontWeight: '900', textAlign: 'center' }}>{lastScannedInfo.name}</Text>
-                                <Text style={{ color: '#fff', fontSize: 10 }}>{lastScannedInfo.source}</Text>
+
+                                {lastScannedInfo.source === 'Nuevo (No en Inventario)' ? (
+                                    <View style={{ marginTop: 15, width: '100%', gap: 10 }}>
+                                        <TouchableOpacity
+                                            style={{ backgroundColor: '#d4af37', padding: 12, borderRadius: 12, alignItems: 'center' }}
+                                            onPress={() => handleQuickAddProduct(lastScannedInfo)}
+                                        >
+                                            <Text style={{ color: '#000', fontWeight: '900', fontSize: 13 }}>CREAR Y AÑADIR AL KIT</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={{ backgroundColor: 'rgba(255,255,255,0.1)', padding: 10, borderRadius: 12, alignItems: 'center' }}
+                                            onPress={() => {
+                                                setScanned(false);
+                                                setLastScannedInfo(null);
+                                            }}
+                                        >
+                                            <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>DESCARTAR / VOLVER A ESCANEAR</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                ) : (
+                                    <View style={{ alignItems: 'center', marginTop: 5 }}>
+                                        <Text style={{ color: '#fff', fontSize: 10, letterSpacing: 1 }}>{lastScannedInfo.source.toUpperCase()}</Text>
+                                        <ActivityIndicator size="small" color="#d4af37" style={{ marginTop: 5 }} />
+                                    </View>
+                                )}
                             </View>
                         ) : (
                             <View style={{ alignItems: 'center' }}>

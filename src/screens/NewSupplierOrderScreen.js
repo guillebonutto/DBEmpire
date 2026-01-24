@@ -6,7 +6,11 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import DateTimePicker from '@react-native-community/datetimepicker';
+
 export default function NewSupplierOrderScreen({ navigation, route }) {
+    const [purchaseDate, setPurchaseDate] = useState(new Date());
+    const [showDatePicker, setShowDatePicker] = useState(false);
     const [provider, setProvider] = useState('');
     const [tracking, setTracking] = useState('');
     const [itemsDesc, setItemsDesc] = useState('');
@@ -49,6 +53,9 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             setInstallmentsTotal(order.installments_total?.toString() || '1');
             setInstallmentsPaid(order.installments_paid?.toString() || '0');
             setCourier(order.notes || '');
+            if (order.created_at) {
+                setPurchaseDate(new Date(order.created_at));
+            }
 
             // Allow editing status from here too if needed, or keep it simple
             loadLinkedItems(order.id);
@@ -58,7 +65,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const loadLinkedItems = async (orderId) => {
         const { data, error } = await supabase
             .from('supplier_order_items')
-            .select('product_id, quantity, cost_per_unit, temp_product_name, products(id, name, current_stock)')
+            .select('product_id, quantity, cost_per_unit, temp_product_name, supplier, color, products(id, name, current_stock)')
             .eq('supplier_order_id', orderId);
 
         if (data) {
@@ -69,6 +76,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                         product: item.products,
                         quantity: item.quantity.toString(),
                         cost: item.cost_per_unit.toString(),
+                        supplier: item.supplier || '',
+                        color: item.color || '',
                         isNew: false
                     };
                 } else {
@@ -77,6 +86,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                         product: { id: null, name: item.temp_product_name },
                         quantity: item.quantity.toString(),
                         cost: item.cost_per_unit.toString(),
+                        supplier: item.supplier || '',
+                        color: item.color || '',
                         isNew: true,
                         tempName: item.temp_product_name
                     };
@@ -113,8 +124,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
     const addProductToOrder = (product, isNew = false, tempName = '') => {
         const newProduct = isNew
-            ? { product: { id: null, name: tempName }, quantity: '1', cost: '0', isNew: true, tempName }
-            : { product, quantity: '1', cost: product.cost_price?.toString() || '0', isNew: false };
+            ? { product: { id: null, name: tempName }, quantity: '1', cost: '0', supplier: '', color: '', isNew: true, tempName }
+            : { product, quantity: '1', cost: product.cost_price?.toString() || '0', supplier: product.supplier || '', color: product.color || '', isNew: false };
 
         setSelectedProducts([...selectedProducts, newProduct]);
         setShowProductModal(false);
@@ -158,6 +169,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 installments_total: parseInt(installmentsTotal) || 1,
                 installments_paid: parseInt(installmentsPaid) || 0,
                 notes: courier,
+                created_at: purchaseDate.toISOString()
             };
 
             let orderId;
@@ -189,7 +201,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     await supabase.from('expenses').insert({
                         description: `Pago inicial: ${provider} (${itemsDesc})`,
                         amount: totalPaidNow,
-                        category: 'Inventario'
+                        category: 'Inventario',
+                        created_at: purchaseDate.toISOString()
                     });
                 }
             }
@@ -205,7 +218,9 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     product_id: p.isNew ? null : p.product.id,
                     temp_product_name: p.isNew ? p.tempName : null,
                     quantity: parseInt(p.quantity) || 1,
-                    cost_per_unit: parseFloat(p.cost) || 0
+                    cost_per_unit: parseFloat(p.cost) || 0,
+                    supplier: p.supplier || null,
+                    color: p.color || null
                 }));
 
                 const { error: itemsError } = await supabase
@@ -236,7 +251,23 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             </View>
 
             <ScrollView contentContainerStyle={styles.form}>
-                {/* ... existing inputs ... */}
+                <Text style={styles.label}>Fecha de Compra</Text>
+                <TouchableOpacity onPress={() => setShowDatePicker(true)} style={[styles.input, { flexDirection: 'row', alignItems: 'center' }]}>
+                    <MaterialCommunityIcons name="calendar" size={20} color="#666" style={{ marginRight: 10 }} />
+                    <Text style={{ color: '#fff' }}>{purchaseDate.toLocaleDateString('es-AR')}</Text>
+                </TouchableOpacity>
+                {showDatePicker && (
+                    <DateTimePicker
+                        value={purchaseDate}
+                        mode="date"
+                        display="default"
+                        onChange={(event, selectedDate) => {
+                            setShowDatePicker(false);
+                            if (selectedDate) setPurchaseDate(selectedDate);
+                        }}
+                    />
+                )}
+
                 <Text style={styles.label}>Proveedor / Tienda</Text>
                 <TextInput
                     style={styles.input}
@@ -274,28 +305,60 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 {/* Products Section */}
                 <Text style={styles.label}>Productos Vinculados (Opcional)</Text>
                 {selectedProducts.map((item, index) => (
-                    <View key={index} style={styles.productRow}>
-                        <Text style={styles.productName}>{item.product.name}</Text>
-                        <View style={{ flexDirection: 'row', gap: 10 }}>
-                            <TextInput
-                                style={[styles.miniInput, { width: 60 }]}
-                                placeholder="Cant."
-                                placeholderTextColor="#666"
-                                keyboardType="numeric"
-                                value={item.quantity}
-                                onChangeText={v => updateProductItem(item.product.id || item.tempName, 'quantity', v)}
-                            />
-                            <TextInput
-                                style={[styles.miniInput, { width: 80 }]}
-                                placeholder="Costo U."
-                                placeholderTextColor="#666"
-                                keyboardType="numeric"
-                                value={item.cost}
-                                onChangeText={v => updateProductItem(item.product.id || item.tempName, 'cost', v)}
-                            />
-                            <TouchableOpacity onPress={() => removeProductItem(item.product.id || item.tempName)} style={{ justifyContent: 'center' }}>
+                    <View key={index} style={styles.productCard}>
+                        <View style={styles.productCardHeader}>
+                            <Text style={styles.productName}>{item.product.name}</Text>
+                            <TouchableOpacity onPress={() => removeProductItem(item.product.id || item.tempName)}>
                                 <MaterialCommunityIcons name="close-circle" size={24} color="#e74c3c" />
                             </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.productCardRow}>
+                            <View style={{ flex: 1, marginRight: 10 }}>
+                                <Text style={styles.miniLabel}>Cantidad</Text>
+                                <TextInput
+                                    style={styles.miniInput}
+                                    placeholder="1"
+                                    placeholderTextColor="#666"
+                                    keyboardType="numeric"
+                                    value={item.quantity}
+                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'quantity', v)}
+                                />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.miniLabel}>Costo Unitario</Text>
+                                <TextInput
+                                    style={styles.miniInput}
+                                    placeholder="0.00"
+                                    placeholderTextColor="#666"
+                                    keyboardType="numeric"
+                                    value={item.cost}
+                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'cost', v)}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={styles.productCardRow}>
+                            <View style={{ flex: 1, marginRight: 10 }}>
+                                <Text style={styles.miniLabel}>Proveedor</Text>
+                                <TextInput
+                                    style={styles.miniInput}
+                                    placeholder="Ej: Temu, Shein..."
+                                    placeholderTextColor="#666"
+                                    value={item.supplier || ''}
+                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'supplier', v)}
+                                />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.miniLabel}>Color/Variante</Text>
+                                <TextInput
+                                    style={styles.miniInput}
+                                    placeholder="Ej: Negro, Azul..."
+                                    placeholderTextColor="#666"
+                                    value={item.color || ''}
+                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'color', v)}
+                                />
+                            </View>
                         </View>
                     </View>
                 ))}
@@ -441,9 +504,12 @@ const styles = StyleSheet.create({
     saveText: { color: '#000', fontWeight: '900', fontSize: 16 },
 
     // Product Linking Styles
-    productRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#222', padding: 10, borderRadius: 8, marginBottom: 10 },
-    productName: { color: '#fff', fontWeight: 'bold', flex: 1, marginRight: 10 },
-    miniInput: { backgroundColor: '#111', color: '#fff', padding: 8, borderRadius: 5, borderWidth: 1, borderColor: '#333', textAlign: 'center' },
+    productCard: { backgroundColor: '#222', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    productCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+    productCardRow: { flexDirection: 'row', marginBottom: 10 },
+    productName: { color: '#fff', fontWeight: 'bold', fontSize: 16, flex: 1 },
+    miniLabel: { color: '#d4af37', fontSize: 11, fontWeight: 'bold', marginBottom: 5 },
+    miniInput: { backgroundColor: '#111', color: '#fff', padding: 10, borderRadius: 5, borderWidth: 1, borderColor: '#333' },
     addProdBtn: { flexDirection: 'row', backgroundColor: '#d4af37', padding: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
     addProdText: { fontWeight: 'bold', marginLeft: 5, fontSize: 12 },
 
