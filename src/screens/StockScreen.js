@@ -667,6 +667,36 @@ export default function StockScreen({ navigation, route }) {
                                 </View>
                                 <Text style={styles.toolLabel}>Etiquetas QR</Text>
                             </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('ShippingRates'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#16a08520' }]}>
+                                    <MaterialCommunityIcons name="currency-usd" size={24} color="#16a085" />
+                                </View>
+                                <Text style={styles.toolLabel}>Tarifas</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('Promotions'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#e91e6320' }]}>
+                                    <MaterialCommunityIcons name="sale" size={24} color="#e91e63" />
+                                </View>
+                                <Text style={styles.toolLabel}>Promociones</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('Analytics'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#9b59b620' }]}>
+                                    <MaterialCommunityIcons name="google-analytics" size={24} color="#9b59b6" />
+                                </View>
+                                <Text style={styles.toolLabel}>Analíticas</Text>
+                            </TouchableOpacity>
                         </View>
 
                         <View style={styles.toolsDivider} />

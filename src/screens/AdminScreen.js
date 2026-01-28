@@ -629,7 +629,7 @@ export default function AdminScreen({ navigation }) {
                             onPress={() => navigation.navigate('Analytics')}
                         >
                             <MaterialCommunityIcons name="google-analytics" size={32} color="#9b59b6" />
-                            <Text style={styles.quickAccessTitle}>Analytics</Text>
+                            <Text style={styles.quickAccessTitle}>Analíticas</Text>
                             <Text style={styles.quickAccessSubtitle}>Productos</Text>
                         </TouchableOpacity>
 

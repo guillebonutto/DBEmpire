@@ -25,11 +25,7 @@ export default function ShippingRatesScreen({ navigation }) {
     }, []);
 
     const checkRole = async () => {
-        const role = await AsyncStorage.getItem('user_role');
-        if (role !== 'admin') {
-            Alert.alert('Acceso Denegado', 'Solo administradores pueden configurar tarifas.');
-            navigation.goBack();
-        }
+        // Ally (seller) can now configure rates too as per user request
     };
 
     const fetchRates = async () => {

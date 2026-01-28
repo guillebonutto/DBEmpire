@@ -19,16 +19,7 @@ export default function AnalyticsScreen({ navigation }) {
     });
 
     useEffect(() => {
-        const init = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
-                Alert.alert('Acceso Denegado', 'Esta sección es confidencial.');
-                navigation.replace('Main');
-                return;
-            }
-            fetchAnalytics();
-        };
-        init();
+        fetchAnalytics();
     }, []);
 
     const fetchAnalytics = async () => {
@@ -204,7 +195,7 @@ export default function AnalyticsScreen({ navigation }) {
                     <TouchableOpacity onPress={() => navigation.goBack()}>
                         <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>INTELIGENCIA DE NEGOCIO</Text>
+                    <Text style={styles.headerTitle}>ANALÍTICAS</Text>
                     <TouchableOpacity onPress={fetchAnalytics}>
                         <MaterialCommunityIcons name="refresh" size={24} color="#d4af37" />
                     </TouchableOpacity>
