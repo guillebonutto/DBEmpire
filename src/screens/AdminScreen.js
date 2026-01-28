@@ -11,7 +11,6 @@ const screenWidth = Dimensions.get('window').width;
 
 export default function AdminScreen({ navigation }) {
     const [commissionRate, setCommissionRate] = useState('10');
-    const [transportRate, setTransportRate] = useState('0');
     const [googleKey, setGoogleKey] = useState('');
     const [loading, setLoading] = useState(false);
     const [salesData, setSalesData] = useState({ labels: [], data: [] });
@@ -110,10 +109,8 @@ export default function AdminScreen({ navigation }) {
             // Handle Settings
             if (settingsData) {
                 const comm = settingsData.find(s => s.key === 'commission_rate');
-                const trans = settingsData.find(s => s.key === 'transport_cost');
                 const key = settingsData.find(s => s.key === 'google_api_key');
                 if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
-                if (trans) setTransportRate(parseFloat(trans.value).toString());
                 if (key) setGoogleKey(key.value);
 
                 const splitImp = settingsData.find(s => s.key === 'profit_split_imperio');
@@ -403,32 +400,6 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
-    const updateTransportRate = async () => {
-        const rate = parseFloat(transportRate);
-        if (isNaN(rate) || rate < 0) {
-            Alert.alert('Error', 'Ingresa un monto válido mayor o igual a 0');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const { error } = await supabase
-                .from('settings')
-                .upsert(
-                    { key: 'transport_cost', value: rate.toString() },
-                    { onConflict: 'key' }
-                );
-
-            if (error) throw error;
-
-            Alert.alert('✅ Actualizado', `El costo de transporte ahora es de $${rate}`);
-        } catch (error) {
-            Alert.alert('Error', 'No se pudo actualizar el costo de transporte');
-            console.log(error);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const updateGoogleKey = async () => {
         if (!googleKey.trim()) {
@@ -507,26 +478,7 @@ export default function AdminScreen({ navigation }) {
                         <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>PANEL DE CONTROL</Text>
-                    <View style={{ flexDirection: 'row', gap: 10 }}>
-                        <TouchableOpacity onPress={() => navigation.navigate('Promotions')} style={styles.expenseBtn}>
-                            <MaterialCommunityIcons name="sale" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => navigation.navigate('Expenses')} style={styles.expenseBtn}>
-                            <MaterialCommunityIcons name="cash-minus" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => navigation.navigate('SupplierOrders')} style={styles.expenseBtn}>
-                            <MaterialCommunityIcons name="cube-send" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => navigation.navigate('Analytics')} style={styles.expenseBtn}>
-                            <MaterialCommunityIcons name="google-analytics" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => navigation.navigate('RestockAdvisor')} style={styles.expenseBtn}>
-                            <MaterialCommunityIcons name="truck-delivery" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => navigation.navigate('ActivityLog')} style={styles.expenseBtn}>
-                            <MaterialCommunityIcons name="shield-account" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                    </View>
+                    <View style={{ width: 24 }} />
                 </View>
 
                 {/* Date Filter Buttons */}
@@ -620,6 +572,97 @@ export default function AdminScreen({ navigation }) {
                             ${stats.netProfit.toFixed(0)}
                         </Text>
                         <Text style={[styles.statLabel, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>Estado ROI / Balance</Text>
+                    </View>
+                </View>
+
+                {/* Quick Access Section */}
+                <View style={styles.quickAccessSection}>
+                    <Text style={styles.sectionTitle}>ACCESO RÁPIDO</Text>
+
+                    {/* Financial Management */}
+                    <Text style={styles.categoryLabel}>💰 Gestión Financiera</Text>
+                    <View style={styles.quickAccessGrid}>
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('Expenses')}
+                        >
+                            <MaterialCommunityIcons name="cash-minus" size={32} color="#e74c3c" />
+                            <Text style={styles.quickAccessTitle}>Gastos</Text>
+                            <Text style={styles.quickAccessSubtitle}>Operativos</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('SupplierOrders')}
+                        >
+                            <MaterialCommunityIcons name="cube-send" size={32} color="#3498db" />
+                            <Text style={styles.quickAccessTitle}>Pedidos</Text>
+                            <Text style={styles.quickAccessSubtitle}>Proveedores</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('ShippingPackages')}
+                        >
+                            <MaterialCommunityIcons name="package-variant" size={32} color="#f39c12" />
+                            <Text style={styles.quickAccessTitle}>Paquetes</Text>
+                            <Text style={styles.quickAccessSubtitle}>Envíos</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.quickAccessGrid}>
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('ShippingRates')}
+                        >
+                            <MaterialCommunityIcons name="currency-usd" size={32} color="#16a085" />
+                            <Text style={styles.quickAccessTitle}>Tarifas</Text>
+                            <Text style={styles.quickAccessSubtitle}>Transporte</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Business Intelligence */}
+                    <Text style={styles.categoryLabel}>📊 Inteligencia de Negocio</Text>
+                    <View style={styles.quickAccessGrid}>
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('Analytics')}
+                        >
+                            <MaterialCommunityIcons name="google-analytics" size={32} color="#9b59b6" />
+                            <Text style={styles.quickAccessTitle}>Analytics</Text>
+                            <Text style={styles.quickAccessSubtitle}>Productos</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('RestockAdvisor')}
+                        >
+                            <MaterialCommunityIcons name="truck-delivery" size={32} color="#1abc9c" />
+                            <Text style={styles.quickAccessTitle}>Restock</Text>
+                            <Text style={styles.quickAccessSubtitle}>Advisor</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('Promotions')}
+                        >
+                            <MaterialCommunityIcons name="sale" size={32} color="#e91e63" />
+                            <Text style={styles.quickAccessTitle}>Promociones</Text>
+                            <Text style={styles.quickAccessSubtitle}>Activas</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Security & Audit */}
+                    <Text style={styles.categoryLabel}>🔒 Seguridad</Text>
+                    <View style={styles.quickAccessGrid}>
+                        <TouchableOpacity
+                            style={styles.quickAccessCard}
+                            onPress={() => navigation.navigate('ActivityLog')}
+                        >
+                            <MaterialCommunityIcons name="shield-account" size={32} color="#d4af37" />
+                            <Text style={styles.quickAccessTitle}>Auditoría</Text>
+                            <Text style={styles.quickAccessSubtitle}>Actividad</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
 
@@ -796,34 +839,6 @@ export default function AdminScreen({ navigation }) {
                     </TouchableOpacity>
                 </View>
 
-                {/* Transport Cost Settings */}
-                <View style={styles.settingsCard}>
-                    <Text style={styles.sectionTitle}>COSTO DE TRANSPORTE POR VENTA</Text>
-                    <Text style={styles.settingsDesc}>
-                        Monto fijo que se sumará al total de cada venta/presupuesto para cubrir envíos.
-                    </Text>
-
-                    <View style={styles.inputContainer}>
-                        <TextInput
-                            style={styles.input}
-                            value={transportRate}
-                            onChangeText={setTransportRate}
-                            keyboardType="numeric"
-                            placeholder="0"
-                            placeholderTextColor="#666"
-                        />
-                        <Text style={styles.inputSuffix}>$</Text>
-                    </View>
-
-                    <TouchableOpacity
-                        style={styles.saveButton}
-                        onPress={updateTransportRate}
-                        disabled={loading}
-                    >
-                        <MaterialCommunityIcons name="content-save" size={20} color="black" />
-                        <Text style={styles.saveButtonText}>GUARDAR CAMBIOS</Text>
-                    </TouchableOpacity>
-                </View>
 
                 {/* AI Settings */}
                 <View style={styles.settingsCard}>
@@ -973,5 +988,23 @@ const styles = StyleSheet.create({
     closingSummary: { backgroundColor: '#000', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
     summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
     summaryText: { color: '#888', fontSize: 12 },
-    summaryValue: { color: '#fff', fontSize: 14, fontWeight: 'bold' }
+    summaryValue: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+
+    // Quick Access Styles
+    quickAccessSection: { marginBottom: 20 },
+    categoryLabel: { color: '#999', fontSize: 13, fontWeight: 'bold', marginTop: 15, marginBottom: 10, letterSpacing: 0.5 },
+    quickAccessGrid: { flexDirection: 'row', gap: 12, marginBottom: 10, flexWrap: 'wrap' },
+    quickAccessCard: {
+        flex: 1,
+        minWidth: '30%',
+        backgroundColor: '#1e1e1e',
+        padding: 18,
+        borderRadius: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#333',
+        gap: 8
+    },
+    quickAccessTitle: { color: '#fff', fontSize: 13, fontWeight: 'bold', textAlign: 'center' },
+    quickAccessSubtitle: { color: '#666', fontSize: 10, textAlign: 'center' }
 });

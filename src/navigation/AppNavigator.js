@@ -31,6 +31,9 @@ import IncidentsScreen from '../screens/IncidentsScreen';
 import AssetsScreen from '../screens/AssetsScreen';
 import RestockAdvisorScreen from '../screens/RestockAdvisorScreen';
 import ActivityLogScreen from '../screens/ActivityLogScreen';
+import ShippingPackagesScreen from '../screens/ShippingPackagesScreen';
+import ShippingRatesScreen from '../screens/ShippingRatesScreen';
+import ManualStockAdjustmentScreen from '../screens/ManualStockAdjustmentScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -211,6 +214,21 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="ActivityLog"
                 component={ActivityLogScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="ShippingPackages"
+                component={ShippingPackagesScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="ShippingRates"
+                component={ShippingRatesScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="ManualStockAdjustment"
+                component={ManualStockAdjustmentScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

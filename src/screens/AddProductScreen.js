@@ -63,7 +63,8 @@ export default function AddProductScreen({ navigation, route }) {
         cost_price: '',
         profit_margin_percent: '',
         sale_price: '',
-        current_stock: '',
+        stock_local: '',
+        stock_cordoba: '',
         defect_notes: '',
         barcode: route.params?.scannedBarcode || ''
     });
@@ -215,9 +216,7 @@ export default function AddProductScreen({ navigation, route }) {
             const { product, name, cost, quantity, provider, barcode } = queueItem;
 
             if (product) {
-                // LINKED PRODUCT (Edit Mode with New Cost/Stock)
-                // Start with product data, override with new shipment info
-                const currentStock = parseInt(product.current_stock) || 0;
+                const stockLocal = parseInt(product.stock_local) || 0;
                 const newQty = parseInt(quantity) || 0;
 
                 setFormData(prev => ({
@@ -225,12 +224,11 @@ export default function AddProductScreen({ navigation, route }) {
                     name: product.name,
                     description: product.description || '',
                     provider: provider || product.provider || '',
-                    cost_price: cost?.toString() || product.cost_price?.toString(), // Use NEW cost
+                    cost_price: cost?.toString() || product.cost_price?.toString(),
                     profit_margin_percent: product.profit_margin_percent?.toString() || '30',
-                    sale_price: product.sale_price?.toString() || '', // Keep old sale price initially? Or let calc update it? 
-                    // IMPORTANT: If we update cost, the "useEffect" for calc might trigger. 
-                    // We want to give the user the chance to SEE the new calculated price.
-                    current_stock: (currentStock + newQty).toString(), // PRE-FILL TOTAL NEW STOCK
+                    sale_price: product.sale_price?.toString() || '',
+                    stock_local: (stockLocal + newQty).toString(), // New items always arrive at local stock
+                    stock_cordoba: (product.stock_cordoba || 0).toString(),
                     defect_notes: product.defect_notes || '',
                     barcode: product.barcode || ''
                 }));
@@ -246,7 +244,8 @@ export default function AddProductScreen({ navigation, route }) {
                     ...prev,
                     name: name || '',
                     cost_price: cost?.toString() || '',
-                    current_stock: quantity?.toString() || '',
+                    stock_local: quantity?.toString() || '0',
+                    stock_cordoba: '0',
                     provider: provider || prev.provider,
                     barcode: '',
                     profit_margin_percent: '30'
@@ -265,8 +264,8 @@ export default function AddProductScreen({ navigation, route }) {
                 cost_price: productToEdit.cost_price?.toString() || '',
                 profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
                 sale_price: productToEdit.sale_price?.toString() || '',
-                current_stock: productToEdit.current_stock?.toString() || '',
-                current_stock: productToEdit.current_stock?.toString() || '',
+                stock_local: productToEdit.stock_local?.toString() || '',
+                stock_cordoba: productToEdit.stock_cordoba?.toString() || '',
                 defect_notes: productToEdit.defect_notes || '',
                 barcode: productToEdit.barcode || ''
             });
@@ -362,8 +361,8 @@ export default function AddProductScreen({ navigation, route }) {
         if (productToEdit) {
             const oldPrice = parseFloat(productToEdit.sale_price);
             const newPrice = parseFloat(formData.sale_price);
-            const oldStock = parseInt(productToEdit.current_stock) || 0;
-            const newTotalStock = parseInt(formData.current_stock) || 0;
+            const oldStock = (parseInt(productToEdit.stock_local) || 0) + (parseInt(productToEdit.stock_cordoba) || 0);
+            const newTotalStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
 
             // If price changed AND we have more stock than before (meaning we added new units)
             // And there was actually some old stock to liquidate
@@ -438,7 +437,8 @@ export default function AddProductScreen({ navigation, route }) {
             if (isLiquidation && productToEdit) {
                 // --- LIQUIDATION LOGIC ---
                 // 1. Update OLD product (Liquidation)
-                const oldStock = parseInt(productToEdit.current_stock) || 0;
+                const oldStockLocal = parseInt(productToEdit.stock_local) || 0;
+                const oldStockCordoba = parseInt(productToEdit.stock_cordoba) || 0;
                 const { error: updateError } = await supabase
                     .from('products')
                     .update({
@@ -446,7 +446,9 @@ export default function AddProductScreen({ navigation, route }) {
                         barcode: `LIQ-${productToEdit.barcode || Date.now()}`,
                         // Keep old price and old stock
                         sale_price: productToEdit.sale_price,
-                        current_stock: oldStock,
+                        stock_local: oldStockLocal,
+                        stock_cordoba: oldStockCordoba,
+                        current_stock: oldStockLocal + oldStockCordoba, // Maintain for legacy if needed
                         active: true // Ensure it stays active
                     })
                     .eq('id', productToEdit.id);
@@ -454,8 +456,9 @@ export default function AddProductScreen({ navigation, route }) {
                 if (updateError) throw updateError;
 
                 // 2. Create NEW product
-                const newTotalStock = parseInt(formData.current_stock) || 0;
-                const newStockOnly = newTotalStock - oldStock; // Only the new units
+                const newTotalStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
+                const oldTotalStock = oldStockLocal + oldStockCordoba;
+                const newStockOnly = newTotalStock - oldTotalStock; // Only the new units
                 stockDifference = newStockOnly; // For expense calculation
 
                 const { data: newProd, error: insertError } = await supabase
@@ -481,7 +484,9 @@ export default function AddProductScreen({ navigation, route }) {
                     ...basePayload,
                     name: formData.name,
                     sale_price: parseFloat(formData.sale_price) || 0,
-                    current_stock: parseInt(formData.current_stock) || 0,
+                    stock_local: parseInt(formData.stock_local) || 0,
+                    stock_cordoba: parseInt(formData.stock_cordoba) || 0,
+                    current_stock: (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0),
                     barcode: formData.barcode
                 };
 
@@ -494,8 +499,8 @@ export default function AddProductScreen({ navigation, route }) {
                     if (updateError) throw updateError;
 
                     // Calculate stock diff for expense
-                    const oldStock = parseInt(productToEdit.current_stock) || 0;
-                    const newStock = parseInt(formData.current_stock) || 0;
+                    const oldStock = (parseInt(productToEdit.stock_local) || 0) + (parseInt(productToEdit.stock_cordoba) || 0);
+                    const newStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                     if (newStock > oldStock) {
                         stockDifference = newStock - oldStock;
                     }
@@ -509,7 +514,7 @@ export default function AddProductScreen({ navigation, route }) {
                     if (insertError) throw insertError;
                     if (newProd) productId = newProd.id;
 
-                    stockDifference = parseInt(formData.current_stock) || 0;
+                    stockDifference = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                 }
             }
 
@@ -896,25 +901,34 @@ export default function AddProductScreen({ navigation, route }) {
 
             <View style={styles.row}>
                 <View style={styles.halfInput}>
-                    <Text style={styles.label}>Stock Actual</Text>
+                    <Text style={styles.label}>Stock Jujuy</Text>
                     <TextInput
                         style={styles.input}
-                        value={formData.current_stock}
-                        onChangeText={(text) => handleChange('current_stock', text)}
+                        value={formData.stock_local}
+                        onChangeText={(text) => handleChange('stock_local', text)}
                         keyboardType="numeric"
                         placeholder="0"
                     />
                 </View>
                 <View style={styles.halfInput}>
-                    <Text style={styles.label}>Proveedor</Text>
+                    <Text style={styles.label}>Stock Córdoba</Text>
                     <TextInput
                         style={styles.input}
-                        value={formData.provider}
-                        onChangeText={(text) => handleChange('provider', text)}
-                        placeholder="Ej. Distribuidora X"
+                        value={formData.stock_cordoba}
+                        onChangeText={(text) => handleChange('stock_cordoba', text)}
+                        keyboardType="numeric"
+                        placeholder="0"
                     />
                 </View>
             </View>
+
+            <Text style={styles.label}>Proveedor</Text>
+            <TextInput
+                style={styles.input}
+                value={formData.provider}
+                onChangeText={(text) => handleChange('provider', text)}
+                placeholder="Ej. Distribuidora X"
+            />
 
             {/* COMBO / BUNDLE SECTION */}
             <View style={{ marginTop: 20, padding: 15, backgroundColor: '#0a0a0a', borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' }}>

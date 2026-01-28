@@ -34,6 +34,10 @@ export default function StockScreen({ navigation, route }) {
     const [potentialBuyers, setPotentialBuyers] = useState([]);
     const [loadingBuyers, setLoadingBuyers] = useState(false);
     const [selectedProductForMatch, setSelectedProductForMatch] = useState(null);
+
+    // Tools Modal State
+    const [toolsModalVisible, setToolsModalVisible] = useState(false);
+
     useEffect(() => {
         const getRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
@@ -174,7 +178,7 @@ export default function StockScreen({ navigation, route }) {
                 const validProducts = data.filter(p => {
                     if (p.active === false) return false;
                     if (showHiddenStock) return true;
-                    return (p.current_stock || 0) > 0;
+                    return (p.stock_local > 0 || p.stock_cordoba > 0 || (p.current_stock || 0) > 0);
                 });
 
                 setProducts(validProducts);
@@ -249,10 +253,13 @@ export default function StockScreen({ navigation, route }) {
     );
 
     const renderProductItem = ({ item }) => {
-        const stock = parseInt(item.current_stock) || 0;
+        const stockLocal = parseInt(item.stock_local) || 0;
+        const stockCordoba = parseInt(item.stock_cordoba) || 0;
+        const totalStock = stockLocal + stockCordoba;
+
         let stockColor = '#2ecc71';
-        if (stock <= 0) stockColor = '#e74c3c';
-        else if (stock <= 5) stockColor = '#f1c40f';
+        if (totalStock <= 0) stockColor = '#e74c3c';
+        else if (totalStock <= 5) stockColor = '#f1c40f';
 
         return (
             <TouchableOpacity
@@ -282,7 +289,7 @@ export default function StockScreen({ navigation, route }) {
                             </TouchableOpacity>
                         )}
                         <View style={[styles.stockGlow, { backgroundColor: stockColor + '20', borderColor: stockColor + '60' }]}>
-                            <Text style={[styles.stockText, { color: stockColor }]}>{stock}</Text>
+                            <Text style={[styles.stockText, { color: stockColor }]}>{totalStock}</Text>
                         </View>
                     </View>
 
@@ -290,6 +297,20 @@ export default function StockScreen({ navigation, route }) {
                         <View style={styles.infoTop}>
                             <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
                             <Text style={styles.salePrice}>${item.sale_price}</Text>
+                        </View>
+
+                        <View style={styles.locationStockRow}>
+                            <View style={styles.locationItem}>
+                                <MaterialCommunityIcons name="home-map-marker" size={14} color="#888" />
+                                <Text style={styles.locationLabel}>Jujuy: </Text>
+                                <Text style={[styles.locationQty, stockLocal <= 0 && { color: '#e74c3c' }]}>{stockLocal}</Text>
+                            </View>
+                            <View style={styles.locationDivider} />
+                            <View style={styles.locationItem}>
+                                <MaterialCommunityIcons name="map-marker-distance" size={14} color="#888" />
+                                <Text style={styles.locationLabel}>Cba: </Text>
+                                <Text style={[styles.locationQty, stockCordoba > 0 ? { color: '#3498db' } : { color: '#666' }]}>{stockCordoba}</Text>
+                            </View>
                         </View>
 
                         <View style={styles.infoBottom}>
@@ -499,40 +520,12 @@ export default function StockScreen({ navigation, route }) {
                     <Text style={styles.title}>INVENTARIO</Text>
                 </View>
                 <View style={styles.headerActions}>
-                    {userRole === 'admin' && (
-                        <>
-                            <TouchableOpacity
-                                style={[styles.headerBtn, isFastMode && { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }]}
-                                onPress={() => setIsFastMode(!isFastMode)}
-                            >
-                                <MaterialCommunityIcons name="lightning-bolt" size={22} color={isFastMode ? "#2ecc71" : "#666"} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.headerBtn, showHiddenStock && styles.headerBtnActive]}
-                                onPress={() => setShowHiddenStock(!showHiddenStock)}
-                            >
-                                <MaterialCommunityIcons name={showHiddenStock ? "eye" : "eye-off"} size={22} color={showHiddenStock ? "#d4af37" : "#666"} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.headerBtn}
-                                onPress={() => navigation.navigate('BulkAdjustment')}
-                            >
-                                <MaterialCommunityIcons name="calculator" size={22} color="#d4af37" />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.headerBtn}
-                                onPress={exportToPDF}
-                            >
-                                <MaterialCommunityIcons name="file-pdf-box" size={22} color="#d4af37" />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.headerBtn}
-                                onPress={generateQRLabels}
-                            >
-                                <MaterialCommunityIcons name="qrcode-scan" size={22} color="#d4af37" />
-                            </TouchableOpacity>
-                        </>
-                    )}
+                    <TouchableOpacity
+                        style={styles.headerBtn}
+                        onPress={() => setToolsModalVisible(true)}
+                    >
+                        <MaterialCommunityIcons name="dots-vertical" size={26} color="#d4af37" />
+                    </TouchableOpacity>
                 </View>
             </View>
 
@@ -585,6 +578,7 @@ export default function StockScreen({ navigation, route }) {
                 windowSize={5}
                 removeClippedSubviews={true}
                 contentContainerStyle={styles.listContent}
+                alwaysBounceVertical={false}
                 refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchProducts} tintColor="#d4af37" />}
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
@@ -614,6 +608,108 @@ export default function StockScreen({ navigation, route }) {
                         <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>Apunta al código de barras</Text>
                     </View>
                 </View>
+            </Modal>
+
+            {/* Tools Menu Modal */}
+            <Modal
+                visible={toolsModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setToolsModalVisible(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setToolsModalVisible(false)}
+                >
+                    <View style={styles.toolsMenuContent}>
+                        <Text style={styles.toolsMenuTitle}>HERRAMIENTAS DE INVENTARIO</Text>
+
+                        <View style={styles.toolsGrid}>
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('ManualStockAdjustment'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#d4af3720' }]}>
+                                    <MaterialCommunityIcons name="package-variant" size={24} color="#d4af37" />
+                                </View>
+                                <Text style={styles.toolLabel}>Ajuste Manual</Text>
+                            </TouchableOpacity>
+
+                            {userRole === 'admin' && (
+                                <TouchableOpacity
+                                    style={styles.toolItem}
+                                    onPress={() => { setToolsModalVisible(false); navigation.navigate('BulkAdjustment'); }}
+                                >
+                                    <View style={[styles.toolIconBox, { backgroundColor: '#3498db20' }]}>
+                                        <MaterialCommunityIcons name="calculator" size={24} color="#3498db" />
+                                    </View>
+                                    <Text style={styles.toolLabel}>Precios %</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); exportToPDF(); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#e74c3c20' }]}>
+                                    <MaterialCommunityIcons name="file-pdf-box" size={24} color="#e74c3c" />
+                                </View>
+                                <Text style={styles.toolLabel}>Exportar PDF</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); generateQRLabels(); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#2ecc7120' }]}>
+                                    <MaterialCommunityIcons name="qrcode-scan" size={24} color="#2ecc71" />
+                                </View>
+                                <Text style={styles.toolLabel}>Etiquetas QR</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.toolsDivider} />
+
+                        <TouchableOpacity
+                            style={styles.toolToggleItem}
+                            onPress={() => setIsFastMode(!isFastMode)}
+                        >
+                            <MaterialCommunityIcons
+                                name={isFastMode ? "lightning-bolt" : "lightning-bolt-outline"}
+                                size={22}
+                                color={isFastMode ? "#2ecc71" : "#666"}
+                            />
+                            <View style={{ flex: 1, marginLeft: 15 }}>
+                                <Text style={[styles.toolToggleLabel, isFastMode && { color: '#2ecc71' }]}>Modo Rápido (Scan +1)</Text>
+                            </View>
+                            <MaterialCommunityIcons
+                                name={isFastMode ? "toggle-switch" : "toggle-switch-off"}
+                                size={32}
+                                color={isFastMode ? "#2ecc71" : "#333"}
+                            />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.toolToggleItem}
+                            onPress={() => setShowHiddenStock(!showHiddenStock)}
+                        >
+                            <MaterialCommunityIcons
+                                name={showHiddenStock ? "eye" : "eye-off"}
+                                size={22}
+                                color={showHiddenStock ? "#d4af37" : "#666"}
+                            />
+                            <View style={{ flex: 1, marginLeft: 15 }}>
+                                <Text style={[styles.toolToggleLabel, showHiddenStock && { color: '#d4af37' }]}>Ver Productos sin Stock</Text>
+                            </View>
+                            <MaterialCommunityIcons
+                                name={showHiddenStock ? "toggle-switch" : "toggle-switch-off"}
+                                size={32}
+                                color={showHiddenStock ? "#d4af37" : "#333"}
+                            />
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
             </Modal>
             <Modal
                 visible={marketingModalVisible}
@@ -728,7 +824,7 @@ export default function StockScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000000' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 25, paddingTop: 15, backgroundColor: '#000' },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, paddingVertical: 15, backgroundColor: '#000' },
     headerLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 2 },
     title: { fontSize: 24, fontWeight: '900', color: '#d4af37', letterSpacing: 1 },
     headerActions: { flexDirection: 'row', gap: 10 },
@@ -742,7 +838,7 @@ const styles = StyleSheet.create({
     addButton: { width: 50, height: 50, borderRadius: 15, overflow: 'hidden' },
     addBtnGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-    listContent: { paddingHorizontal: 20, paddingBottom: 100 },
+    listContent: { paddingHorizontal: 20, paddingBottom: 0 },
     productCard: { marginBottom: 12, borderRadius: 20, borderWidth: 1, borderColor: '#222', overflow: 'hidden' },
     cardInner: { flexDirection: 'row', padding: 12, alignItems: 'center' },
     imageWrapper: { width: 70, height: 70, borderRadius: 15, backgroundColor: '#111', overflow: 'hidden', position: 'relative' },
@@ -755,9 +851,14 @@ const styles = StyleSheet.create({
     infoTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
     productName: { color: '#fff', fontSize: 15, fontWeight: 'bold', flex: 1, marginRight: 10 },
     salePrice: { color: '#2ecc71', fontSize: 16, fontWeight: '900' },
-    infoBottom: { gap: 4 },
-    metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     metaText: { color: '#555', fontSize: 11, fontWeight: '600', flex: 1 },
+
+    locationStockRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 10 },
+    locationItem: { flexDirection: 'row', alignItems: 'center' },
+    locationLabel: { color: '#666', fontSize: 11, marginLeft: 4 },
+    locationQty: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+    locationDivider: { width: 1, height: 10, backgroundColor: '#333' },
+
     quickAction: { padding: 8 },
     deleteBadge: {
         position: 'absolute',
@@ -792,4 +893,70 @@ const styles = StyleSheet.create({
     copyBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#222', padding: 15, borderRadius: 12, gap: 8 },
     shareBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d4af37', padding: 15, borderRadius: 12, gap: 10 },
     actionBtnText: { color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 0.5 },
+
+    // Tools Menu Styles
+    toolsMenuContent: {
+        backgroundColor: '#111',
+        borderRadius: 25,
+        padding: 25,
+        borderWidth: 1,
+        borderColor: '#333',
+        width: '90%'
+    },
+    toolsMenuTitle: {
+        color: '#666',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 2,
+        textAlign: 'center',
+        marginBottom: 20
+    },
+    toolsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        gap: 15
+    },
+    toolItem: {
+        width: '47%',
+        backgroundColor: '#0a0a0a',
+        padding: 15,
+        borderRadius: 15,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#222'
+    },
+    toolIconBox: {
+        width: 50,
+        height: 50,
+        borderRadius: 15,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 10
+    },
+    toolLabel: {
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: 'bold'
+    },
+    toolsDivider: {
+        height: 1,
+        backgroundColor: '#222',
+        marginVertical: 20
+    },
+    toolToggleItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#0a0a0a',
+        padding: 12,
+        borderRadius: 15,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#1a1a1a'
+    },
+    toolToggleLabel: {
+        color: '#888',
+        fontSize: 13,
+        fontWeight: 'bold'
+    }
 });

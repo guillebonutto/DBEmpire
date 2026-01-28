@@ -47,12 +47,11 @@ export default function NewSaleScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const [commissionRate, setCommissionRate] = useState(0.10);
     const [isLeaderSale, setIsLeaderSale] = useState(false);
-    const [transportCost, setTransportCost] = useState(0);
-    const [includeTransport, setIncludeTransport] = useState(false);
 
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
     const [tempQty, setTempQty] = useState(1);
+    const [saleLocation, setSaleLocation] = useState('local'); // 'local' (BA) or 'cordoba'
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();
@@ -88,19 +87,17 @@ export default function NewSaleScreen({ navigation, route }) {
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [productsRes, clientsRes, promosRes, commRes, transRes] = await Promise.all([
+            const [productsRes, clientsRes, promosRes, commRes] = await Promise.all([
                 supabase.from('products').select('*').eq('active', true).order('name'),
                 supabase.from('clients').select('*').order('created_at', { ascending: false }),
                 supabase.from('promotions').select('*, promotion_products(product_id)').eq('active', true).order('created_at', { ascending: false }),
-                supabase.from('settings').select('value').eq('key', 'commission_rate').single(),
-                supabase.from('settings').select('value').eq('key', 'transport_cost').single()
+                supabase.from('settings').select('value').eq('key', 'commission_rate').single()
             ]);
 
             if (productsRes.data) setProducts(productsRes.data);
             if (clientsRes.data) setClients(clientsRes.data || []);
             if (promosRes.data) setPromos(promosRes.data || []);
             if (commRes.data) setCommissionRate(parseFloat(commRes.data.value));
-            if (transRes.data) setTransportCost(parseFloat(transRes.data.value) || 0);
 
         } catch (error) {
             console.log('Error fetching initial data:', error);
@@ -128,7 +125,8 @@ export default function NewSaleScreen({ navigation, route }) {
     const getAvailableStock = (item) => {
         const inCartItem = cart.find(c => c.id === item.id);
         const inCartQty = inCartItem ? inCartItem.qty : 0;
-        return (item.current_stock || 0) - inCartQty;
+        const locationStock = saleLocation === 'local' ? (item.stock_local || 0) : (item.stock_cordoba || 0);
+        return locationStock - inCartQty;
     };
 
     const initiateProductSelection = (item) => {
@@ -252,7 +250,7 @@ export default function NewSaleScreen({ navigation, route }) {
             }
         }
 
-        const total = subtotal - discount + (includeTransport ? transportCost : 0);
+        const total = subtotal - discount;
         const finalProfit = totalProfit - discount; // Discount reduces profit
 
         // Multi-tier commission: 10% standard, 5% if it's a Leader sale closed by César
@@ -262,7 +260,7 @@ export default function NewSaleScreen({ navigation, route }) {
         return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail };
     };
 
-    const { subtotal, total, totalProfit, commission, discount, promoDetail } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, includeTransport, isLeaderSale, commissionRate]);
+    const { subtotal, total, totalProfit, commission, discount, promoDetail } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate]);
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
 
@@ -423,14 +421,6 @@ export default function NewSaleScreen({ navigation, route }) {
                                     <td style="text-align: right; padding: 10px;"><strong>-$${discount.toFixed(2)}</strong></td>
                                 </tr>
                             ` : ''}
-                            ${includeTransport ? `
-                                <tr style="border-bottom: 1px solid #eee; background-color: #f8f8f8;">
-                                    <td style="padding: 10px; color: #666;">Envío / Transporte</td>
-                                    <td style="text-align: center; padding: 10px; color: #666;">1</td>
-                                    <td style="text-align: right; padding: 10px; color: #666;">$${transportCost.toFixed(2)}</td>
-                                    <td style="text-align: right; padding: 10px; color: #666;">$${transportCost.toFixed(2)}</td>
-                                </tr>
-                            ` : ''}
                         </tbody>
                     </table>
 
@@ -474,7 +464,8 @@ export default function NewSaleScreen({ navigation, route }) {
                 status: saleType,
                 device_sig: deviceSig,
                 is_leader_sale: isLeaderSale,
-                promotion_id: selectedPromo ? selectedPromo.id : null
+                promotion_id: selectedPromo ? selectedPromo.id : null,
+                sale_location: saleLocation
             };
 
             if (!netState.isConnected) {
@@ -576,13 +567,20 @@ export default function NewSaleScreen({ navigation, route }) {
                         }
                         // -------------------------------------
 
-                        const newStock = (item.current_stock || 0) - item.qty;
-                        await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
+                        const fieldToUpdate = saleLocation === 'local' ? 'stock_local' : 'stock_cordoba';
+                        const currentLocationStock = saleLocation === 'local' ? (item.stock_local || 0) : (item.stock_cordoba || 0);
+                        const newLocationStock = currentLocationStock - item.qty;
 
-                        if (newStock <= 5) {
-                            lowStockProducts.push({ name: item.name, stock: newStock });
-                            // Non-critical: Try to send notification but don't fail if it fails
-                            NotificationService.sendLowStockAlert(item.name, newStock).catch(e => console.log('Notification Error:', e));
+                        const totalStock = (parseInt(item.current_stock) || 0) - item.qty;
+
+                        await supabase.from('products').update({
+                            [fieldToUpdate]: newLocationStock,
+                            current_stock: totalStock
+                        }).eq('id', item.id);
+
+                        if (newLocationStock <= 5) {
+                            lowStockProducts.push({ name: item.name, stock: newLocationStock });
+                            NotificationService.sendLowStockAlert(`${item.name} (${saleLocation})`, newLocationStock).catch(e => console.log('Notification Error:', e));
                         }
                     }
 
@@ -734,14 +732,32 @@ export default function NewSaleScreen({ navigation, route }) {
                     discount={discount}
                     selectedPromo={selectedPromo}
                     promoDetail={promoDetail}
-                    includeTransport={includeTransport}
-                    setIncludeTransport={setIncludeTransport}
-                    transportCost={transportCost}
                 />
             )}
 
             {/* Transaction Type Selector */}
             <SaleTypeSelector saleType={saleType} setSaleType={setSaleType} />
+
+            {/* LOCATION SELECTOR */}
+            <View style={styles.locationContainer}>
+                <Text style={styles.locationTitle}>VENDER DESDE:</Text>
+                <View style={styles.locationToggleRow}>
+                    <TouchableOpacity
+                        style={[styles.locationToggle, saleLocation === 'local' && styles.locationToggleActive]}
+                        onPress={() => setSaleLocation('local')}
+                    >
+                        <MaterialCommunityIcons name="home-map-marker" size={18} color={saleLocation === 'local' ? '#000' : '#666'} />
+                        <Text style={[styles.locationToggleText, saleLocation === 'local' && styles.locationToggleTextActive]}>JUJUY</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.locationToggle, saleLocation === 'cordoba' && styles.locationToggleActive]}
+                        onPress={() => setSaleLocation('cordoba')}
+                    >
+                        <MaterialCommunityIcons name="map-marker-distance" size={18} color={saleLocation === 'cordoba' ? '#000' : '#666'} />
+                        <Text style={[styles.locationToggleText, saleLocation === 'cordoba' && styles.locationToggleTextActive]}>CÓRDOBA</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
 
             {/* COMMISSION SPLIT TOGGLE - Outside footer for better layout */}
             <View style={styles.commissionSplitCard}>
@@ -891,4 +907,12 @@ const styles = StyleSheet.create({
     splitToggleActive: { borderColor: '#00ff8840', backgroundColor: '#00ff8805' },
     splitTitle: { color: '#888', fontSize: 13, fontWeight: '700' },
     splitDesc: { color: '#444', fontSize: 11, fontWeight: '600', marginTop: 2 },
+
+    locationContainer: { marginHorizontal: 25, marginBottom: 15 },
+    locationTitle: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 8 },
+    locationToggleRow: { flexDirection: 'row', gap: 10 },
+    locationToggle: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0a0a0a', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#1a1a1a', gap: 8 },
+    locationToggleActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    locationToggleText: { color: '#666', fontSize: 11, fontWeight: 'bold' },
+    locationToggleTextActive: { color: '#000' }
 });
