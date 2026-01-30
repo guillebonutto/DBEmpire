@@ -697,6 +697,26 @@ export default function StockScreen({ navigation, route }) {
                                 </View>
                                 <Text style={styles.toolLabel}>Analíticas</Text>
                             </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('Orders'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#3498db20' }]}>
+                                    <MaterialCommunityIcons name="clipboard-list-outline" size={24} color="#3498db" />
+                                </View>
+                                <Text style={styles.toolLabel}>Pedidos</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('SupplierOrders'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#f1c40f20' }]}>
+                                    <MaterialCommunityIcons name="cube-send" size={24} color="#f1c40f" />
+                                </View>
+                                <Text style={styles.toolLabel}>Compras</Text>
+                            </TouchableOpacity>
                         </View>
 
                         <View style={styles.toolsDivider} />

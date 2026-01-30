@@ -23,14 +23,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const [isInitialLoad, setIsInitialLoad] = useState(true);
 
     useEffect(() => {
-        const checkRole = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
-                Alert.alert('Acceso Denegado', 'Las compras al proveedor son confidenciales.');
-                navigation.replace('Main');
-            }
-        };
-        checkRole();
+        // Ally (seller) can now create supplier orders as per user request
     }, []);
 
     // Product Linking State

@@ -461,6 +461,8 @@ export default function HomeScreen({ navigation }) {
                                 <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
                             </>
                         )}
+                        <MinimalModule title="Pedidos" icon="clipboard-list-outline" color="#3498db" onPress={() => navigation.navigate('Orders')} />
+                        <MinimalModule title="Compras" icon="cube-send" color="#f1c40f" onPress={() => navigation.navigate('SupplierOrders')} />
                         <MinimalModule title="Presupuesto" icon="file-document-edit" color="#e67e22" onPress={() => navigation.navigate('NewSale', { mode: 'quote' })} />
                     </View>
 
