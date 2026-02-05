@@ -375,9 +375,11 @@ export default function HomeScreen({ navigation }) {
                         <Text style={styles.brandName}>EMPIRE 👑</Text>
                         <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'Aliado'}</Text>
                     </View>
-                    <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
-                        <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
-                    </TouchableOpacity>
+                    {userRole === 'admin' && (
+                        <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
+                            <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
+                        </TouchableOpacity>
+                    )}
                 </View>
 
                 <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -463,7 +465,6 @@ export default function HomeScreen({ navigation }) {
                         )}
                         <MinimalModule title="Pedidos" icon="clipboard-list-outline" color="#3498db" onPress={() => navigation.navigate('Orders')} />
                         <MinimalModule title="Compras" icon="cube-send" color="#f1c40f" onPress={() => navigation.navigate('SupplierOrders')} />
-                        <MinimalModule title="Presupuesto" icon="file-document-edit" color="#e67e22" onPress={() => navigation.navigate('NewSale', { mode: 'quote' })} />
                     </View>
 
                     {/* Primary Action: Minimalist Giant Scanner */}
@@ -516,8 +517,8 @@ const styles = StyleSheet.create({
 
     sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 15, paddingHorizontal: 25, marginTop: 20 },
 
-    actionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, gap: 10 },
-    miniCard: { width: (width - 60) / 3, backgroundColor: '#0a0a0a', padding: 15, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
+    actionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, gap: 10, justifyContent: 'flex-start' },
+    miniCard: { width: (width - 70) / 3, backgroundColor: '#0a0a0a', padding: 15, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
     miniIcon: { width: 45, height: 45, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, marginBottom: 10 },
     miniTitle: { color: '#888', fontSize: 10, fontWeight: '800' },
     miniBadge: { position: 'absolute', top: 10, right: 10, width: 6, height: 6, borderRadius: 3, backgroundColor: '#d4af37' },

@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, MaterialCommunityIcons } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const ProductModal = ({
     visible,
@@ -9,6 +10,8 @@ const ProductModal = ({
     expandedProductId,
     setExpandedProductId,
     tempQty,
+    selectedColor,
+    setSelectedColor,
     adjustTempQty,
     initiateProductSelection,
     confirmAddToCart
@@ -32,6 +35,10 @@ const ProductModal = ({
                         const inCartQty = inCartItem ? inCartItem.qty : 0;
                         const available = (item.current_stock || 0) - inCartQty;
                         const isExpanded = expandedProductId === item.id;
+
+                        // Calculate detailed availability if variant is selected
+                        const selectedVariant = isExpanded && selectedColor ? item.variants?.find(v => v.color === selectedColor) : null;
+                        const effectiveMax = selectedVariant ? (selectedVariant.stock || 0) : available;
 
                         return (
                             <View style={[styles.productRow, isExpanded && styles.productRowExpanded]}>
@@ -59,7 +66,7 @@ const ProductModal = ({
                                             <Text style={styles.qtyLabel}>Cantidad:</Text>
                                             <View style={styles.qtyControls}>
                                                 <TouchableOpacity
-                                                    onPress={() => adjustTempQty(-1, available)}
+                                                    onPress={() => adjustTempQty(-1, effectiveMax)}
                                                     style={styles.qtyBtn}
                                                 >
                                                     <MaterialCommunityIcons name="minus" size={24} color="#fff" />
@@ -68,14 +75,47 @@ const ProductModal = ({
                                                 <Text style={styles.qtyValue}>{tempQty}</Text>
 
                                                 <TouchableOpacity
-                                                    onPress={() => adjustTempQty(1, available)}
-                                                    style={[styles.qtyBtn, tempQty >= available && { opacity: 0.3 }]}
-                                                    disabled={tempQty >= available}
+                                                    onPress={() => adjustTempQty(1, effectiveMax)}
+                                                    style={[styles.qtyBtn, tempQty >= effectiveMax && { opacity: 0.3 }]}
+                                                    disabled={tempQty >= effectiveMax}
                                                 >
                                                     <MaterialCommunityIcons name="plus" size={24} color="#fff" />
                                                 </TouchableOpacity>
                                             </View>
                                         </View>
+
+                                        {item.variants && item.variants.length > 0 && (
+                                            <View style={styles.variantsContainer}>
+                                                <Text style={styles.variantsLabel}>Seleccionar Color:</Text>
+                                                <View style={styles.variantsList}>
+                                                    {item.variants.map((v, idx) => {
+                                                        const isSelected = selectedColor === v.color;
+                                                        const isOutOfStock = (v.stock || 0) <= 0;
+
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={idx}
+                                                                style={[
+                                                                    styles.variantPill,
+                                                                    isSelected && styles.variantPillSelected,
+                                                                    isOutOfStock && styles.variantPillDisabled
+                                                                ]}
+                                                                onPress={() => !isOutOfStock && setSelectedColor(v.color)}
+                                                                disabled={isOutOfStock}
+                                                            >
+                                                                <Text style={[
+                                                                    styles.variantPillText,
+                                                                    isSelected && styles.variantPillTextSelected,
+                                                                    isOutOfStock && styles.variantPillTextDisabled
+                                                                ]}>
+                                                                    {v.color} ({v.stock})
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+                                            </View>
+                                        )}
                                         <Text style={styles.availableText}>Disponible: {available}</Text>
 
                                         <View style={styles.actionRow}>
@@ -136,7 +176,29 @@ const styles = StyleSheet.create({
     smallBtn: { height: 45, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
     btnText: { color: '#fff', fontSize: 14 },
     finishBtn: { backgroundColor: '#d4af37', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-    finishText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
+    finishText: { color: '#000', fontWeight: 'bold', fontSize: 16 },
+    variantsContainer: { marginTop: 15 },
+    variantsLabel: { color: '#888', fontSize: 12, marginBottom: 8 },
+    variantsList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    variantPill: {
+        paddingHorizontal: 15,
+        paddingVertical: 8,
+        borderRadius: 20,
+        backgroundColor: '#222',
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    variantPillSelected: {
+        backgroundColor: '#d4af37',
+        borderColor: '#d4af37'
+    },
+    variantPillDisabled: {
+        opacity: 0.3,
+        backgroundColor: '#111'
+    },
+    variantPillText: { color: '#fff', fontSize: 13 },
+    variantPillTextSelected: { color: '#000', fontWeight: 'bold' },
+    variantPillTextDisabled: { color: '#666' }
 });
 
 export default ProductModal;

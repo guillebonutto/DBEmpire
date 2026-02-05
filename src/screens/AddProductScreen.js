@@ -52,9 +52,17 @@ export default function AddProductScreen({ navigation, route }) {
     const [calcBatch, setCalcBatch] = useState('');
 
     // CRM Match State
-    const [potentialClients, setPotentialClients] = useState([]);
     const [showMatchModal, setShowMatchModal] = useState(false);
+    const [potentialClients, setPotentialClients] = useState([]);
     const [generatingMsg, setGeneratingMsg] = useState(null);
+
+    // PPP (Weighted Average) State
+    const [pendingPurchases, setPendingPurchases] = useState([]);
+    const [showPPPModal, setShowPPPModal] = useState(false);
+    const [selectedPPPItems, setSelectedPPPItems] = useState([]);
+
+    // Variants State
+    const [variants, setVariants] = useState([]);
 
     const [formData, setFormData] = useState({
         name: route.params?.scannedName || '',
@@ -210,49 +218,60 @@ export default function AddProductScreen({ navigation, route }) {
         }
     };
 
-    // Wizard Mode: Pre-fill from Import Queue
+    // Fetch other pending purchases for PPP
     useEffect(() => {
-        if (queueItem) {
-            const { product, name, cost, quantity, provider, barcode } = queueItem;
+        const fetchPendingPurchases = async () => {
+            if (!queueItem) return;
 
-            if (product) {
-                const stockLocal = parseInt(product.stock_local) || 0;
-                const newQty = parseInt(quantity) || 0;
+            try {
+                let query = supabase
+                    .from('supplier_order_items')
+                    .select('*, supplier_orders!inner(status, provider_name, created_at)')
+                    .eq('supplier_orders.status', 'pending');
 
-                setFormData(prev => ({
-                    ...prev,
-                    name: product.name,
-                    description: product.description || '',
-                    provider: provider || product.provider || '',
-                    cost_price: cost?.toString() || product.cost_price?.toString(),
-                    profit_margin_percent: product.profit_margin_percent?.toString() || '30',
-                    sale_price: product.sale_price?.toString() || '',
-                    stock_local: (stockLocal + newQty).toString(), // New items always arrive at local stock
-                    stock_cordoba: (product.stock_cordoba || 0).toString(),
-                    defect_notes: product.defect_notes || '',
-                    barcode: product.barcode || ''
-                }));
-                if (product.image_url) setImage(product.image_url);
+                if (queueItem.product?.id) {
+                    query = query.eq('product_id', queueItem.product.id);
+                } else {
+                    query = query.eq('temp_product_name', queueItem.name);
+                }
 
-                // Calc overheads
-                setOverheadInternet(product.internet_cost?.toString() || '');
-                setOverheadElectricity(product.electricity_cost?.toString() || '');
-
-            } else {
-                // UNLINKED PRODUCT (New)
-                setFormData(prev => ({
-                    ...prev,
-                    name: name || '',
-                    cost_price: cost?.toString() || '',
-                    stock_local: quantity?.toString() || '0',
-                    stock_cordoba: '0',
-                    provider: provider || prev.provider,
-                    barcode: '',
-                    profit_margin_percent: '30'
-                }));
+                const { data, error } = await query;
+                if (!error && data) {
+                    // Exclude the current item being processed
+                    const others = data.filter(item => item.id !== queueItem.id);
+                    setPendingPurchases(others);
+                }
+            } catch (err) {
+                console.log('Error fetching pending purchases:', err);
             }
-        }
-    }, [route.params?.importIndex]);
+        };
+
+        fetchPendingPurchases();
+    }, [route.params?.importIndex, queueItem?.id]);
+
+    const calculatePPP = () => {
+        if (!queueItem) return;
+
+        let totalCost = (parseFloat(queueItem.cost) || 0) * (parseInt(queueItem.quantity) || 1);
+        let totalQty = parseInt(queueItem.quantity) || 1;
+
+        selectedPPPItems.forEach(item => {
+            totalCost += (parseFloat(item.cost_per_unit) || 0) * (parseInt(item.quantity) || 1);
+            totalQty += parseInt(item.quantity) || 1;
+        });
+
+        const ppp = totalCost / totalQty;
+        setFormData(prev => ({
+            ...prev,
+            cost_price: ppp.toFixed(2),
+            // Update stock too if we are receiving them all? 
+            // Better only update cost as requested, and let user adjust quantity if needed
+        }));
+        setShowPPPModal(false);
+        Alert.alert('💡 Precio Promediado', `Se calculó un costo promedio de $${ppp.toFixed(2)} basado en las compras seleccionadas.`);
+    };
+
+    // Wizard Mode: Pre-fill from Import Queue
 
     // Load data if editing
     useEffect(() => {
@@ -271,11 +290,32 @@ export default function AddProductScreen({ navigation, route }) {
             });
             setOverheadInternet(productToEdit.internet_cost?.toString() || '');
             setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
+            setVariants(productToEdit.variants || []);
             if (productToEdit.image_url) {
                 setImage(productToEdit.image_url);
             }
         }
     }, [productToEdit]);
+
+    const addVariant = () => {
+        setVariants([...variants, { color: '', stock: '' }]);
+    };
+
+    const removeVariant = (idx) => {
+        setVariants(variants.filter((_, i) => i !== idx));
+    };
+
+    const updateVariant = (idx, field, value) => {
+        const updated = [...variants];
+        updated[idx] = { ...updated[idx], [field]: value };
+        setVariants(updated);
+
+        // Optional: Auto-update local stock as sum of variants
+        const totalVariantStock = updated.reduce((sum, v) => sum + (parseInt(v.stock) || 0), 0);
+        if (totalVariantStock > 0) {
+            setFormData(prev => ({ ...prev, stock_local: totalVariantStock.toString() }));
+        }
+    };
 
     const handleChange = (name, value) => {
         setFormData(prev => ({ ...prev, [name]: value }));
@@ -427,6 +467,8 @@ export default function AddProductScreen({ navigation, route }) {
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
                 defect_notes: formData.defect_notes,
+                variants: variants,
+                active: true,
                 image_url: finalImageUrl,
             };
 
@@ -741,6 +783,15 @@ export default function AddProductScreen({ navigation, route }) {
                         keyboardType="numeric"
                         placeholder="0.00"
                     />
+                    {pendingPurchases.length > 0 && (
+                        <TouchableOpacity
+                            style={styles.pppBadge}
+                            onPress={() => setShowPPPModal(true)}
+                        >
+                            <MaterialCommunityIcons name="calculator-variant" size={14} color="#d4af37" />
+                            <Text style={styles.pppBadgeText}>PROMEDIAR CON {pendingPurchases.length} COMPRAS</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
                 <View style={styles.halfInput}>
                     <Text style={styles.label}>Margen (%)</Text>
@@ -753,6 +804,74 @@ export default function AddProductScreen({ navigation, route }) {
                     />
                 </View>
             </View>
+
+            {/* PPP MODAL */}
+            <Modal visible={showPPPModal} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>PROMEDIO PONDERADO (PPP)</Text>
+                        <Text style={styles.modalSubtitle}>Selecciona las compras "en camino" que llegaron en este lote para unificar el costo.</Text>
+
+                        <ScrollView style={{ maxHeight: 300 }}>
+                            <View style={styles.pppItemCurrent}>
+                                <Text style={{ color: '#d4af37', fontWeight: 'bold', fontSize: 12 }}>ESTA COMPRA (ACTUAL)</Text>
+                                <Text style={{ color: '#fff' }}>{queueItem?.quantity} un. x ${queueItem?.cost}</Text>
+                            </View>
+
+                            {pendingPurchases.map(item => {
+                                const isSelected = selectedPPPItems.find(i => i.id === item.id);
+                                return (
+                                    <TouchableOpacity
+                                        key={item.id}
+                                        style={[styles.pppItem, isSelected && styles.pppItemSelected]}
+                                        onPress={() => {
+                                            if (isSelected) {
+                                                setSelectedPPPItems(prev => prev.filter(i => i.id !== item.id));
+                                            } else {
+                                                setSelectedPPPItems(prev => [...prev, item]);
+                                            }
+                                        }}
+                                    >
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.supplier_orders.provider_name}</Text>
+                                            <Text style={{ color: '#666', fontSize: 11 }}>{new Date(item.supplier_orders.created_at).toLocaleDateString()}</Text>
+                                            <Text style={{ color: '#d4af37' }}>{item.quantity} un. x ${item.cost_per_unit}</Text>
+                                        </View>
+                                        <MaterialCommunityIcons
+                                            name={isSelected ? "checkbox-marked" : "checkbox-blank-outline"}
+                                            size={24}
+                                            color={isSelected ? "#d4af37" : "#444"}
+                                        />
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+
+                        <Text style={styles.pppResultText}>
+                            Nuevo Costo Estimado: <Text style={{ color: '#2ecc71' }}>${
+                                (() => {
+                                    let totalCost = (parseFloat(queueItem?.cost) || 0) * (parseInt(queueItem?.quantity) || 1);
+                                    let totalQty = parseInt(queueItem?.quantity) || 1;
+                                    selectedPPPItems.forEach(item => {
+                                        totalCost += (parseFloat(item.cost_per_unit) || 0) * (parseInt(item.quantity) || 1);
+                                        totalQty += parseInt(item.quantity) || 1;
+                                    });
+                                    return (totalCost / totalQty).toFixed(2);
+                                })()
+                            }</Text>
+                        </Text>
+
+                        <View style={styles.modalButtons}>
+                            <TouchableOpacity style={styles.cancelButton} onPress={() => setShowPPPModal(false)}>
+                                <Text style={styles.cancelButtonText}>CANCELAR</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.applyButton} onPress={calculatePPP}>
+                                <Text style={styles.applyButtonText}>APLICAR PROMEDIO</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
 
             {/* CRM MATCH MODAL */}
             <Modal
@@ -920,6 +1039,47 @@ export default function AddProductScreen({ navigation, route }) {
                         placeholder="0"
                     />
                 </View>
+            </View>
+
+            {/* VARIANTS SECTION */}
+            <View style={{ marginTop: 20, padding: 15, backgroundColor: '#0a0a0a', borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                    <View>
+                        <Text style={{ color: '#3498db', fontSize: 13, fontWeight: '900' }}>COLORES / VARIANTES</Text>
+                        <Text style={{ color: '#555', fontSize: 10 }}>Control de stock por color</Text>
+                    </View>
+                    <TouchableOpacity onPress={addVariant} style={{ backgroundColor: '#3498db20', padding: 8, borderRadius: 8 }}>
+                        <MaterialCommunityIcons name="plus" size={20} color="#3498db" />
+                    </TouchableOpacity>
+                </View>
+
+                {variants.map((v, idx) => (
+                    <View key={idx} style={{ flexDirection: 'row', gap: 10, marginBottom: 10, alignItems: 'center' }}>
+                        <TextInput
+                            style={[styles.input, { flex: 2, marginBottom: 0 }]}
+                            placeholder="Color"
+                            placeholderTextColor="#666"
+                            value={v.color}
+                            onChangeText={(val) => updateVariant(idx, 'color', val)}
+                        />
+                        <TextInput
+                            style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                            placeholder="Cant."
+                            placeholderTextColor="#666"
+                            keyboardType="numeric"
+                            value={v.stock.toString()}
+                            onChangeText={(val) => updateVariant(idx, 'stock', val)}
+                        />
+                        <TouchableOpacity onPress={() => removeVariant(idx)}>
+                            <MaterialCommunityIcons name="close-circle" size={24} color="#e74c3c" />
+                        </TouchableOpacity>
+                    </View>
+                ))}
+                {variants.length > 0 && (
+                    <Text style={{ color: '#555', fontSize: 10, marginTop: 5, fontStyle: 'italic' }}>
+                        * El stock total se actualizará automáticamente basado en las variantes.
+                    </Text>
+                )}
             </View>
 
             <Text style={styles.label}>Proveedor</Text>
@@ -1165,6 +1325,57 @@ export default function AddProductScreen({ navigation, route }) {
                                 )}
                             </View>
                         )}
+                    </View>
+                </View>
+            </Modal>
+
+            {/* CRM SMART MATCH MODAL */}
+            <Modal visible={showMatchModal} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={styles.crmModalContent}>
+                        <View style={styles.crmModalHeader}>
+                            <MaterialCommunityIcons name="robot-happy" size={30} color="#d4af37" />
+                            <Text style={styles.crmModalTitle}>MATCH INTELIGENTE</Text>
+                        </View>
+                        <Text style={styles.crmModalSubtitle}>
+                            La IA encontró {potentialClients.length} clientes potenciales interesados en este producto.
+                        </Text>
+
+                        <FlatList
+                            data={potentialClients}
+                            keyExtractor={(item, index) => item.id ? item.id.toString() : index.toString()}
+                            style={{ maxHeight: 300 }}
+                            renderItem={({ item }) => (
+                                <View style={styles.clientMatchCard}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.clientMatchName}>{item.name}</Text>
+                                        <Text style={styles.clientMatchReason}>{item.match_reason || 'Interés detectado por historial'}</Text>
+                                        <Text style={styles.clientMatchDetail}>
+                                            {item.last_purchase ? `Ültima compra: ${new Date(item.last_purchase).toLocaleDateString()}` : 'Cliente nuevo / prospecto'}
+                                        </Text>
+                                    </View>
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            const msg = `Hola ${item.name}! 👋 Te aviso que acaba de ingresar: *${formData.name}* a $${formData.sale_price}. Creí que te podría interesar! 😉`;
+                                            Linking.openURL(`https://wa.me/${item.phone.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`);
+                                        }}
+                                        style={{ padding: 10 }}
+                                    >
+                                        <MaterialCommunityIcons name="whatsapp" size={30} color="#25D366" />
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        />
+
+                        <TouchableOpacity
+                            style={styles.crmCloseBtn}
+                            onPress={() => {
+                                setShowMatchModal(false);
+                                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                            }}
+                        >
+                            <Text style={styles.crmCloseBtnText}>LISTO, CONTINUAR</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </Modal>
@@ -1458,5 +1669,56 @@ const styles = StyleSheet.create({
         color: '#000',
         fontWeight: 'bold',
         letterSpacing: 1
+    },
+    // PPP Styles
+    pppBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#d4af3720',
+        paddingVertical: 5,
+        paddingHorizontal: 8,
+        borderRadius: 6,
+        marginTop: 8,
+        borderWidth: 1,
+        borderColor: '#d4af3740'
+    },
+    pppBadgeText: {
+        color: '#d4af37',
+        fontSize: 9,
+        fontWeight: '900',
+        marginLeft: 5,
+    },
+    pppItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#111',
+        padding: 12,
+        borderRadius: 10,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#222'
+    },
+    pppItemSelected: {
+        borderColor: '#d4af37',
+        backgroundColor: '#d4af3710'
+    },
+    pppItemCurrent: {
+        backgroundColor: '#222',
+        padding: 12,
+        borderRadius: 10,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: '#333',
+        borderStyle: 'dashed'
+    },
+    pppResultText: {
+        textAlign: 'center',
+        color: '#888',
+        fontSize: 15,
+        fontWeight: 'bold',
+        marginTop: 20,
+        paddingTop: 15,
+        borderTopWidth: 1,
+        borderTopColor: '#333'
     }
 });

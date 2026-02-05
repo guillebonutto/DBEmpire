@@ -148,10 +148,33 @@ export default function SupplierOrdersScreen({ navigation }) {
                             // 3. Execute Auto-Updates in Parallel
                             const autoUpdatePromises = itemsToAutoUpdate.map(({ item, product }) => {
                                 const newStock = (parseInt(product.current_stock) || 0) + parseInt(item.quantity);
-                                return supabase
-                                    .from('products')
-                                    .update({ current_stock: newStock })
-                                    .eq('id', item.product_id);
+                                const newLocalStock = (parseInt(product.stock_local) || 0) + parseInt(item.quantity);
+
+                                const productPromises = [];
+
+                                // Update general stock
+                                productPromises.push(
+                                    supabase
+                                        .from('products')
+                                        .update({
+                                            current_stock: newStock,
+                                            stock_local: newLocalStock
+                                        })
+                                        .eq('id', item.product_id)
+                                );
+
+                                // Update variant stock via RPC
+                                if (item.color) {
+                                    productPromises.push(
+                                        supabase.rpc('upsert_variant_stock', {
+                                            p_id: item.product_id,
+                                            p_color: item.color,
+                                            p_qty: parseInt(item.quantity)
+                                        })
+                                    );
+                                }
+
+                                return Promise.all(productPromises);
                             });
                             await Promise.all(autoUpdatePromises);
 

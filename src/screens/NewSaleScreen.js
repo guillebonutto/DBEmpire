@@ -51,6 +51,7 @@ export default function NewSaleScreen({ navigation, route }) {
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
     const [tempQty, setTempQty] = useState(1);
+    const [selectedColor, setSelectedColor] = useState(null);
     const [saleLocation, setSaleLocation] = useState('local'); // 'local' (BA) or 'cordoba'
 
     // Scanner
@@ -139,6 +140,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
         setExpandedProductId(item.id);
         setTempQty(1);
+        setSelectedColor(null);
     };
 
     const adjustTempQty = (delta, maxStock) => {
@@ -165,17 +167,24 @@ export default function NewSaleScreen({ navigation, route }) {
         const product = products.find(p => p.barcode === barcodeData);
 
         if (product) {
+            // Check if it has variants
+            if (product.variants && product.variants.length > 0) {
+                // Open selection modal instead of adding directly
+                setProductModalVisible(true);
+                initiateProductSelection(product);
+                return;
+            }
+
             // Check stock
             const available = getAvailableStock(product);
             if (available > 0) {
-                // Add to cart directly (1 unit)
-                // We reuse confirmAddToCart but need to wrap it to match the signature or just call setCart
+                // Add to cart directly (1 unit, no color)
                 setCart(prev => {
-                    const existing = prev.find(item => item.id === product.id);
+                    const existing = prev.find(item => item.id === product.id && !item.color);
                     if (existing) {
-                        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+                        return prev.map(item => (item.id === product.id && !item.color) ? { ...item, qty: item.qty + 1 } : item);
                     }
-                    return [...prev, { ...product, qty: 1 }];
+                    return [...prev, { ...product, qty: 1, color: null }];
                 });
                 Alert.alert('✅ Agregado', `${product.name} (+1)`);
             } else {
@@ -187,15 +196,22 @@ export default function NewSaleScreen({ navigation, route }) {
     };
 
     const confirmAddToCart = (product) => {
+        // If product has variants but no color selected, alert user
+        if (product.variants && product.variants.length > 0 && !selectedColor) {
+            Alert.alert('Color Requerido', 'Por favor selecciona un color para este producto.');
+            return;
+        }
+
         setCart(prev => {
-            const existing = prev.find(item => item.id === product.id);
+            const existing = prev.find(item => item.id === product.id && item.color === selectedColor);
             if (existing) {
-                return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + tempQty } : item);
+                return prev.map(item => (item.id === product.id && item.color === selectedColor) ? { ...item, qty: item.qty + tempQty } : item);
             }
-            return [...prev, { ...product, qty: tempQty }];
+            return [...prev, { ...product, qty: tempQty, color: selectedColor }];
         });
         setExpandedProductId(null);
         setTempQty(1);
+        setSelectedColor(null);
         // Do NOT close modal, allow multiple adds
     };
 
@@ -204,8 +220,8 @@ export default function NewSaleScreen({ navigation, route }) {
         confirmAddToCart({ ...product, qty: 1 }); // Fallback
     };
 
-    const removeFromCart = (id) => {
-        setCart(prev => prev.filter(item => item.id !== id));
+    const removeFromCart = (id, color) => {
+        setCart(prev => prev.filter(item => !(item.id === id && item.color === color)));
     };
 
     const calculateTotals = () => {
@@ -518,7 +534,8 @@ export default function NewSaleScreen({ navigation, route }) {
                 product_id: item.id,
                 quantity: item.qty,
                 unit_price_at_sale: item.sale_price,
-                subtotal: item.sale_price * item.qty
+                subtotal: item.sale_price * item.qty,
+                color: item.color || null
             }));
 
             const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
@@ -573,10 +590,28 @@ export default function NewSaleScreen({ navigation, route }) {
 
                         const totalStock = (parseInt(item.current_stock) || 0) - item.qty;
 
-                        await supabase.from('products').update({
-                            [fieldToUpdate]: newLocationStock,
-                            current_stock: totalStock
-                        }).eq('id', item.id);
+                        const updatePromises = [];
+
+                        // Default updates
+                        updatePromises.push(
+                            supabase.from('products').update({
+                                [fieldToUpdate]: newLocationStock,
+                                current_stock: totalStock
+                            }).eq('id', item.id)
+                        );
+
+                        // Variant specific update
+                        if (item.color) {
+                            updatePromises.push(
+                                supabase.rpc('decrement_variant_stock', {
+                                    p_id: item.id,
+                                    p_color: item.color,
+                                    p_qty: item.qty
+                                })
+                            );
+                        }
+
+                        await Promise.all(updatePromises);
 
                         if (newLocationStock <= 5) {
                             lowStockProducts.push({ name: item.name, stock: newLocationStock });
@@ -698,7 +733,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
             <FlatList
                 data={cart}
-                keyExtractor={item => item.id}
+                keyExtractor={(item, index) => `${item.id}-${item.color || 'no-color'}-${index}`}
                 style={{ flex: 1 }}
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
@@ -830,6 +865,8 @@ export default function NewSaleScreen({ navigation, route }) {
                 expandedProductId={expandedProductId}
                 setExpandedProductId={setExpandedProductId}
                 tempQty={tempQty}
+                selectedColor={selectedColor}
+                setSelectedColor={setSelectedColor}
                 adjustTempQty={adjustTempQty}
                 initiateProductSelection={initiateProductSelection}
                 confirmAddToCart={confirmAddToCart}

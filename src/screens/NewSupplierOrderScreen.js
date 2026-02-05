@@ -1,6 +1,5 @@
-
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView, ActivityIndicator, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
@@ -31,8 +30,18 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const [selectedProducts, setSelectedProducts] = useState([]); // { product, quantity, cost, isNew, tempName }
     const [showProductModal, setShowProductModal] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [expandedIndex, setExpandedIndex] = useState(null);
+    const inputRefs = useRef([]);
 
-    const { orderToEdit } = navigation.route?.params || {}; // Safe access if route is undefined, though unlikely in this flow
+    const toggleExpand = useCallback((index) => {
+        // Linear is often perceived as faster for initial movement
+        LayoutAnimation.configureNext({
+            duration: 150,
+            update: { type: LayoutAnimation.Types.easeInEaseOut },
+            create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity }
+        });
+        setExpandedIndex(prev => prev === index ? null : index);
+    }, []);
 
     React.useEffect(() => {
         fetchProducts();
@@ -62,31 +71,27 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             .eq('supplier_order_id', orderId);
 
         if (data) {
-            const formatted = data.map(item => {
-                if (item.products) {
-                    // Linked Product
-                    return {
-                        product: item.products,
-                        quantity: item.quantity.toString(),
+            // Group items by product and cost
+            const groupedMap = {};
+            data.forEach(item => {
+                const key = item.product_id ? `prod_${item.product_id}_${item.cost_per_unit}` : `new_${item.temp_product_name}_${item.cost_per_unit}`;
+                if (!groupedMap[key]) {
+                    groupedMap[key] = {
+                        product: item.products || { id: null, name: item.temp_product_name },
                         cost: item.cost_per_unit.toString(),
-                        supplier: item.supplier || '',
-                        color: item.color || '',
-                        isNew: false
-                    };
-                } else {
-                    // Unlinked Product (New)
-                    return {
-                        product: { id: null, name: item.temp_product_name },
-                        quantity: item.quantity.toString(),
-                        cost: item.cost_per_unit.toString(),
-                        supplier: item.supplier || '',
-                        color: item.color || '',
-                        isNew: true,
-                        tempName: item.temp_product_name
+                        variants: [],
+                        isNew: !item.product_id,
+                        tempName: item.temp_product_name,
+                        localId: Math.random().toString(36).substr(2, 9)
                     };
                 }
+                groupedMap[key].variants.push({
+                    color: item.color || '',
+                    quantity: item.quantity.toString()
+                });
             });
-            setSelectedProducts(formatted);
+
+            setSelectedProducts(Object.values(groupedMap));
             setTimeout(() => setIsInitialLoad(false), 500);
         } else {
             setIsInitialLoad(false);
@@ -105,9 +110,9 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
         }
 
         const total = selectedProducts.reduce((sum, item) => {
-            const qty = parseFloat(item.quantity) || 0;
             const unitCost = parseFloat(item.cost) || 0;
-            return sum + (qty * unitCost);
+            const itemQty = item.variants.reduce((vSum, v) => vSum + (parseFloat(v.quantity) || 0), 0);
+            return sum + (itemQty * unitCost);
         }, 0);
 
         if (total > 0) {
@@ -116,34 +121,92 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     }, [selectedProducts]);
 
     const addProductToOrder = (product, isNew = false, tempName = '') => {
-        const newProduct = isNew
-            ? { product: { id: null, name: tempName }, quantity: '1', cost: '0', supplier: '', color: '', isNew: true, tempName }
-            : { product, quantity: '1', cost: product.cost_price?.toString() || '0', supplier: product.supplier || '', color: product.color || '', isNew: false };
+        const newProduct = {
+            product: isNew ? { id: null, name: tempName } : product,
+            cost: isNew ? '0' : (product.cost_price?.toString() || '0'),
+            variants: [{ color: '', quantity: '1' }],
+            isNew,
+            tempName: isNew ? tempName : null,
+            localId: Math.random().toString(36).substr(2, 9)
+        };
 
+        const newIndex = selectedProducts.length;
         setSelectedProducts([...selectedProducts, newProduct]);
         setShowProductModal(false);
         setSearchQuery('');
-    };
 
-    const updateProductItem = (id, field, value) => {
-        // Handle both linked (id) and unlinked (tempName)
-        // We use a unique key approach or find index
-        const updated = selectedProducts.map(p => {
-            const pId = p.product.id || p.tempName;
-            const targetId = id; // id passed is either product.id or tempName
-
-            if (pId === targetId) {
-                return { ...p, [field]: value };
-            }
-            return p;
+        // Expand the new item and focus its cost input
+        LayoutAnimation.configureNext({
+            duration: 200,
+            update: { type: LayoutAnimation.Types.easeInEaseOut }
         });
-        setSelectedProducts(updated);
+        setExpandedIndex(newIndex);
+
+        // Short timeout to ensure input is rendered before focusing
+        setTimeout(() => {
+            if (inputRefs.current[newIndex]) {
+                inputRefs.current[newIndex].focus();
+            }
+        }, 80);
     };
 
-    const removeProductItem = (id) => {
-        const filtered = selectedProducts.filter(p => (p.product.id || p.tempName) !== id);
-        setSelectedProducts(filtered);
-    };
+    const updateProductItem = useCallback((index, field, value) => {
+        setSelectedProducts(prev => {
+            const updated = [...prev];
+            if (field === 'name') {
+                updated[index] = {
+                    ...updated[index],
+                    product: { ...updated[index].product, name: value },
+                    tempName: updated[index].isNew ? value : updated[index].tempName
+                };
+            } else {
+                updated[index] = { ...updated[index], [field]: value };
+            }
+            return updated;
+        });
+    }, []);
+
+    const addVariantToProduct = useCallback((index) => {
+        setSelectedProducts(prev => {
+            const updated = [...prev];
+            const newItem = { ...updated[index] };
+            newItem.variants = [...newItem.variants, { color: '', quantity: '1' }];
+            updated[index] = newItem;
+            return updated;
+        });
+    }, []);
+
+    const updateVariant = useCallback((pIdx, vIdx, field, value) => {
+        setSelectedProducts(prev => {
+            const updated = [...prev];
+            const newItem = { ...updated[pIdx] };
+            const newVariants = [...newItem.variants];
+            newVariants[vIdx] = { ...newVariants[vIdx], [field]: value };
+            newItem.variants = newVariants;
+            updated[pIdx] = newItem;
+            return updated;
+        });
+    }, []);
+
+    const removeVariant = useCallback((pIdx, vIdx) => {
+        setSelectedProducts(prev => {
+            const updated = [...prev];
+            const newItem = { ...updated[pIdx] };
+            const newVariants = newItem.variants.filter((_, i) => i !== vIdx);
+
+            if (newVariants.length === 0) {
+                return prev.filter((_, i) => i !== pIdx);
+            }
+
+            newItem.variants = newVariants;
+            updated[pIdx] = newItem;
+            return updated;
+        });
+    }, []);
+
+    const removeProductItem = useCallback((index) => {
+        setSelectedProducts(prev => prev.filter((_, i) => i !== index));
+    }, []);
 
     const handleSave = async () => {
         if (!provider) {
@@ -206,15 +269,46 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             }
 
             if (selectedProducts.length > 0 && orderId) {
-                const itemsPayload = selectedProducts.map(p => ({
-                    supplier_order_id: orderId,
-                    product_id: p.isNew ? null : p.product.id,
-                    temp_product_name: p.isNew ? p.tempName : null,
-                    quantity: parseInt(p.quantity) || 1,
-                    cost_per_unit: parseFloat(p.cost) || 0,
-                    supplier: p.supplier || null,
-                    color: p.color || null
-                }));
+                const itemsPayload = [];
+                const productUpdatePromises = [];
+
+                for (const p of selectedProducts) {
+                    // If it's an existing product, update the products table with name AND new colors
+                    if (!p.isNew && p.product.id) {
+                        const uniqueColors = [...new Set(p.variants.map(v => v.color).filter(c => c))];
+                        productUpdatePromises.push(
+                            // We use a raw SQL query or fetched logic to merge colors usually,
+                            // but here simplified: we append new colors to the existing array.
+                            // Since we can't easily append via simple update without fetching first,
+                            // let's fetch the current colors first to be safe or just overwrite if that's the intended behavior.
+                            // Better approach: Let's assume we want to ADD these colors to the available list.
+                            supabase.rpc('append_product_colors', {
+                                p_id: p.product.id,
+                                new_colors: uniqueColors
+                            })
+                            // Fallback if RPC doesn't exist (simpler for now: just update name)
+                            // supabase.from('products').update({ name: p.product.name }).eq('id', p.product.id)
+                        );
+                        // Also update name just in case
+                        productUpdatePromises.push(
+                            supabase.from('products').update({ name: p.product.name }).eq('id', p.product.id)
+                        );
+                    }
+
+                    p.variants.forEach(v => {
+                        itemsPayload.push({
+                            supplier_order_id: orderId,
+                            product_id: p.isNew ? null : p.product.id,
+                            temp_product_name: p.isNew ? p.tempName : null, // Use tempName for new products
+                            quantity: parseInt(v.quantity) || 1,
+                            cost_per_unit: parseFloat(p.cost) || 0,
+                            supplier: payload.provider_name,
+                            color: v.color || null // Save the specific color variant
+                        });
+                    });
+                }
+
+                await Promise.all(productUpdatePromises);
 
                 const { error: itemsError } = await supabase
                     .from('supplier_order_items')
@@ -295,66 +389,33 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     />
                 </View>
 
-                {/* Products Section */}
                 <Text style={styles.label}>Productos Vinculados (Opcional)</Text>
-                {selectedProducts.map((item, index) => (
-                    <View key={index} style={styles.productCard}>
-                        <View style={styles.productCardHeader}>
-                            <Text style={styles.productName}>{item.product.name}</Text>
-                            <TouchableOpacity onPress={() => removeProductItem(item.product.id || item.tempName)}>
-                                <MaterialCommunityIcons name="close-circle" size={24} color="#e74c3c" />
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={styles.productCardRow}>
-                            <View style={{ flex: 1, marginRight: 10 }}>
-                                <Text style={styles.miniLabel}>Cantidad</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    placeholder="1"
-                                    placeholderTextColor="#666"
-                                    keyboardType="numeric"
-                                    value={item.quantity}
-                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'quantity', v)}
-                                />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.miniLabel}>Costo Unitario</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    placeholder="0.00"
-                                    placeholderTextColor="#666"
-                                    keyboardType="numeric"
-                                    value={item.cost}
-                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'cost', v)}
-                                />
-                            </View>
-                        </View>
-
-                        <View style={styles.productCardRow}>
-                            <View style={{ flex: 1, marginRight: 10 }}>
-                                <Text style={styles.miniLabel}>Proveedor</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    placeholder="Ej: Temu, Shein..."
-                                    placeholderTextColor="#666"
-                                    value={item.supplier || ''}
-                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'supplier', v)}
-                                />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.miniLabel}>Color/Variante</Text>
-                                <TextInput
-                                    style={styles.miniInput}
-                                    placeholder="Ej: Negro, Azul..."
-                                    placeholderTextColor="#666"
-                                    value={item.color || ''}
-                                    onChangeText={v => updateProductItem(item.product.id || item.tempName, 'color', v)}
-                                />
-                            </View>
-                        </View>
-                    </View>
-                ))}
+                <View style={[
+                    styles.productsListContainer,
+                    selectedProducts.length >= 3 && { height: 230 }
+                ]}>
+                    <ScrollView
+                        nestedScrollEnabled
+                        style={{ flexGrow: 0 }}
+                        contentContainerStyle={{ flexGrow: 1 }}
+                    >
+                        {selectedProducts.map((item, pIdx) => (
+                            <ProductItem
+                                key={item.localId || `item-${pIdx}`}
+                                item={item}
+                                index={pIdx}
+                                isExpanded={expandedIndex === pIdx}
+                                onToggle={toggleExpand}
+                                onRemove={removeProductItem}
+                                onUpdate={updateProductItem}
+                                onAddVariant={addVariantToProduct}
+                                onUpdateVariant={updateVariant}
+                                onRemoveVariant={removeVariant}
+                                inputRef={el => inputRefs.current[pIdx] = el}
+                            />
+                        ))}
+                    </ScrollView>
+                </View>
 
                 <TouchableOpacity style={styles.addProdBtn} onPress={() => setShowProductModal(true)}>
                     <MaterialCommunityIcons name="plus" size={20} color="#000" />
@@ -481,6 +542,158 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     );
 }
 
+const ProductItem = memo(({
+    item,
+    index,
+    isExpanded,
+    onToggle,
+    onRemove,
+    onUpdate,
+    onAddVariant,
+    onUpdateVariant,
+    onRemoveVariant,
+    inputRef
+}) => {
+    // Memoize total calculation to avoid unneeded math on every render
+    const totalQty = useMemo(() => {
+        return item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
+    }, [item.variants]);
+
+    return (
+        <View style={[styles.productCard, { borderLeftWidth: 4, borderLeftColor: isExpanded ? '#d4af37' : '#333' }]}>
+            <TouchableOpacity
+                style={styles.productCardHeader}
+                onPress={() => onToggle(index)}
+                activeOpacity={0.6} // More salient feedback
+                delayPressIn={0}
+                pressRetentionOffset={{ bottom: 10, left: 10, right: 10, top: 10 }}
+            >
+                <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={styles.productName} numberOfLines={1}>{item.product.name}</Text>
+                        {!isExpanded && (
+                            <View style={styles.qtyBadgeMini}>
+                                <Text style={styles.qtyBadgeText}>x{totalQty}</Text>
+                            </View>
+                        )}
+                    </View>
+                    <Text style={{ color: '#666', fontSize: 10 }}>
+                        {item.isNew ? 'NUEVO' : 'VINCULADO'} • {isExpanded ? 'Toca para contraer' : `Costo: $${item.cost} • ${item.variants.length} variantes`}
+                    </Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <TouchableOpacity
+                        onPress={() => onRemove(index)}
+                        style={{ marginRight: 15, padding: 5 }}
+                        activeOpacity={0.4}
+                        delayPressIn={0}
+                    >
+                        <MaterialCommunityIcons name="delete-outline" size={24} color="#e74c3c" />
+                    </TouchableOpacity>
+                    <MaterialCommunityIcons
+                        name={isExpanded ? "chevron-up" : "chevron-down"}
+                        size={24}
+                        color={isExpanded ? "#d4af37" : "#666"}
+                    />
+                </View>
+            </TouchableOpacity>
+
+            {isExpanded && (
+                <View style={{ marginTop: 10 }}>
+                    <View style={{ marginBottom: 15 }}>
+                        <Text style={styles.miniLabel}>Nombre del Producto</Text>
+                        <TextInput
+                            style={styles.miniInput}
+                            placeholder="Nombre del producto"
+                            placeholderTextColor="#666"
+                            value={item.product.name}
+                            onChangeText={v => onUpdate(index, 'name', v)}
+                        />
+                    </View>
+
+                    <View style={{ marginBottom: 15 }}>
+                        <Text style={styles.miniLabel}>Costo Unitario (USD/ARS)</Text>
+                        <TextInput
+                            ref={inputRef}
+                            style={styles.miniInput}
+                            placeholder="0.00"
+                            placeholderTextColor="#666"
+                            keyboardType="numeric"
+                            value={item.cost}
+                            onChangeText={v => onUpdate(index, 'cost', v)}
+                        />
+                    </View>
+
+                    <Text style={[styles.miniLabel, { marginBottom: 10, color: '#999' }]}>COLORES Y CANTIDADES:</Text>
+                    {item.variants.map((v, vIdx) => (
+                        <View key={vIdx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 10 }}>
+                            <TextInput
+                                style={[styles.miniInput, { flex: 2, marginBottom: 0 }]}
+                                placeholder="Color / Modelo"
+                                placeholderTextColor="#666"
+                                value={v.color}
+                                onChangeText={val => onUpdateVariant(index, vIdx, 'color', val)}
+                            />
+                            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#333' }}>
+                                <TouchableOpacity
+                                    style={{ padding: 8 }}
+                                    onPress={() => onUpdateVariant(index, vIdx, 'quantity', (parseInt(v.quantity) - 1).toString())}
+                                    activeOpacity={0.2}
+                                    delayPressIn={0}
+                                >
+                                    <MaterialCommunityIcons name="minus" size={16} color="#d4af37" />
+                                </TouchableOpacity>
+                                <TextInput
+                                    style={{ color: '#fff', width: 35, textAlign: 'center', fontWeight: 'bold' }}
+                                    keyboardType="numeric"
+                                    value={v.quantity}
+                                    onChangeText={val => onUpdateVariant(index, vIdx, 'quantity', val)}
+                                />
+                                <TouchableOpacity
+                                    style={{ padding: 8 }}
+                                    onPress={() => onUpdateVariant(index, vIdx, 'quantity', (parseInt(v.quantity) + 1).toString())}
+                                    activeOpacity={0.2}
+                                    delayPressIn={0}
+                                >
+                                    <MaterialCommunityIcons name="plus" size={16} color="#d4af37" />
+                                </TouchableOpacity>
+                            </View>
+                            {item.variants.length > 1 && (
+                                <TouchableOpacity
+                                    onPress={() => onRemoveVariant(index, vIdx)}
+                                    delayPressIn={0}
+                                    style={{ padding: 5 }}
+                                >
+                                    <MaterialCommunityIcons name="close" size={20} color="#666" />
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    ))}
+
+                    <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 5, padding: 8 }}
+                        onPress={() => onAddVariant(index)}
+                        delayPressIn={0}
+                        activeOpacity={0.7}
+                    >
+                        <MaterialCommunityIcons name="plus-circle-outline" size={18} color="#3498db" />
+                        <Text style={{ color: '#3498db', fontSize: 13, fontWeight: 'bold', marginLeft: 8 }}>Añadir otro color</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+        </View>
+    );
+}, (prev, next) => {
+    // Custom deep comparison to be 100% sure we only render when needed
+    return (
+        prev.isExpanded === next.isExpanded &&
+        prev.item.cost === next.item.cost &&
+        prev.item.product.name === next.item.product.name &&
+        prev.item.variants === next.item.variants &&
+        prev.index === next.index
+    );
+});
+
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
     header: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#333' },
@@ -497,8 +710,21 @@ const styles = StyleSheet.create({
     saveText: { color: '#000', fontWeight: '900', fontSize: 16 },
 
     // Product Linking Styles
-    productCard: { backgroundColor: '#222', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
-    productCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+    productsListContainer: {
+        backgroundColor: '#1a1a1a',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#333',
+        overflow: 'hidden',
+        marginBottom: 20
+    },
+    productCard: {
+        backgroundColor: 'transparent',
+        padding: 15,
+        borderBottomWidth: 1,
+        borderBottomColor: '#333'
+    },
+    productCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     productCardRow: { flexDirection: 'row', marginBottom: 10 },
     productName: { color: '#fff', fontWeight: 'bold', fontSize: 16, flex: 1 },
     miniLabel: { color: '#d4af37', fontSize: 11, fontWeight: 'bold', marginBottom: 5 },
@@ -525,4 +751,6 @@ const styles = StyleSheet.create({
     courierPillActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
     courierText: { color: '#666', fontWeight: 'bold', fontSize: 12 },
     courierTextActive: { color: '#000', fontWeight: '900' },
+    qtyBadgeMini: { backgroundColor: '#d4af37', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, marginLeft: 8 },
+    qtyBadgeText: { color: '#000', fontSize: 10, fontWeight: 'bold' },
 });

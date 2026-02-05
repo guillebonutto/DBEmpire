@@ -77,6 +77,7 @@ function MainTabs() {
                     if (route.name === 'Home') iconName = 'home-variant';
                     else if (route.name === 'Balance') iconName = 'scale-balance';
                     else if (route.name === 'Deudas') iconName = 'cash-check';
+                    else if (route.name === 'Presupuestos') iconName = 'file-document-edit';
                     else if (route.name === 'Inventario') iconName = 'package-variant-closed';
 
                     return (
@@ -93,6 +94,7 @@ function MainTabs() {
         >
             <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
             <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
+            <Tab.Screen name="Presupuestos" component={OrdersScreen} options={{ title: 'Presupuestos' }} />
             {userRole === 'admin' ? (
                 <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
             ) : null}
