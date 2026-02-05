@@ -1,0 +1,70 @@
+﻿node.exe :   
+--non-interactive is 
+not supported, use 
+$CI=1 instead
+En línea: 1 Carácter: 
+1
++ & "C:\Program Files\
+nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo 
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (  --non-in   
+ terac...e $CI=1 i    
+nstead:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+Starting project at E:\DBEmpire
+Metro is running in CI mode, reloads are disabled. Remove CI=true to enable watch mode.
+Starting Metro Bundler
+Tunnel connected.
+Tunnel ready.
+Waiting on http://localhost:8083
+Logs for your project will appear below.
+Android .\index.js ÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ  0.0% (0/1)
+Android .\index.js ÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ  8.6% ( 52/177)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 34.7% (187/321)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 48.4% (361/552)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 57.8% (506/726)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 57.8% (582/771)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæ 70.0% (836/999)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæ 81.0% (1162/1328)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæ 81.0% (1324/1492)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæ 83.8% (1479/1647)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæ 95.2% (1817/1862)
+Android Bundling failed 35837ms index.js (1876 modules)
+Unable to resolve "@react-native-community/datetimepicker" from "src\screens\NewSupplierOrderScreen.js"
+[0m [90m  6 |[39m [36mimport[39m [33mAsyncStorage[39m [36mfrom[39m [32m'@react-native-async-storage/async-storage'[39m[33m;[39m
+ [90m  7 |[39m
+[31m[1m>[22m[39m[90m  8 |[39m [36mimport[39m [33mDateTimePicker[39m [36mfrom[39m [32m'@react-native-community/datetimepicker'[39m[33m;[39m
+ [90m    |[39m                             [31m[1m^[22m[39m
+ [90m  9 |[39m
+ [90m 10 |[39m [36mexport[39m [36mdefault[39m [36mfunction[39m [33mNewSupplierOrderScreen[39m({ navigation[33m,[39m route }) {
+ [90m 11 |[39m     [36mconst[39m [purchaseDate[33m,[39m setPurchaseDate] [33m=[39m useState([36mnew[39m [33mDate[39m())[33m;[39m[0m
+
+Import stack:
+
+ src\screens\NewSupplierOrderScreen.js
+ | import "@react-native-community/datetimepicker"
+
+ src\navigation\AppNavigator.js
+ | import "../screens/NewSupplierOrderScreen"
+
+ App.js
+ | import "./src/navigation/AppNavigator"
+
+ index.js
+ | import "./App"
+
+ 
+ | import "./index"
+

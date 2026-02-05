@@ -1,0 +1,42 @@
+﻿node.exe :   
+--non-interactive is 
+not supported, use 
+$CI=1 instead
+En línea: 1 Carácter: 
+1
++ & "C:\Program Files\
+nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo 
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (  --non-in   
+ terac...e $CI=1 i    
+nstead:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+Starting project at E:\DBEmpire
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+Tunnel connected.
+Tunnel ready.
+Waiting on http://localhost:8084
+Logs for your project will appear below.
+Android .\index.js ÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ  7.7% ( 37/150)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 32.4% (176/309)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 46.6% (418/682)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 52.8% (555/764)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæÔûæÔûæÔûæ 62.3% (763/967)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæ 79.0% (1078/1213)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæÔûæ 81.1% (1279/1420)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæÔûæÔûæ 84.5% (1464/1619)
+Android .\index.js ÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûôÔûæ 99.5% (1878/1883)
+Android Bundled 32381ms index.js (1900 modules)

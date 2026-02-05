@@ -1,0 +1,32 @@
+﻿node.exe :   
+--non-interactive is 
+not supported, use 
+$CI=1 instead
+En línea: 1 Carácter: 
+1
++ & "C:\Program Files\
+nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo 
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (  --non-in   
+ terac...e $CI=1 i    
+nstead:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+Starting project at E:\DBEmpire
+Metro is running in CI mode, reloads are disabled. Remove CI=true to enable watch mode.
+Starting Metro Bundler
+Tunnel connected.
+Tunnel ready.
+Waiting on http://localhost:8083
+Logs for your project will appear below.

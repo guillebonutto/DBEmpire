@@ -1,0 +1,34 @@
+﻿node.exe :   
+--non-interactive is 
+not supported, use 
+$CI=1 instead
+En línea: 1 Carácter: 
+1
++ & "C:\Program Files\
+nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo 
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (  --non-in   
+ terac...e $CI=1 i    
+nstead:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+Starting project at E:\DBEmpire
+ÔÇ║ Port 8081 is being used by another process
+Input is required, 
+but 'npx expo' is in 
+non-interactive mode.
+Required input:
+> Use port 8082 
+instead?
+ÔÇ║ Skipping dev server
