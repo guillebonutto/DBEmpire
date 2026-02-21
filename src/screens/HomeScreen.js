@@ -84,6 +84,7 @@ export default function HomeScreen({ navigation }) {
             const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
             const deviceSig = await DeviceAuthService.getDeviceSignature();
+            const startOfLastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
             // Parallel fetch for basic stats
             const [
@@ -92,7 +93,8 @@ export default function HomeScreen({ navigation }) {
                 { data: expensesData },
                 { data: budgetsData },
                 { data: lowStockData },
-                { data: settingsData }
+                { data: settingsData },
+                { data: recentRestocks }
             ] = await Promise.all([
                 supabase.from('sales').select('total_amount, profit_generated, commission_amount, status').gte('created_at', startOfDay),
                 (currentRole === 'seller' && deviceSig)
@@ -101,7 +103,8 @@ export default function HomeScreen({ navigation }) {
                 supabase.from('expenses').select('amount').gte('created_at', startOfDay),
                 supabase.from('sales').select('total_amount').eq('status', 'budget'),
                 supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5),
-                supabase.from('settings').select('value').eq('key', 'commission_rate').single()
+                supabase.from('settings').select('value').eq('key', 'commission_rate').single(),
+                supabase.from('supplier_orders').select('id, total_cost').eq('status', 'received').gte('created_at', startOfLastWeek)
             ]);
 
             // Calculate Today's Stats
@@ -143,7 +146,8 @@ export default function HomeScreen({ navigation }) {
                 budgetSales: budgetsData ? budgetsData.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
                 commissionRate: rate,
                 lowStockCount: lowStockData ? lowStockData.length : 0,
-                lowStockProducts: lowStockData || []
+                lowStockProducts: lowStockData || [],
+                recentRestockCount: recentRestocks ? recentRestocks.length : 0
             };
             setStats(newStats);
 
@@ -206,14 +210,24 @@ export default function HomeScreen({ navigation }) {
     const getAICounsel = useCallback(() => {
         if (loading) return "Analizando panorama imperial...";
         if (userRole === 'admin') {
-            if (stats.lowStockCount > 3) return "⚠️ Hay productos críticos sin reposición. El Imperio pierde ventas.";
-            if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales} en presupuestos por cerrar.`;
+            const lowStock = stats.lowStockCount;
+            const restocks = stats.recentRestockCount || 0;
+
+            if (lowStock > 3) {
+                if (restocks > 0) {
+                    return `📈 Entraron ${restocks} pedidos esta semana, pero aún quedan ${lowStock} productos en reserva crítica.`;
+                }
+                return "⚠️ Hay productos críticos sin reposición. El Imperio pierde ventas.";
+            }
+
+            if (restocks > 0) return `✅ La reposición de esta semana fortaleció el stock. El Imperio prospera.`;
+            if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales.toFixed(2)} en presupuestos por cerrar.`;
             return "Las finanzas están estables. Es momento de expandir.";
         } else {
             if (missions.length > 0) return `⚔️ Tienes ${missions.length} misiones pendientes. Conquista el mercado hoy.`;
             return "Buen trabajo, Aliado. Sigue alimentando el catálogo.";
         }
-    }, [loading, userRole, stats.lowStockCount, stats.budgetSales, missions.length]);
+    }, [loading, userRole, stats.lowStockCount, stats.budgetSales, stats.recentRestockCount, missions.length]);
 
     const handleMissionAction = async (mission) => {
         if (mission.type === 'crm') {
@@ -329,7 +343,7 @@ export default function HomeScreen({ navigation }) {
                             <View style={styles.opportunityBox}>
                                 <MaterialCommunityIcons name="lightbulb-on" size={20} color="#f1c40f" />
                                 <Text style={styles.opportunityText}>
-                                    Tienes ${stats.budgetSales} en presupuestos. ¡Es hora de cerrar esas ventas!
+                                    Tienes ${stats.budgetSales.toFixed(2)} en presupuestos. ¡Es hora de cerrar esas ventas!
                                 </Text>
                             </View>
                         )}
@@ -395,12 +409,12 @@ export default function HomeScreen({ navigation }) {
                         <View style={styles.statsGrid}>
                             <View style={styles.statBrick}>
                                 <Text style={styles.statLab}>Ventas Hoy</Text>
-                                <Text style={styles.statVal}>${stats.todaySales}</Text>
+                                <Text style={styles.statVal}>${stats.todaySales.toFixed(2)}</Text>
                             </View>
                             <View style={styles.statBrick}>
                                 <Text style={styles.statLab}>Balance Neto</Text>
                                 <Text style={[styles.statVal, { color: stats.todayNetProfit >= 0 ? '#00ff88' : '#ff4444' }]}>
-                                    ${stats.todayNetProfit}
+                                    ${stats.todayNetProfit.toFixed(2)}
                                 </Text>
                             </View>
                         </View>

@@ -18,10 +18,23 @@ BEGIN
         ALTER TABLE supplier_order_items ADD COLUMN color TEXT;
     END IF;
 
-    -- 4. Clean up old 'colors' array if it exists (Optional/Safe)
+    -- 4. Ensure missing columns exist in sales table
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sales' AND column_name='sale_location') THEN
+        ALTER TABLE sales ADD COLUMN sale_location TEXT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sales' AND column_name='device_sig') THEN
+        ALTER TABLE sales ADD COLUMN device_sig TEXT;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sales' AND column_name='is_leader_sale') THEN
+        ALTER TABLE sales ADD COLUMN is_leader_sale BOOLEAN DEFAULT FALSE;
+    END IF;
+
+    -- 5. Clean up old 'colors' array if it exists (Optional/Safe)
     -- ALTER TABLE products DROP COLUMN IF EXISTS colors;
 
-    -- 5. Re-create the decrement function
+    -- 6. Re-create the decrement function
     CREATE OR REPLACE FUNCTION decrement_variant_stock(p_id BIGINT, p_color TEXT, p_qty INT)
     RETURNS VOID AS $inner$
     BEGIN

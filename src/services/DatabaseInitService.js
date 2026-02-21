@@ -10,7 +10,7 @@ export const DatabaseInitService = {
     init: async (force = false) => {
         try {
             const lastInit = await AsyncStorage.getItem('db_last_init');
-            const currentVersion = '1.0.3'; // Increment this when schema changes
+            const currentVersion = '1.0.4'; // Increment this when schema changes
 
             if (lastInit === currentVersion && !force) {
                 console.log('Database schema already up to date.');

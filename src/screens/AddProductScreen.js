@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal, FlatList, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -13,6 +15,7 @@ export default function AddProductScreen({ navigation, route }) {
     // Wizard Mode: Detect "Product to Edit" either from params or from Queue
     const queueItem = route.params?.importQueue ? route.params.importQueue[route.params.importIndex] : null;
     const productToEdit = queueItem?.product || route.params?.product;
+    const isWizardMode = !!route.params?.importQueue;
 
     const [loading, setLoading] = useState(false);
 
@@ -272,27 +275,47 @@ export default function AddProductScreen({ navigation, route }) {
     };
 
     // Wizard Mode: Pre-fill from Import Queue
+    useEffect(() => {
+        if (queueItem) {
+            setFormData(prev => ({
+                ...prev,
+                name: queueItem.name || queueItem.temp_product_name || productToEdit?.name || prev.name,
+                cost_price: queueItem.cost?.toString() || queueItem.cost_per_unit?.toString() || prev.cost_price,
+                stock_local: queueItem.quantity?.toString() || prev.stock_local,
+                provider: queueItem.provider || queueItem.supplier || queueItem.supplier_orders?.provider_name || prev.provider
+            }));
 
-    // Load data if editing
+            if (queueItem.color) {
+                setVariants([{ color: queueItem.color, stock: queueItem.quantity?.toString() || "" }]);
+            }
+        }
+    }, [queueItem]);
+
+    // Load data if editing (existing product)
     useEffect(() => {
         if (productToEdit) {
-            setFormData({
-                name: productToEdit.name,
-                description: productToEdit.description || '',
-                provider: productToEdit.provider || '',
-                cost_price: productToEdit.cost_price?.toString() || '',
-                profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
-                sale_price: productToEdit.sale_price?.toString() || '',
-                stock_local: productToEdit.stock_local?.toString() || '',
-                stock_cordoba: productToEdit.stock_cordoba?.toString() || '',
-                defect_notes: productToEdit.defect_notes || '',
-                barcode: productToEdit.barcode || ''
-            });
-            setOverheadInternet(productToEdit.internet_cost?.toString() || '');
-            setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
-            setVariants(productToEdit.variants || []);
-            if (productToEdit.image_url) {
-                setImage(productToEdit.image_url);
+            try {
+                setFormData({
+                    name: productToEdit.name || '',
+                    description: productToEdit.description || '',
+                    provider: productToEdit.provider || '',
+                    cost_price: productToEdit.cost_price?.toString() || '',
+                    profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
+                    sale_price: productToEdit.sale_price?.toString() || '',
+                    stock_local: productToEdit.stock_local?.toString() || '',
+                    stock_cordoba: productToEdit.stock_cordoba?.toString() || '',
+                    defect_notes: productToEdit.defect_notes || '',
+                    barcode: productToEdit.barcode || ''
+                });
+                setOverheadInternet(productToEdit.internet_cost?.toString() || '');
+                setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
+                setVariants(Array.isArray(productToEdit.variants) ? productToEdit.variants : []);
+                if (productToEdit.image_url) {
+                    setImage(productToEdit.image_url);
+                }
+            } catch (err) {
+                console.error('Error initializing product data:', err);
+                Alert.alert('Error', 'Hubo un problema al cargar los datos del producto.');
             }
         }
     }, [productToEdit]);
@@ -563,7 +586,7 @@ export default function AddProductScreen({ navigation, route }) {
             // --- AUTO EXPENSE & ORDER GENERATION ---
             // Only if we added stock and have a cost, AND we are NOT in Import Wizard mode (to avoid double accounting)
             // AND it is NOT a bundle (bundles are virtual compositions, expenses are on components)
-            if (stockDifference > 0 && costPrice > 0 && !route.params?.importQueue && !isBundle) {
+            if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle) {
                 try {
                     const expenseAmount = stockDifference * costPrice;
 
@@ -725,9 +748,31 @@ export default function AddProductScreen({ navigation, route }) {
         );
     };
 
+    const renderWizardHeader = () => {
+        if (!isWizardMode) return null;
+        const current = (route.params.importIndex || 0) + 1;
+        const total = route.params.importQueue.length;
+
+        return (
+            <LinearGradient colors={['#d4af37', '#b8860b']} style={styles.wizardHeader}>
+                <View style={styles.wizardContent}>
+                    <MaterialCommunityIcons name="auto-fix" size={20} color="#000" />
+                    <Text style={styles.wizardText}>
+                        PROCESANDO INGRESO: <Text style={{ fontWeight: '900' }}>{current} de {total}</Text>
+                    </Text>
+                </View>
+                <Text style={styles.wizardSub}>Estamos actualizando los datos de esta compra en tu inventario</Text>
+            </LinearGradient>
+        );
+    };
+
     return (
-        <ScrollView style={styles.container}>
-            {/* ... existing fields ... */}
+        <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
+            <StatusBar barStyle="light-content" />
+            <SafeAreaView style={styles.safe} edges={['top']}>
+                {renderWizardHeader()}
+            </SafeAreaView>
+
             <TouchableOpacity onPress={pickImage} style={styles.imagePicker}>
                 {image ? (
                     <Image source={{ uri: image }} style={styles.imagePreview} />
@@ -1067,7 +1112,7 @@ export default function AddProductScreen({ navigation, route }) {
                             placeholder="Cant."
                             placeholderTextColor="#666"
                             keyboardType="numeric"
-                            value={v.stock.toString()}
+                            value={v.stock !== undefined && v.stock !== null ? v.stock.toString() : ''}
                             onChangeText={(val) => updateVariant(idx, 'stock', val)}
                         />
                         <TouchableOpacity onPress={() => removeVariant(idx)}>
@@ -1720,5 +1765,29 @@ const styles = StyleSheet.create({
         paddingTop: 15,
         borderTopWidth: 1,
         borderTopColor: '#333'
+    },
+    // Wizard Header Styles
+    wizardHeader: {
+        padding: 20,
+        marginBottom: 10,
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
+    },
+    wizardContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginBottom: 5
+    },
+    wizardText: {
+        color: '#000',
+        fontSize: 16,
+        fontWeight: '700',
+        letterSpacing: 0.5
+    },
+    wizardSub: {
+        color: 'rgba(0,0,0,0.6)',
+        fontSize: 12,
+        fontWeight: '600'
     }
 });

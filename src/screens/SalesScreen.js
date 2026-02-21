@@ -10,13 +10,15 @@ export default function SalesScreen({ navigation }) {
     const [stats, setStats] = useState({ today: 0, month: 0, countToday: 0, commissions: 0 });
     const [recentSales, setRecentSales] = useState([]);
 
+    const [expandedSale, setExpandedSale] = useState(null);
+
     const fetchSalesData = async () => {
         setLoading(true);
         try {
-            // Get COMPLETED and BUDGET sales
+            // Get COMPLETED and BUDGET sales with items
             const { data, error } = await supabase
                 .from('sales')
-                .select('*, profiles(full_name), clients(name)')
+                .select('*, profiles(full_name), clients(name), sale_items(*, products(name))')
                 .in('status', ['completed', 'budget', 'pending', 'exitosa', ''])
                 .order('created_at', { ascending: false });
 
@@ -145,39 +147,58 @@ export default function SalesScreen({ navigation }) {
     const renderSaleItem = ({ item }) => {
         const isBudget = item.status === 'budget';
         const isPending = item.status === 'pending';
+        const isExpanded = expandedSale === item.id;
 
         return (
-            <View style={[styles.saleItem, (isBudget || isPending) && styles.saleItemPending]}>
-                <View style={{ flex: 1 }}>
-                    <View style={styles.saleHeader}>
-                        <Text style={styles.saleId}>Venta #{item.id.slice(0, 4)}</Text>
-                        {isBudget && <View style={styles.budgetBadge}><Text style={styles.budgetText}>PRESUPUESTO</Text></View>}
-                        {isPending && <View style={[styles.budgetBadge, { backgroundColor: '#ff4444' }]}><Text style={styles.budgetText}>DEUDA</Text></View>}
+            <TouchableOpacity
+                style={[styles.saleItem, (isBudget || isPending) && styles.saleItemPending, isExpanded && styles.saleItemExpanded]}
+                onPress={() => setExpandedSale(isExpanded ? null : item.id)}
+                activeOpacity={0.8}
+            >
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <View style={{ flex: 1 }}>
+                        <View style={styles.saleHeader}>
+                            <Text style={styles.saleId}>Venta #{item.id.slice(0, 4)}</Text>
+                            {isBudget && <View style={styles.budgetBadge}><Text style={styles.budgetText}>PRESUPUESTO</Text></View>}
+                            {isPending && <View style={[styles.budgetBadge, { backgroundColor: '#ff4444' }]}><Text style={styles.budgetText}>DEUDA</Text></View>}
+                        </View>
+                        <Text style={styles.saleDate}>{new Date(item.created_at).toLocaleDateString()} - {new Date(item.created_at).toLocaleTimeString()}</Text>
+
+                        <Text style={styles.clientName}>
+                            Cliente: {item.clients ? item.clients.name : 'Anónimo'}
+                        </Text>
+
+                        {item.profiles && <Text style={styles.sellerName}>Por: {item.profiles.full_name}</Text>}
                     </View>
-                    <Text style={styles.saleDate}>{new Date(item.created_at).toLocaleDateString()} - {new Date(item.created_at).toLocaleTimeString()}</Text>
-
-                    <Text style={styles.clientName}>
-                        Cliente: {item.clients ? item.clients.name : 'Anónimo'}
-                    </Text>
-
-                    {item.profiles && <Text style={styles.sellerName}>Por: {item.profiles.full_name}</Text>}
-
-                    {isBudget && (
-                        <TouchableOpacity
-                            style={styles.convertBtn}
-                            onPress={() => handleConvertToSale(item)}
-                            disabled={loading}
-                        >
-                            <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
-                            <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
-                        </TouchableOpacity>
-                    )}
+                    <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${item.total_amount}</Text>
+                        {!isBudget && <Text style={styles.saleProfit}>(G: ${item.profit_generated})</Text>}
+                        <MaterialCommunityIcons name={isExpanded ? "chevron-up" : "chevron-down"} size={18} color="#555" style={{ marginTop: 5 }} />
+                    </View>
                 </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${item.total_amount}</Text>
-                    {!isBudget && <Text style={styles.saleProfit}>(G: ${item.profit_generated})</Text>}
-                </View>
-            </View>
+
+                {isExpanded && (
+                    <View style={styles.itemsDetail}>
+                        {item.sale_items?.map((detail, idx) => (
+                            <View key={idx} style={styles.detailRow}>
+                                <Text style={styles.detailText} numberOfLines={1}>{detail.products?.name || 'Item'}</Text>
+                                <Text style={styles.detailQty}>x{detail.quantity}</Text>
+                                <Text style={styles.detailPrice}>${detail.unit_price_at_sale}</Text>
+                            </View>
+                        ))}
+                        {isBudget && (
+                            <TouchableOpacity
+                                style={styles.convertBtn}
+                                onPress={() => handleConvertToSale(item)}
+                                disabled={loading}
+                            >
+                                <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
+                                <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
+            </TouchableOpacity>
         );
     };
 
@@ -278,13 +299,22 @@ const styles = StyleSheet.create({
     // List & Items
     sectionTitle: { fontSize: 14, fontWeight: '900', color: '#666', marginBottom: 15, letterSpacing: 1, textTransform: 'uppercase' },
     list: { paddingBottom: 20 },
-    saleItem: { backgroundColor: '#1e1e1e', padding: 15, borderRadius: 12, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#333' },
+    saleItem: { backgroundColor: '#1e1e1e', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
+    saleItemExpanded: { borderColor: '#d4af37' },
     saleId: { fontWeight: 'bold', color: '#fff' },
     saleDate: { fontSize: 12, color: '#666' },
     clientName: { fontSize: 13, fontWeight: '600', color: '#a29bfe', marginTop: 2 },
     sellerName: { fontSize: 12, color: '#ccc', marginTop: 2 },
     saleAmount: { fontSize: 16, fontWeight: 'bold', color: '#2ecc71' }, // Green for positives stays good
     saleProfit: { fontSize: 10, color: '#888' },
+
+    // Details styles
+    itemsDetail: { marginTop: 15, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#333' },
+    detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+    detailText: { color: '#ccc', fontSize: 12, flex: 2 },
+    detailQty: { color: '#fff', fontSize: 12, flex: 0.5, textAlign: 'center', fontWeight: 'bold' },
+    detailPrice: { color: '#fff', fontSize: 12, flex: 1, textAlign: 'right' },
+
     empty: { textAlign: 'center', marginTop: 50, color: '#444', fontStyle: 'italic' },
 
     // New styles for budget conversion

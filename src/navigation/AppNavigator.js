@@ -1,5 +1,5 @@
 import React from 'react';
-import { createStackNavigator } from '@react-navigation/stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { View, Platform } from 'react-native';
@@ -35,7 +35,7 @@ import ShippingPackagesScreen from '../screens/ShippingPackagesScreen';
 import ShippingRatesScreen from '../screens/ShippingRatesScreen';
 import ManualStockAdjustmentScreen from '../screens/ManualStockAdjustmentScreen';
 
-const Stack = createStackNavigator();
+const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
@@ -55,6 +55,7 @@ function MainTabs() {
 
     return (
         <Tab.Navigator
+            initialRouteName="Home"
             screenOptions={({ route }) => ({
                 headerShown: false,
                 tabBarStyle: {
@@ -92,7 +93,7 @@ function MainTabs() {
                 },
             })}
         >
-            <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
+            <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Dashboard' }} />
             <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
             <Tab.Screen name="Presupuestos" component={OrdersScreen} options={{ title: 'Presupuestos' }} />
             {userRole === 'admin' ? (
@@ -106,9 +107,23 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
+    const [initialRoute, setInitialRoute] = useState(null);
+
+    useEffect(() => {
+        const checkSession = async () => {
+            const role = await AsyncStorage.getItem('user_role');
+            // If we have a role, go straight to Main (Inventory). 
+            // The hardware check will still happen in the background or during sensitive ops.
+            setInitialRoute(role ? 'Main' : 'Login');
+        };
+        checkSession();
+    }, []);
+
+    if (initialRoute === null) return <View style={{ flex: 1, backgroundColor: '#000' }} />;
+
     return (
         <Stack.Navigator
-            initialRouteName="Login"
+            initialRouteName={initialRoute}
             screenOptions={{
                 headerShown: false
             }}

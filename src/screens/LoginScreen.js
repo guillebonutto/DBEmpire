@@ -144,10 +144,17 @@ export default function LoginScreen({ navigation, route }) {
                     />
                 </View>
 
-                {loading && (
+                {loading && !route.params?.fromLogout && (
+                    <View style={{ position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center' }}>
+                        <ActivityIndicator color="#d4af37" />
+                        <Text style={{ color: '#d4af37', fontSize: 10, marginTop: 5, letterSpacing: 1 }}>RECONOCIENDO DISPOSITIVO...</Text>
+                    </View>
+                )}
+
+                {loading && route.params?.fromLogout && (
                     <View style={styles.loadingOverlay}>
                         <ActivityIndicator size="large" color="#d4af37" />
-                        <Text style={styles.loadingText}>Accediendo al Imperio...</Text>
+                        <Text style={styles.loadingText}>Cerrando sesión...</Text>
                     </View>
                 )}
             </SafeAreaView>

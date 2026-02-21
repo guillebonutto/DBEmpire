@@ -22,11 +22,13 @@ export default function ClientDetailScreen({ route, navigation }) {
         fetchClientSales();
     }, []);
 
+    const [expandedSale, setExpandedSale] = useState(null);
+
     const fetchClientSales = async () => {
         try {
             const { data, error } = await supabase
                 .from('sales')
-                .select('*')
+                .select('*, sale_items(*, products(name))')
                 .eq('client_id', currentClient.id)
                 .order('created_at', { ascending: false });
 
@@ -79,17 +81,54 @@ export default function ClientDetailScreen({ route, navigation }) {
 
     const vip = getVIPLabel();
 
-    const renderSaleItem = ({ item }) => (
-        <View style={styles.saleCard}>
-            <View>
-                <Text style={styles.saleDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
-                <Text style={styles.saleStatus}>{item.status?.toUpperCase() || 'COMPLETADA'}</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.saleAmount}>${item.total_amount?.toFixed(2)}</Text>
-            </View>
-        </View>
-    );
+    const renderSaleItem = ({ item }) => {
+        const isExpanded = expandedSale === item.id;
+
+        return (
+            <TouchableOpacity
+                style={[styles.saleCard, isExpanded && styles.saleCardExpanded]}
+                onPress={() => setExpandedSale(isExpanded ? null : item.id)}
+                activeOpacity={0.7}
+            >
+                <View style={styles.saleMainInfo}>
+                    <View>
+                        <Text style={styles.saleDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
+                        <Text style={styles.saleStatus}>{item.status?.toUpperCase() || 'COMPLETADA'}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={styles.saleAmount}>${item.total_amount?.toFixed(2)}</Text>
+                        <MaterialCommunityIcons
+                            name={isExpanded ? "chevron-up" : "chevron-down"}
+                            size={20}
+                            color="#666"
+                        />
+                    </View>
+                </View>
+
+                {isExpanded && (
+                    <View style={styles.itemsList}>
+                        <View style={styles.itemHeader}>
+                            <Text style={styles.itemHeaderText}>PRODUCTO</Text>
+                            <Text style={styles.itemHeaderText}>CANT.</Text>
+                            <Text style={styles.itemHeaderText}>SUBT.</Text>
+                        </View>
+                        {item.sale_items?.map((detail, idx) => (
+                            <View key={idx} style={styles.itemRow}>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.itemName}>{detail.products?.name || 'Producto eliminado'}</Text>
+                                    {detail.color && (
+                                        <Text style={styles.itemColor}>Color: {detail.color}</Text>
+                                    )}
+                                </View>
+                                <Text style={styles.itemQty}>x{detail.quantity}</Text>
+                                <Text style={styles.itemSubtotal}>${detail.subtotal?.toFixed(2)}</Text>
+                            </View>
+                        ))}
+                    </View>
+                )}
+            </TouchableOpacity>
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -243,10 +282,23 @@ const styles = StyleSheet.create({
     infoText: { color: '#ccc', marginLeft: 10, fontSize: 14 },
 
     sectionTitle: { color: '#d4af37', fontSize: 12, fontWeight: '900', letterSpacing: 2, marginBottom: 15 },
-    saleCard: { backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
+    saleCard: { backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#1a1a1a' },
+    saleCardExpanded: { borderColor: '#d4af37' },
+    saleMainInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     saleDate: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
     saleStatus: { color: '#666', fontSize: 10, marginTop: 2 },
     saleAmount: { color: '#2ecc71', fontWeight: '900', fontSize: 16 },
+
+    // Items detail styles
+    itemsList: { marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#222' },
+    itemHeader: { flexDirection: 'row', marginBottom: 10, opacity: 0.5 },
+    itemHeaderText: { color: '#fff', fontSize: 10, fontWeight: 'bold', flex: 1, letterSpacing: 1 },
+    itemRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'center' },
+    itemName: { color: '#ccc', fontSize: 13, fontWeight: '600' },
+    itemColor: { color: '#666', fontSize: 11, fontStyle: 'italic' },
+    itemQty: { color: '#fff', fontSize: 13, width: 40, textAlign: 'center', fontWeight: 'bold' },
+    itemSubtotal: { color: '#fff', fontSize: 13, width: 70, textAlign: 'right' },
+
     empty: { textAlign: 'center', color: '#444', marginTop: 20, fontStyle: 'italic' },
 
     // Modal Styles

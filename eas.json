@@ -6,6 +6,9 @@
         "preview": {
             "android": {
                 "buildType": "apk"
+            },
+            "env": {
+                "APP_VARIANT": "production"
             }
         },
         "development": {
@@ -13,12 +16,26 @@
             "distribution": "internal",
             "android": {
                 "buildType": "apk"
+            },
+            "env": {
+                "APP_VARIANT": "development"
             }
         },
         "production": {
             "android": {
                 "buildType": "app-bundle",
                 "gradleCommand": ":app:bundleRelease"
+            },
+            "env": {
+                "APP_VARIANT": "production"
+            }
+        },
+        "development-static": {
+            "android": {
+                "buildType": "apk"
+            },
+            "env": {
+                "APP_VARIANT": "development"
             }
         }
     }

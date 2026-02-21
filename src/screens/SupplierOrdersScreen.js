@@ -270,13 +270,20 @@ export default function SupplierOrdersScreen({ navigation }) {
                             <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
                                 <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
                             </View>
-                            {item.status === 'pending' && (
+                            {item.status === 'pending' ? (
                                 <TouchableOpacity
                                     style={styles.receiveBtn}
                                     onPress={() => handleReceiveOrder(item)}
                                 >
                                     <MaterialCommunityIcons name="package-variant-closed" size={16} color="#000" />
                                     <Text style={styles.receiveBtnText}>RECIBIR</Text>
+                                </TouchableOpacity>
+                            ) : (
+                                <TouchableOpacity
+                                    onPress={() => handleDelete(item.id)}
+                                    style={{ padding: 5 }}
+                                >
+                                    <MaterialCommunityIcons name="trash-can-outline" size={20} color="#ff4444" />
                                 </TouchableOpacity>
                             )}
                         </View>
