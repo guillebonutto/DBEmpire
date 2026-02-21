@@ -412,6 +412,8 @@ export default function StockScreen({ navigation, route }) {
                 if (!p.barcode) return '';
                 const smartUrl = `${linktree}?barcode=${p.barcode}`;
                 const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(smartUrl)}&ecc=H`;
+                const displayName = p.name.length > 20 ? p.name.substring(0, 19) + '…' : p.name;
+                const displayPrice = p.sale_price ? `$${p.sale_price}` : '';
                 return `
                 <div class="label-wrapper">
                     <div class="wa-top">${whatsapp}</div>
@@ -426,6 +428,8 @@ export default function StockScreen({ navigation, route }) {
                             </div>
                         </div>
                     </div>
+                    <div class="product-name">${displayName}</div>
+                    ${displayPrice ? `<div class="product-price">${displayPrice}</div>` : ''}
                 </div>
                 `;
             }).join('');
@@ -439,16 +443,34 @@ export default function StockScreen({ navigation, route }) {
                     body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background: #fff; }
                     .labels-grid { 
                         display: grid; 
-                        grid-template-columns: repeat(auto-fill, 130px); 
+                        grid-template-columns: repeat(auto-fill, 140px); 
                         gap: 0; 
                         justify-content: center; 
                     }
                     .label-wrapper {
-                        width: 130px;
+                        width: 140px;
                         display: flex;
                         flex-direction: column;
                         align-items: center;
                         padding: 10px 0;
+                    }
+                    .product-name {
+                        font-size: 8.5px;
+                        font-weight: 700;
+                        color: #000;
+                        text-align: center;
+                        margin-top: 4px;
+                        max-width: 130px;
+                        word-break: break-word;
+                        line-height: 1.2;
+                    }
+                    .product-price {
+                        font-size: 10px;
+                        font-weight: 900;
+                        color: #000;
+                        text-align: center;
+                        margin-top: 2px;
+                        letter-spacing: 0.5px;
                     }
                     .wa-top {
                         font-size: 8px;
