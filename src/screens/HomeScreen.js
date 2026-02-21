@@ -468,7 +468,7 @@ export default function HomeScreen({ navigation }) {
                     <View style={styles.actionGrid}>
                         {userRole === 'admin' && <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />}
                         <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
-                        <MinimalModule title="Assets" icon="video-plus" color="#a29bfe" onPress={() => navigation.navigate('Assets')} />
+                        <MinimalModule title="Venta Manual" icon="text-search" color="#d4af37" onPress={() => navigation.navigate('NewSale', { autoSearch: true })} />
                         <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
                         <MinimalModule title="Inventario" icon="package-variant-closed" color="#e67e22" onPress={() => navigation.navigate('Inventario')} />
                         {userRole === 'admin' && (
@@ -488,6 +488,13 @@ export default function HomeScreen({ navigation }) {
                                 <MaterialCommunityIcons name="barcode-scan" size={45} color="#000" />
                                 <Text style={styles.scannerLabel}>ESCANEAR PRODUCTO</Text>
                             </LinearGradient>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.manualEntryBtn}
+                            onPress={() => navigation.navigate('NewSale', { autoSearch: true })}
+                        >
+                            <MaterialCommunityIcons name="cursor-default-click-outline" size={16} color="#444" />
+                            <Text style={styles.manualEntryText}>O CARGAR MANUALMENTE</Text>
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
@@ -541,6 +548,8 @@ const styles = StyleSheet.create({
     scannerTap: { width: 180, height: 180, borderRadius: 90, elevation: 20, shadowColor: '#d4af37', shadowOpacity: 0.3, shadowRadius: 20 },
     scannerCircle: { flex: 1, borderRadius: 90, justifyContent: 'center', alignItems: 'center', padding: 20 },
     scannerLabel: { color: '#000', fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 10, letterSpacing: 1 },
+    manualEntryBtn: { marginTop: 20, flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10 },
+    manualEntryText: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
 
     scannerFull: { flex: 1, backgroundColor: '#000' },
     closeBtn: { position: 'absolute', top: 50, right: 30 },

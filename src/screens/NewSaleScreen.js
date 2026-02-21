@@ -82,8 +82,13 @@ export default function NewSaleScreen({ navigation, route }) {
                 setSaleType('budget');
                 navigation.setParams({ mode: null });
             }
+
+            if (route.params?.autoSearch) {
+                setProductModalVisible(true);
+                navigation.setParams({ autoSearch: null });
+            }
         });
-    }, [route.params?.preselectedProduct, route.params?.mode]);
+    }, [route.params?.preselectedProduct, route.params?.mode, route.params?.autoSearch]);
 
     const fetchInitialData = async () => {
         setLoading(true);
@@ -828,11 +833,13 @@ export default function NewSaleScreen({ navigation, route }) {
                         setIsScanning(true);
                     }}
                 >
-                    <MaterialCommunityIcons name="barcode-scan" size={24} color="#d4af37" />
+                    <MaterialCommunityIcons name="barcode-scan" size={20} color="#d4af37" />
+                    <Text style={[styles.addProductText, { color: '#d4af37' }]}>ESCANEAR</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity style={styles.addProductBtn} onPress={handleAddProductPress}>
-                    <MaterialCommunityIcons name="magnify" size={24} color="#000" />
+                    <MaterialCommunityIcons name="magnify" size={20} color="#000" />
+                    <Text style={styles.addProductText}>BUSCAR</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity

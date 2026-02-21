@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const ProductModal = ({
@@ -16,18 +16,46 @@ const ProductModal = ({
     initiateProductSelection,
     confirmAddToCart
 }) => {
+    const [searchQuery, setSearchQuery] = React.useState('');
+
+    const filteredProducts = React.useMemo(() => {
+        if (!searchQuery.trim()) return products;
+        const lowQuery = searchQuery.toLowerCase();
+        return products.filter(p =>
+            p.name?.toLowerCase().includes(lowQuery) ||
+            p.barcode?.includes(searchQuery)
+        );
+    }, [searchQuery, products]);
+
     return (
         <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
             <View style={styles.modalContent}>
                 <View style={styles.modalHeader}>
-                    <Text style={styles.modalTitle}>Seleccionar Producto</Text>
+                    <Text style={styles.modalTitle}>Buscador de Productos</Text>
                     <TouchableOpacity onPress={onClose}>
                         <MaterialCommunityIcons name="close" size={24} color="#fff" />
                     </TouchableOpacity>
                 </View>
 
+                <View style={styles.searchContainer}>
+                    <MaterialCommunityIcons name="magnify" size={20} color="#888" style={styles.searchIcon} />
+                    <TextInput
+                        style={styles.searchInput}
+                        placeholder="Buscar por nombre o código..."
+                        placeholderTextColor="#666"
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                        autoFocus={false}
+                    />
+                    {searchQuery.length > 0 && (
+                        <TouchableOpacity onPress={() => setSearchQuery('')}>
+                            <MaterialCommunityIcons name="close-circle" size={18} color="#666" />
+                        </TouchableOpacity>
+                    )}
+                </View>
+
                 <FlatList
-                    data={products}
+                    data={filteredProducts}
                     keyExtractor={item => item.id}
                     contentContainerStyle={{ paddingBottom: 20 }}
                     renderItem={({ item }) => {
@@ -163,6 +191,23 @@ const styles = StyleSheet.create({
     rowTitle: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
     rowSubtitle: { fontSize: 12, marginTop: 4 },
     rowPrice: { color: '#d4af37', fontSize: 16, fontWeight: 'bold' },
+    searchContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#111',
+        borderRadius: 12,
+        paddingHorizontal: 15,
+        height: 50,
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    searchIcon: { marginRight: 10 },
+    searchInput: {
+        flex: 1,
+        color: '#fff',
+        fontSize: 14,
+    },
     expandedHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
     expandedTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
     expandedPrice: { color: '#d4af37', fontSize: 18, fontWeight: 'bold' },
