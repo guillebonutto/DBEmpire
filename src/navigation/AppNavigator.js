@@ -34,6 +34,7 @@ import ActivityLogScreen from '../screens/ActivityLogScreen';
 import ShippingPackagesScreen from '../screens/ShippingPackagesScreen';
 import ShippingRatesScreen from '../screens/ShippingRatesScreen';
 import ManualStockAdjustmentScreen from '../screens/ManualStockAdjustmentScreen';
+import SuppliersScreen from '../screens/SuppliersScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -246,6 +247,11 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="ManualStockAdjustment"
                 component={ManualStockAdjustmentScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Suppliers"
+                component={SuppliersScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

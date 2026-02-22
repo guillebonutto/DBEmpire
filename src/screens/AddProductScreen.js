@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal, FlatList, StatusBar } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../services/supabase';
@@ -63,6 +64,11 @@ export default function AddProductScreen({ navigation, route }) {
     const [pendingPurchases, setPendingPurchases] = useState([]);
     const [showPPPModal, setShowPPPModal] = useState(false);
     const [selectedPPPItems, setSelectedPPPItems] = useState([]);
+
+    // Supplier State
+    const [suppliersList, setSuppliersList] = useState([]);
+    const [showSupplierModal, setShowSupplierModal] = useState(false);
+    const [supplierSearch, setSupplierSearch] = useState('');
 
     // Variants State
     const [variants, setVariants] = useState([]);
@@ -152,20 +158,44 @@ export default function AddProductScreen({ navigation, route }) {
         }
     }, [productToEdit]);
 
-    const fetchAllProducts = async () => {
-        const { data } = await supabase
-            .from('products')
-            .select('id, name, sale_price, barcode, image_url')
-            .eq('active', true)
-            .order('name');
-        setAllProducts(data || []);
+    const fetchSuppliers = useCallback(async () => {
+        const { data } = await supabase.from('suppliers').select('*').eq('active', true).order('name', { ascending: true });
+        if (data) setSuppliersList(data);
+    }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            fetchSuppliers();
+            fetchAllProducts();
+        }, [fetchSuppliers])
+    );
+
+    const handleSupplierSelect = (supplier) => {
+        handleChange('provider', supplier.name);
+        setShowSupplierModal(false);
     };
 
-    useEffect(() => {
-        if (isBundle && allProducts.length === 0) {
-            fetchAllProducts();
+    const handleCreateSupplier = async () => {
+        if (!supplierSearch.trim()) return;
+        try {
+            const { data, error } = await supabase
+                .from('suppliers')
+                .insert({ name: supplierSearch.trim() })
+                .select()
+                .single();
+
+            if (error) throw error;
+            if (data) {
+                handleSupplierSelect(data);
+                fetchSuppliers();
+                Alert.alert('✅ Éxito', 'Proveedor creado y seleccionado.');
+            }
+        } catch (err) {
+            Alert.alert('Error', 'No se pudo crear el proveedor. Verificá si ya existe.');
         }
-    }, [isBundle]);
+    };
+
+
 
     const toggleBundleItem = (prod) => {
         setBundleItems(prev => {
@@ -1128,12 +1158,24 @@ export default function AddProductScreen({ navigation, route }) {
             </View>
 
             <Text style={styles.label}>Proveedor</Text>
-            <TextInput
-                style={styles.input}
-                value={formData.provider}
-                onChangeText={(text) => handleChange('provider', text)}
-                placeholder="Ej. Distribuidora X"
-            />
+            <View style={[styles.input, { flexDirection: 'row', alignItems: 'center', padding: 0 }]}>
+                <TextInput
+                    style={{ flex: 1, color: '#fff', padding: 15 }}
+                    value={formData.provider}
+                    onChangeText={(text) => handleChange('provider', text)}
+                    placeholder="Ej. Distribuidora X"
+                    placeholderTextColor="#444"
+                />
+                <TouchableOpacity
+                    style={{ padding: 15 }}
+                    onPress={() => {
+                        fetchSuppliers();
+                        setShowSupplierModal(true);
+                    }}
+                >
+                    <MaterialCommunityIcons name="database-search" size={24} color="#d4af37" />
+                </TouchableOpacity>
+            </View>
 
             {/* COMBO / BUNDLE SECTION */}
             <View style={{ marginTop: 20, padding: 15, backgroundColor: '#0a0a0a', borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' }}>
@@ -1482,6 +1524,75 @@ export default function AddProductScreen({ navigation, route }) {
                             onPress={() => setShowBundlePicker(false)}
                         >
                             <Text style={styles.saveButtonText}>LISTO</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* SUPPLIER PICKER MODAL */}
+            <Modal visible={showSupplierModal} animationType="slide" transparent>
+                <View style={[styles.modalOverlay, { padding: 0 }]}>
+                    <View style={[styles.modalContent, { height: '80%', borderTopLeftRadius: 30, borderTopRightRadius: 30, marginTop: 'auto', backgroundColor: '#111' }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <Text style={styles.modalTitle}>MIS PROVEEDORES</Text>
+                            <TouchableOpacity onPress={() => setShowSupplierModal(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Buscar proveedor..."
+                            placeholderTextColor="#444"
+                            value={supplierSearch}
+                            onChangeText={setSupplierSearch}
+                        />
+
+                        <FlatList
+                            data={suppliersList.filter(s => !supplierSearch || s.name.toLowerCase().includes(supplierSearch.toLowerCase()))}
+                            keyExtractor={item => item.id}
+                            style={{ marginTop: 20 }}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={{ flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#0a0a0a', borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#1a1a1a' }}
+                                    onPress={() => handleSupplierSelect(item)}
+                                >
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.name}</Text>
+                                        <Text style={{ color: '#555', fontSize: 12 }}>{item.category || 'Sin Categoría'}</Text>
+                                    </View>
+                                    <MaterialCommunityIcons name="chevron-right" size={24} color="#333" />
+                                </TouchableOpacity>
+                            )}
+                            ListFooterComponent={
+                                <View>
+                                    {supplierSearch.length > 0 && !suppliersList.find(s => s.name.toLowerCase() === supplierSearch.toLowerCase()) && (
+                                        <TouchableOpacity
+                                            style={{ flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#d4af3710', borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#d4af37' }}
+                                            onPress={handleCreateSupplier}
+                                        >
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ CREAR: "{supplierSearch}"</Text>
+                                                <Text style={{ color: '#555', fontSize: 12 }}>Agregar proveedor al catálogo</Text>
+                                            </View>
+                                            <MaterialCommunityIcons name="plus-circle" size={24} color="#d4af37" />
+                                        </TouchableOpacity>
+                                    )}
+                                    <TouchableOpacity
+                                        style={{ padding: 15, alignItems: 'center' }}
+                                        onPress={() => { setShowSupplierModal(false); navigation.navigate('Suppliers'); }}
+                                    >
+                                        <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ GESTIONAR PROVEEDORES</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            }
+                        />
+
+                        <TouchableOpacity
+                            style={[styles.saveButton, { marginTop: 20, marginBottom: 10 }]}
+                            onPress={() => setShowSupplierModal(false)}
+                        >
+                            <Text style={styles.saveButtonText}>CANCELAR</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

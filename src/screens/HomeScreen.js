@@ -479,6 +479,7 @@ export default function HomeScreen({ navigation }) {
                         )}
                         <MinimalModule title="Pedidos" icon="clipboard-list-outline" color="#3498db" onPress={() => navigation.navigate('Orders')} />
                         <MinimalModule title="Compras" icon="cube-send" color="#f1c40f" onPress={() => navigation.navigate('SupplierOrders')} />
+                        <MinimalModule title="Proveedores" icon="factory" color="#d4af37" onPress={() => navigation.navigate('Suppliers')} />
                     </View>
 
                     {/* Primary Action: Minimalist Giant Scanner */}

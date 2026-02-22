@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView, ActivityIndicator, LayoutAnimation, Platform, UIManager } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
@@ -21,9 +22,18 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-    useEffect(() => {
-        // Ally (seller) can now create supplier orders as per user request
-    }, []);
+    // Supplier State
+    const [suppliersList, setSuppliersList] = useState([]);
+    const [showSupplierModal, setShowSupplierModal] = useState(false);
+    const [supplierSearch, setSupplierSearch] = useState('');
+    const [selectedSupplierId, setSelectedSupplierId] = useState(null);
+    const [activeSupplierItemIndex, setActiveSupplierItemIndex] = useState(null);
+
+    useFocusEffect(
+        useCallback(() => {
+            fetchSuppliers();
+        }, [])
+    );
 
     // Product Linking State
     const [products, setProducts] = useState([]);
@@ -45,6 +55,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
     React.useEffect(() => {
         fetchProducts();
+        fetchSuppliers();
         if (route.params?.orderToEdit) {
             const order = route.params.orderToEdit;
             setProvider(order.provider_name);
@@ -103,6 +114,38 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
         if (data) setProducts(data);
     };
 
+    const fetchSuppliers = async () => {
+        const { data } = await supabase.from('suppliers').select('*').eq('active', true).order('name', { ascending: true });
+        if (data) setSuppliersList(data);
+    };
+
+    const openSupplierForProduct = (index) => {
+        setActiveSupplierItemIndex(index);
+        setShowSupplierModal(true);
+    };
+
+    const selectSupplier = (s) => {
+        if (activeSupplierItemIndex !== null) {
+            // Updating a specific item's official supplier
+            setSelectedProducts(prev => {
+                const updated = [...prev];
+                updated[activeSupplierItemIndex] = {
+                    ...updated[activeSupplierItemIndex],
+                    supplierId: s.id,
+                    supplierName: s.name
+                };
+                return updated;
+            });
+            setActiveSupplierItemIndex(null);
+        } else {
+            // Updating the overall Store/Business name
+            setProvider(s.name);
+            setSelectedSupplierId(s.id);
+        }
+        setShowSupplierModal(false);
+        setSupplierSearch('');
+    };
+
     // Auto-calculate Total Cost based on Products (only if not initial load or manual override)
     useEffect(() => {
         if (isInitialLoad && route.params?.orderToEdit) {
@@ -127,7 +170,10 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             variants: [{ color: '', quantity: '1' }],
             isNew,
             tempName: isNew ? tempName : null,
-            localId: Math.random().toString(36).substr(2, 9)
+            localId: Math.random().toString(36).substr(2, 9),
+            quality: 'perfect',
+            supplierId: null, // Start empty, don't inherit 'Store'
+            supplierName: ''  // Start empty
         };
 
         const newIndex = selectedProducts.length;
@@ -225,7 +271,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 installments_total: parseInt(installmentsTotal) || 1,
                 installments_paid: parseInt(installmentsPaid) || 0,
                 notes: courier,
-                created_at: purchaseDate.toISOString()
+                created_at: purchaseDate.toISOString(),
+                supplier_id: selectedSupplierId
             };
 
             let orderId;
@@ -249,18 +296,6 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
                 if (insertError) throw insertError;
                 orderId = newOrder.id;
-
-                // Add to expenses if there are initial installments paid
-                if (payload.installments_paid > 0) {
-                    const amountPerInstallment = (payload.total_cost - payload.discount) / payload.installments_total;
-                    const totalPaidNow = amountPerInstallment * payload.installments_paid;
-                    await supabase.from('expenses').insert({
-                        description: `Pago inicial: ${provider} (${itemsDesc})`,
-                        amount: totalPaidNow,
-                        category: 'Inventario',
-                        created_at: purchaseDate.toISOString()
-                    });
-                }
             }
 
             // Handle Linked Items (Delete all and re-insert for simplicity on edit)
@@ -273,25 +308,19 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 const productUpdatePromises = [];
 
                 for (const p of selectedProducts) {
-                    // If it's an existing product, update the products table with name AND new colors
                     if (!p.isNew && p.product.id) {
                         const uniqueColors = [...new Set(p.variants.map(v => v.color).filter(c => c))];
                         productUpdatePromises.push(
-                            // We use a raw SQL query or fetched logic to merge colors usually,
-                            // but here simplified: we append new colors to the existing array.
-                            // Since we can't easily append via simple update without fetching first,
-                            // let's fetch the current colors first to be safe or just overwrite if that's the intended behavior.
-                            // Better approach: Let's assume we want to ADD these colors to the available list.
                             supabase.rpc('append_product_colors', {
                                 p_id: p.product.id,
                                 new_colors: uniqueColors
                             })
-                            // Fallback if RPC doesn't exist (simpler for now: just update name)
-                            // supabase.from('products').update({ name: p.product.name }).eq('id', p.product.id)
                         );
-                        // Also update name just in case
                         productUpdatePromises.push(
-                            supabase.from('products').update({ name: p.product.name }).eq('id', p.product.id)
+                            supabase.from('products').update({
+                                name: p.product.name,
+                                defect_notes: p.quality === 'flawed' ? 'Reportado en orden de compra' : null
+                            }).eq('id', p.product.id)
                         );
                     }
 
@@ -299,11 +328,12 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                         itemsPayload.push({
                             supplier_order_id: orderId,
                             product_id: p.isNew ? null : p.product.id,
-                            temp_product_name: p.isNew ? p.tempName : null, // Use tempName for new products
+                            temp_product_name: p.isNew ? p.tempName : null,
                             quantity: parseInt(v.quantity) || 1,
                             cost_per_unit: parseFloat(p.cost) || 0,
-                            supplier: payload.provider_name,
-                            color: v.color || null // Save the specific color variant
+                            supplier: p.supplierName || payload.provider_name, // Use item supplier or fallback to order provider
+                            color: v.color || null,
+                            notes: p.quality === 'perfect' ? 'Sin fallas' : 'Con fallas'
                         });
                     });
                 }
@@ -358,7 +388,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 <Text style={styles.label}>Proveedor / Tienda</Text>
                 <TextInput
                     style={styles.input}
-                    placeholder="Ej: Temu, Shein, Amazon..."
+                    placeholder="Nombre de la empresa o negocio"
                     placeholderTextColor="#666"
                     value={provider}
                     onChangeText={setProvider}
@@ -411,6 +441,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                                 onAddVariant={addVariantToProduct}
                                 onUpdateVariant={updateVariant}
                                 onRemoveVariant={removeVariant}
+                                onOpenSupplier={() => openSupplierForProduct(pIdx)}
                                 inputRef={el => inputRefs.current[pIdx] = el}
                             />
                         ))}
@@ -538,6 +569,61 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     </View>
                 )
             }
+
+            {/* Supplier Selection Modal */}
+            {
+                showSupplierModal && (
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>Mis Proveedores</Text>
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder="Buscar proveedor..."
+                                placeholderTextColor="#666"
+                                value={supplierSearch}
+                                onChangeText={setSupplierSearch}
+                            />
+                            <ScrollView>
+                                {suppliersList.filter(s => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).map(s => (
+                                    <TouchableOpacity key={s.id} style={styles.modalItem} onPress={() => selectSupplier(s)}>
+                                        <Text style={styles.modalItemText}>{s.name}</Text>
+                                        <Text style={styles.modalItemSub}>{s.category || 'Sin Categoría'}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                                {supplierSearch.length > 0 && !suppliersList.find(s => s.name.toLowerCase() === supplierSearch.toLowerCase()) && (
+                                    <TouchableOpacity
+                                        style={[styles.modalItem, { borderTopWidth: 2, borderTopColor: '#d4af37' }]}
+                                        onPress={async () => {
+                                            try {
+                                                const { data, error } = await supabase.from('suppliers').insert({ name: supplierSearch }).select().single();
+                                                if (error) throw error;
+                                                if (data) {
+                                                    selectSupplier(data);
+                                                    fetchSuppliers();
+                                                }
+                                            } catch (err) {
+                                                Alert.alert('Error', 'No se pudo crear el proveedor. Verificá si ya existe.');
+                                            }
+                                        }}
+                                    >
+                                        <Text style={[styles.modalItemText, { color: '#d4af37' }]}>+ AGREGAR COMO NUEVO: "{supplierSearch}"</Text>
+                                        <Text style={styles.modalItemSub}>Crear proveedor al instante</Text>
+                                    </TouchableOpacity>
+                                )}
+                                <TouchableOpacity
+                                    style={[styles.modalItem, { borderTopWidth: 1, borderTopColor: '#333' }]}
+                                    onPress={() => { setShowSupplierModal(false); setActiveSupplierItemIndex(null); navigation.navigate('Suppliers'); }}
+                                >
+                                    <Text style={[styles.modalItemText, { color: '#d4af37' }]}>+ GESTIONAR PROVEEDORES</Text>
+                                </TouchableOpacity>
+                            </ScrollView>
+                            <TouchableOpacity style={styles.closeModal} onPress={() => { setShowSupplierModal(false); setActiveSupplierItemIndex(null); }}>
+                                <Text style={styles.closeText}>CANCELAR</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )
+            }
         </SafeAreaView >
     );
 }
@@ -552,6 +638,7 @@ const ProductItem = memo(({
     onAddVariant,
     onUpdateVariant,
     onRemoveVariant,
+    onOpenSupplier,
     inputRef
 }) => {
     // Memoize total calculation to avoid unneeded math on every render
@@ -609,6 +696,19 @@ const ProductItem = memo(({
                             value={item.product.name}
                             onChangeText={v => onUpdate(index, 'name', v)}
                         />
+                    </View>
+
+                    <View style={{ marginBottom: 15 }}>
+                        <Text style={styles.miniLabel}>Proveedor Específico</Text>
+                        <TouchableOpacity
+                            style={[styles.miniInput, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}
+                            onPress={onOpenSupplier}
+                        >
+                            <Text style={{ color: item.supplierName ? '#fff' : '#444', fontSize: 13 }}>
+                                {item.supplierName || 'Seleccionar Proveedor Fabricante (Oficial)...'}
+                            </Text>
+                            <MaterialCommunityIcons name="factory" size={16} color="#d4af37" />
+                        </TouchableOpacity>
                     </View>
 
                     <View style={{ marginBottom: 15 }}>
@@ -670,8 +770,25 @@ const ProductItem = memo(({
                         </View>
                     ))}
 
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 15 }}>
+                        <TouchableOpacity
+                            style={[styles.qualityBtn, item.quality === 'perfect' && styles.qualityBtnActive]}
+                            onPress={() => onUpdate(index, 'quality', 'perfect')}
+                        >
+                            <MaterialCommunityIcons name="check-circle" size={16} color={item.quality === 'perfect' ? '#000' : '#2ecc71'} />
+                            <Text style={[styles.qualityText, item.quality === 'perfect' && styles.qualityTextActive]}>SIN FALLAS</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.qualityBtn, item.quality === 'flawed' && { backgroundColor: '#e74c3c' }]}
+                            onPress={() => onUpdate(index, 'quality', 'flawed')}
+                        >
+                            <MaterialCommunityIcons name="alert-circle" size={16} color={item.quality === 'flawed' ? '#000' : '#e74c3c'} />
+                            <Text style={[styles.qualityText, item.quality === 'flawed' && styles.qualityTextActive]}>CON DEFECTOS</Text>
+                        </TouchableOpacity>
+                    </View>
+
                     <TouchableOpacity
-                        style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 5, padding: 8 }}
+                        style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 15, padding: 8 }}
                         onPress={() => onAddVariant(index)}
                         delayPressIn={0}
                         activeOpacity={0.7}
@@ -690,6 +807,8 @@ const ProductItem = memo(({
         prev.item.cost === next.item.cost &&
         prev.item.product.name === next.item.product.name &&
         prev.item.variants === next.item.variants &&
+        prev.item.quality === next.item.quality &&
+        prev.item.supplierName === next.item.supplierName &&
         prev.index === next.index
     );
 });
@@ -731,6 +850,11 @@ const styles = StyleSheet.create({
     miniInput: { backgroundColor: '#111', color: '#fff', padding: 10, borderRadius: 5, borderWidth: 1, borderColor: '#333' },
     addProdBtn: { flexDirection: 'row', backgroundColor: '#d4af37', padding: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
     addProdText: { fontWeight: 'bold', marginLeft: 5, fontSize: 12 },
+
+    qualityBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#333', gap: 8 },
+    qualityBtnActive: { backgroundColor: '#2ecc71', borderColor: '#2ecc71' },
+    qualityText: { color: '#666', fontSize: 10, fontWeight: '900' },
+    qualityTextActive: { color: '#000' },
 
     modalOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
     modalContent: { backgroundColor: '#1e1e1e', borderRadius: 15, padding: 20, maxHeight: '80%' },
