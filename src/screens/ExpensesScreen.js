@@ -64,19 +64,8 @@ export default function ExpensesScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
-            const checkAndFetch = async () => {
-                const role = await AsyncStorage.getItem('user_role');
-                if (role !== 'admin') {
-                    Alert.alert('Acceso Denegado', 'Finanzas es solo para Líderes.');
-                    navigation.navigate('Home');
-                    return;
-                }
-
-                if (viewMode === 'expenses') await fetchExpenses();
-                else await fetchOrders();
-            };
-
-            checkAndFetch();
+            if (viewMode === 'expenses') fetchExpenses();
+            else fetchOrders();
         }, [viewMode])
     );
 

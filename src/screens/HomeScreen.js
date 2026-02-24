@@ -205,7 +205,7 @@ export default function HomeScreen({ navigation }) {
                 dailyMissions.push({
                     id: 'goal',
                     title: 'META DEL DÍA',
-                    desc: monthSales > 0 ? '¡Sigue así! Supera tu récord hoy.' : '¡Hoy es el día! Logra tu primera venta.',
+                    desc: totalSales > 0 ? '¡Sigue así! Supera tu récord hoy.' : '¡Hoy es el día! Logra tu primera venta.',
                     icon: 'trophy-award',
                     color: '#fdcb6e',
                     type: 'info'
@@ -400,13 +400,11 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.header}>
                     <View>
                         <Text style={styles.brandName}>EMPIRE 👑</Text>
-                        <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'Aliado'}</Text>
+                        <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'Aliado (Power User)'}</Text>
                     </View>
-                    {userRole === 'admin' && (
-                        <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
-                            <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
-                        </TouchableOpacity>
-                    )}
+                    <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
+                        <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
+                    </TouchableOpacity>
                 </View>
 
                 <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -418,20 +416,20 @@ export default function HomeScreen({ navigation }) {
                     </View>
 
                     {/* Stats Bricks Clean - ADMIN ONLY */}
-                    {userRole === 'admin' ? (
-                        <View style={styles.statsGrid}>
-                            <View style={styles.statBrick}>
-                                <Text style={styles.statLab}>Ventas Hoy</Text>
-                                <Text style={styles.statVal}>${stats.todaySales.toFixed(2)}</Text>
-                            </View>
-                            <View style={styles.statBrick}>
-                                <Text style={styles.statLab}>Balance Neto</Text>
-                                <Text style={[styles.statVal, { color: stats.todayNetProfit >= 0 ? '#00ff88' : '#ff4444' }]}>
-                                    ${stats.todayNetProfit.toFixed(2)}
-                                </Text>
-                            </View>
+                    <View style={styles.statsGrid}>
+                        <View style={styles.statBrick}>
+                            <Text style={styles.statLab}>Ventas Hoy</Text>
+                            <Text style={styles.statVal}>${stats.todaySales.toFixed(0)}</Text>
                         </View>
-                    ) : (
+                        <View style={styles.statBrick}>
+                            <Text style={styles.statLab}>{userRole === 'admin' ? 'Balance Neto' : 'Mi Comisión'}</Text>
+                            <Text style={[styles.statVal, { color: (userRole === 'admin' ? (stats.todayNetProfit >= 0 ? '#00ff88' : '#ff4444') : '#00ff88') }]}>
+                                ${userRole === 'admin' ? stats.todayNetProfit.toFixed(0) : stats.monthCommissions.toFixed(0)}
+                            </Text>
+                        </View>
+                    </View>
+
+                    {userRole === 'seller' && (
                         <View style={styles.commissionContainer}>
                             <LinearGradient
                                 colors={['#d4af3720', '#d4af3705']}
@@ -451,7 +449,6 @@ export default function HomeScreen({ navigation }) {
                                         </Text>
                                     </View>
                                 )}
-                                <Text style={styles.commissionSub}>Comisión del {stats.commissionRate}% sobre tus ventas directas</Text>
                             </LinearGradient>
                         </View>
                     )}
@@ -488,17 +485,13 @@ export default function HomeScreen({ navigation }) {
                     {/* Minimalist Grid of Actions */}
                     <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
                     <View style={styles.actionGrid}>
-                        {userRole === 'admin' && <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />}
+                        <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />
                         <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
                         <MinimalModule title="Venta Manual" icon="text-search" color="#d4af37" onPress={() => navigation.navigate('NewSale', { autoSearch: true })} />
                         <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
                         <MinimalModule title="Inventario" icon="package-variant-closed" color="#e67e22" onPress={() => navigation.navigate('Inventario')} />
-                        {userRole === 'admin' && (
-                            <>
-                                <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
-                                <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
-                            </>
-                        )}
+                        <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
+                        <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
                         <MinimalModule title="Pedidos" icon="clipboard-list-outline" color="#3498db" onPress={() => navigation.navigate('Orders')} />
                         <MinimalModule title="Compras" icon="cube-send" color="#f1c40f" onPress={() => navigation.navigate('SupplierOrders')} />
                         <MinimalModule title="Proveedores" icon="factory" color="#d4af37" onPress={() => navigation.navigate('Suppliers')} />

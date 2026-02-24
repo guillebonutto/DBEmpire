@@ -19,14 +19,6 @@ export default function ReportsScreen() {
     const [chartData, setChartData] = useState(null);
 
     useEffect(() => {
-        const checkRole = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
-                Alert.alert('Acceso Denegado', 'Los reportes son confidenciales.');
-                navigation.navigate('Home');
-            }
-        };
-        checkRole();
         fetchHistory();
     }, []);
 

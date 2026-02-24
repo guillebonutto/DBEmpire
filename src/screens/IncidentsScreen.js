@@ -45,14 +45,6 @@ export default function IncidentsScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
-            const checkRole = async () => {
-                const role = await AsyncStorage.getItem('user_role');
-                if (role !== 'admin') {
-                    Alert.alert('Acceso Denegado', 'Esta sección es confidencial.');
-                    navigation.navigate('Home');
-                }
-            };
-            checkRole();
             fetchIncidents();
         }, [])
     );

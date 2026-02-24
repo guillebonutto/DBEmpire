@@ -137,7 +137,7 @@ export default function LoginScreen({ navigation, route }) {
                     <RoleCard
                         role="seller"
                         title="SOY EL ALIADO"
-                        subtitle="Ventas, Clientes & Caja"
+                        subtitle="Ventas, Misiones & Acceso Total"
                         icon="sword-cross"
                         color="#bdc3c7" // Silver
                         onPress={() => handleSelectUser('seller')}
