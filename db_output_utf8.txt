@@ -1,0 +1,218 @@
+﻿--- RECENT ORDERS ---
+[
+  {
+    "id": "18fd523c-7542-4a2b-844f-1329165e3958",
+    "provider_name": "JOYTiDE",
+    "tracking_number": null,
+    "items_description": "Ingreso Manual: Juego de 8 adaptadores",
+    "total_cost": 8168,
+    "status": "received",
+    "created_at": "2026-02-05T05:33:56.994+00:00",
+    "notes": null,
+    "installments_total": 1,
+    "installments_paid": 0,
+    "discount": 0
+  },
+  {
+    "id": "95ffc793-0846-42b0-b1d4-ebd53a64eedf",
+    "provider_name": "Gabriela Liliana Castelli",
+    "tracking_number": "MLAR039680967EX",
+    "items_description": "Reposici├│n stock y compras nuevas en AliExpress",
+    "total_cost": 212617.2,
+    "status": "pending",
+    "created_at": "2026-01-16T03:45:40.749+00:00",
+    "notes": "",
+    "installments_total": 6,
+    "installments_paid": 0,
+    "discount": 0
+  },
+  {
+    "id": "83ad89d7-1d5d-4a02-b1a7-9fda805940cf",
+    "provider_name": "Temu",
+    "tracking_number": "9103500000002402594",
+    "items_description": "Reposici├│n stock y compras nuevas",
+    "total_cost": 116412.01,
+    "status": "received",
+    "created_at": "2026-01-14T05:48:39.648+00:00",
+    "notes": "OCA",
+    "installments_total": 1,
+    "installments_paid": 1,
+    "discount": 20856
+  },
+  {
+    "id": "d2b59163-25bd-47f7-80b8-2f5f4c232abc",
+    "provider_name": "Gabriela Liliana Castelli",
+    "tracking_number": null,
+    "items_description": "Juego de 3 tazas de acero inoxidable (x3), M├íquina de caf├® port├ítil (x3), Cable de carga r├ípida USB a tipo-C giratorio 180┬░ (x3), Juego de 8 adaptadores (x2), Luz de noche (x10). Consolidaci├│n seg├║n Recibo.",
+    "total_cost": 84588,
+    "status": "received",
+    "created_at": "2025-12-13T00:05:00+00:00",
+    "notes": null,
+    "installments_total": 6,
+    "installments_paid": 0,
+    "discount": 558
+  }
+]
+--- RECENT ITEMS ---
+[
+  {
+    "id": "ddbdaa97-f71c-4d61-b79d-f443cf2a8792",
+    "supplier_order_id": "d2b59163-25bd-47f7-80b8-2f5f4c232abc",
+    "product_id": "a2a6262f-770d-48ed-89b8-5992cddc6c77",
+    "quantity": 2,
+    "cost_per_unit": 5515,
+    "created_at": "2026-12-13T03:21:10.142005+00:00",
+    "temp_product_name": null,
+    "supplier": null,
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Gabriela Liliana Castelli"
+    }
+  },
+  {
+    "id": "c1d54410-b33e-460c-9f31-2e5c2f4c386b",
+    "supplier_order_id": "d2b59163-25bd-47f7-80b8-2f5f4c232abc",
+    "product_id": "4d3f9434-8061-4323-82e9-dc9e1d5a2c69",
+    "quantity": 3,
+    "cost_per_unit": 7322,
+    "created_at": "2026-12-13T03:21:10.142005+00:00",
+    "temp_product_name": null,
+    "supplier": null,
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Gabriela Liliana Castelli"
+    }
+  },
+  {
+    "id": "5c063551-0d54-400c-a204-1fdfa718713f",
+    "supplier_order_id": "d2b59163-25bd-47f7-80b8-2f5f4c232abc",
+    "product_id": "cc260c6e-8e98-422d-8a90-920398994298",
+    "quantity": 10,
+    "cost_per_unit": 618.1,
+    "created_at": "2026-12-13T03:21:10.142005+00:00",
+    "temp_product_name": null,
+    "supplier": null,
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Gabriela Liliana Castelli"
+    }
+  },
+  {
+    "id": "81875f68-586f-4e00-a5a9-f58f179d5177",
+    "supplier_order_id": "d2b59163-25bd-47f7-80b8-2f5f4c232abc",
+    "product_id": "a75d4040-65ae-4942-8da5-193190b03099",
+    "quantity": 3,
+    "cost_per_unit": 7764,
+    "created_at": "2026-12-13T03:21:10.142005+00:00",
+    "temp_product_name": null,
+    "supplier": null,
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Gabriela Liliana Castelli"
+    }
+  },
+  {
+    "id": "8e64aab5-5267-4e70-b9a5-b218581f2ff8",
+    "supplier_order_id": "18fd523c-7542-4a2b-844f-1329165e3958",
+    "product_id": "a2a6262f-770d-48ed-89b8-5992cddc6c77",
+    "quantity": 16,
+    "cost_per_unit": 510.5,
+    "created_at": "2026-02-05T05:33:58.357269+00:00",
+    "temp_product_name": null,
+    "supplier": null,
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "JOYTiDE"
+    }
+  },
+  {
+    "id": "8811a5f7-a35e-463e-bb9c-ef24fd8d8e3e",
+    "supplier_order_id": "83ad89d7-1d5d-4a02-b1a7-9fda805940cf",
+    "product_id": "a2a6262f-770d-48ed-89b8-5992cddc6c77",
+    "quantity": 16,
+    "cost_per_unit": 510.5,
+    "created_at": "2026-02-03T03:48:40.632492+00:00",
+    "temp_product_name": null,
+    "supplier": "Temu",
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Temu"
+    }
+  },
+  {
+    "id": "052f2879-3316-4c4f-8ec2-27531f7ff16a",
+    "supplier_order_id": "83ad89d7-1d5d-4a02-b1a7-9fda805940cf",
+    "product_id": "4d3f9434-8061-4323-82e9-dc9e1d5a2c69",
+    "quantity": 3,
+    "cost_per_unit": 6278.33,
+    "created_at": "2026-02-03T03:48:40.632492+00:00",
+    "temp_product_name": null,
+    "supplier": "Temu",
+    "color": "Blanco",
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Temu"
+    }
+  },
+  {
+    "id": "8dd535ce-5612-45af-9ba4-0c6a452e968c",
+    "supplier_order_id": "83ad89d7-1d5d-4a02-b1a7-9fda805940cf",
+    "product_id": "b312d52b-ec02-4a94-a3e6-dcbca64b7486",
+    "quantity": 4,
+    "cost_per_unit": 8267.5,
+    "created_at": "2026-02-03T03:48:40.632492+00:00",
+    "temp_product_name": null,
+    "supplier": "Temu",
+    "color": null,
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Temu"
+    }
+  },
+  {
+    "id": "a7f09946-88e9-4617-b6cc-a1dd2e2ae460",
+    "supplier_order_id": "83ad89d7-1d5d-4a02-b1a7-9fda805940cf",
+    "product_id": "4d3f9434-8061-4323-82e9-dc9e1d5a2c69",
+    "quantity": 3,
+    "cost_per_unit": 6278.33,
+    "created_at": "2026-02-03T03:48:40.632492+00:00",
+    "temp_product_name": null,
+    "supplier": "Temu",
+    "color": "Negro",
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Temu"
+    }
+  },
+  {
+    "id": "72efbc24-0b56-44b4-9b1c-a29b12ad70a8",
+    "supplier_order_id": "83ad89d7-1d5d-4a02-b1a7-9fda805940cf",
+    "product_id": "5a23d526-e88f-4d0c-a920-68d85f1c680a",
+    "quantity": 14,
+    "cost_per_unit": 1982.36,
+    "created_at": "2026-02-03T03:48:40.632492+00:00",
+    "temp_product_name": "Tarjeta de bloqueo RFID/NFC",
+    "supplier": "Temu",
+    "color": "Negro",
+    "shipping_package_id": null,
+    "transport_cost_allocated": 0,
+    "supplier_orders": {
+      "provider_name": "Temu"
+    }
+  }
+]

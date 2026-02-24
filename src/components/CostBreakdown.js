@@ -6,6 +6,7 @@ const CostBreakdown = ({
     subtotal,
     total,
     discount,
+    manualDiscount,
     selectedPromo,
     promoDetail
 }) => {
@@ -23,6 +24,13 @@ const CostBreakdown = ({
                         <Text style={styles.promoValue}>-${discount.toFixed(2)}</Text>
                     </View>
                     {promoDetail ? <Text style={styles.promoDetail}>({promoDetail})</Text> : null}
+                </View>
+            ) : null}
+
+            {manualDiscount && manualDiscount > 0 ? (
+                <View style={styles.row}>
+                    <Text style={styles.manualDiscountLabel}>Descuento Manual:</Text>
+                    <Text style={styles.manualDiscountValue}>-${manualDiscount.toFixed(2)}</Text>
                 </View>
             ) : null}
 
@@ -44,6 +52,8 @@ const styles = StyleSheet.create({
     promoLabel: { color: '#2ecc71', fontSize: 14, fontWeight: 'bold' },
     promoValue: { color: '#2ecc71', fontSize: 14, fontWeight: 'bold' },
     promoDetail: { color: '#2ecc71', fontSize: 12, fontStyle: 'italic' },
+    manualDiscountLabel: { color: '#e74c3c', fontSize: 14, fontWeight: 'bold' },
+    manualDiscountValue: { color: '#e74c3c', fontSize: 14, fontWeight: 'bold' },
     divider: { height: 1, backgroundColor: '#333', marginVertical: 8 },
     totalLabel: { color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
     totalValue: { color: '#d4af37', fontSize: 18, fontWeight: '900' }

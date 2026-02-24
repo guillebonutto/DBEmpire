@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator, MaterialCommunityIcons } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const ClientModal = ({
     visible,
@@ -13,8 +14,7 @@ const ClientModal = ({
     newClientPhone,
     setNewClientPhone,
     handleCreateClient,
-    creatingClient,
-    processCheckout
+    creatingClient
 }) => {
     return (
         <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
@@ -75,8 +75,7 @@ const ClientModal = ({
                 <Text style={[styles.sectionTitle, { marginTop: 20 }]}>O selecciona uno existente:</Text>
 
                 <TouchableOpacity style={styles.clientRow} onPress={() => {
-                    onClose();
-                    setTimeout(() => processCheckout(null), 500);
+                    onSelectClient(null);
                 }}>
                     <View style={styles.clientInfo}>
                         <View style={[styles.avatar, { backgroundColor: '#333' }]}>
@@ -93,8 +92,7 @@ const ClientModal = ({
                     contentContainerStyle={{ paddingBottom: 50 }}
                     renderItem={({ item }) => (
                         <TouchableOpacity style={styles.clientRow} onPress={() => {
-                            onClose();
-                            setTimeout(() => processCheckout(item), 500);
+                            onSelectClient(item);
                         }}>
                             <View style={styles.clientInfo}>
                                 <View style={styles.avatar}>

@@ -44,6 +44,8 @@ export default function NewSaleScreen({ navigation, route }) {
     const [selectedClient, setSelectedClient] = useState(null);
     const [promos, setPromos] = useState([]);
     const [selectedPromo, setSelectedPromo] = useState(null);
+    const [manualDiscount, setManualDiscount] = useState('');
+    const [manualDiscountType, setManualDiscountType] = useState('fixed'); // 'fixed' or 'percent'
     const [loading, setLoading] = useState(false);
     const [commissionRate, setCommissionRate] = useState(0.10);
     const [isLeaderSale, setIsLeaderSale] = useState(false);
@@ -246,14 +248,12 @@ export default function NewSaleScreen({ navigation, route }) {
         if (selectedPromo) {
             if (selectedPromo.type === 'global_percent') {
                 discount = subtotal * (selectedPromo.value / 100);
-                promoDetail = `Desc. ${selectedPromo.value}% Global`;
+                promoDetail = `Desc. ${Math.round(selectedPromo.value)}% Global`;
             } else if (selectedPromo.type === 'fixed_discount') {
                 discount = selectedPromo.value;
                 promoDetail = `Desc. Fijo -$${selectedPromo.value}`;
             } else if (selectedPromo.type === 'buy_x_get_y') {
-                // Get IDs of products linked to this promo
                 const promoProductIds = (selectedPromo.promotion_products || []).map(pp => pp.product_id);
-
                 let affected = [];
                 cart.forEach(item => {
                     if (promoProductIds.includes(item.id) && item.qty >= 2) {
@@ -262,7 +262,6 @@ export default function NewSaleScreen({ navigation, route }) {
                         affected.push(`${item.name} (x${freeUnits})`);
                     }
                 });
-
                 if (affected.length > 0) {
                     promoDetail = `2x1 para: ${affected.join(', ')}`;
                 } else {
@@ -271,17 +270,28 @@ export default function NewSaleScreen({ navigation, route }) {
             }
         }
 
-        const total = subtotal - discount;
-        const finalProfit = totalProfit - discount; // Discount reduces profit
+        // Apply Manual Discount
+        let manualDiscountAmt = 0;
+        const mVal = parseFloat(manualDiscount) || 0;
+        if (mVal > 0) {
+            if (manualDiscountType === 'percent') {
+                manualDiscountAmt = subtotal * (mVal / 100);
+            } else {
+                manualDiscountAmt = mVal;
+            }
+        }
 
-        // Multi-tier commission: 10% standard, 5% if it's a Leader sale closed by César
+        const totalDiscount = discount + manualDiscountAmt;
+        const total = subtotal - totalDiscount;
+        const finalProfit = totalProfit - totalDiscount;
+
         const currentRate = isLeaderSale ? 0.05 : commissionRate;
-        const commission = finalProfit * currentRate; // Calculate for all, filter by device in Home
+        const commission = finalProfit * currentRate;
 
-        return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail };
+        return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail, manualDiscountAmt };
     };
 
-    const { subtotal, total, totalProfit, commission, discount, promoDetail } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate]);
+    const { subtotal, total, totalProfit, commission, discount, promoDetail, manualDiscountAmt } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate, manualDiscount, manualDiscountType]);
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
 
@@ -442,6 +452,14 @@ export default function NewSaleScreen({ navigation, route }) {
                                     <td style="text-align: right; padding: 10px;"><strong>-$${discount.toFixed(2)}</strong></td>
                                 </tr>
                             ` : ''}
+                            ${manualDiscountAmt > 0 ? `
+                                <tr style="border-bottom: 2px solid #e74c3c;">
+                                    <td style="padding: 10px;"><strong>Descuento Especial ${manualDiscountType === 'percent' ? `(${Math.round(parseFloat(manualDiscount)) || 0}%)` : ''}</strong></td>
+                                    <td style="text-align: center; padding: 10px;"><strong>1</strong></td>
+                                    <td style="text-align: right; padding: 10px;"><strong>-$${manualDiscountAmt.toFixed(2)}</strong></td>
+                                    <td style="text-align: right; padding: 10px;"><strong>-$${manualDiscountAmt.toFixed(2)}</strong></td>
+                                </tr>
+                            ` : ''}
                         </tbody>
                     </table>
 
@@ -486,6 +504,9 @@ export default function NewSaleScreen({ navigation, route }) {
                 device_sig: deviceSig,
                 is_leader_sale: isLeaderSale,
                 promotion_id: selectedPromo ? selectedPromo.id : null,
+                manual_discount_amount: manualDiscountAmt || 0,
+                manual_discount_type: manualDiscountType,
+                manual_discount_value: parseFloat(manualDiscount) || 0,
                 sale_location: saleLocation
             };
 
@@ -500,6 +521,8 @@ export default function NewSaleScreen({ navigation, route }) {
                             setCart([]);
                             setSelectedClient(null);
                             setSelectedPromo(null);
+                            setManualDiscount('');
+                            setManualDiscountType('fixed');
                             setClientModalVisible(false);
                             navigation.navigate('Home');
                         }
@@ -646,6 +669,8 @@ export default function NewSaleScreen({ navigation, route }) {
                             setCart([]);
                             setSelectedClient(null);
                             setSelectedPromo(null);
+                            setManualDiscount('');
+                            setManualDiscountType('fixed');
                             setClientModalVisible(false);
                             navigation.navigate('Sales');
                         }
@@ -657,6 +682,8 @@ export default function NewSaleScreen({ navigation, route }) {
                             setCart([]);
                             setSelectedClient(null);
                             setSelectedPromo(null);
+                            setManualDiscount('');
+                            setManualDiscountType('fixed');
                             setClientModalVisible(false);
                             navigation.navigate('Sales');
                         }
@@ -764,12 +791,45 @@ export default function NewSaleScreen({ navigation, route }) {
                 onSelectPromo={setSelectedPromo}
             />
 
+            {/* Manual Discount Section */}
+            <View style={styles.manualDiscountContainer}>
+                <Text style={styles.promoLabel}>DESCUENTO MANUAL (EXTRA):</Text>
+                <View style={styles.manualDiscountRow}>
+                    <View style={styles.manualInputWrapper}>
+                        <MaterialCommunityIcons name="tag-outline" size={16} color="#d4af37" style={{ marginRight: 8 }} />
+                        <TextInput
+                            style={styles.manualDiscountInput}
+                            placeholder="0.00"
+                            placeholderTextColor="#444"
+                            keyboardType="numeric"
+                            value={manualDiscount}
+                            onChangeText={setManualDiscount}
+                        />
+                    </View>
+                    <View style={styles.manualTypeGroup}>
+                        <TouchableOpacity
+                            style={[styles.manualTypeBtn, manualDiscountType === 'fixed' && styles.manualTypeBtnActive]}
+                            onPress={() => setManualDiscountType('fixed')}
+                        >
+                            <Text style={[styles.manualTypeBtnText, manualDiscountType === 'fixed' && styles.manualTypeBtnTextActive]}>$</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.manualTypeBtn, manualDiscountType === 'percent' && styles.manualTypeBtnActive]}
+                            onPress={() => setManualDiscountType('percent')}
+                        >
+                            <Text style={[styles.manualTypeBtnText, manualDiscountType === 'percent' && styles.manualTypeBtnTextActive]}>%</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+
             {/* Cost Breakdown */}
             {cart.length > 0 && (
                 <CostBreakdown
                     subtotal={subtotal}
                     total={total}
                     discount={discount}
+                    manualDiscount={manualDiscountAmt}
                     selectedPromo={selectedPromo}
                     promoDetail={promoDetail}
                 />
@@ -896,7 +956,6 @@ export default function NewSaleScreen({ navigation, route }) {
                 setNewClientPhone={setNewClientPhone}
                 handleCreateClient={handleCreateClient}
                 creatingClient={creatingClient}
-                processCheckout={processCheckout}
             />
 
             {/* BARCODE SCANNER MODAL */}
@@ -958,5 +1017,16 @@ const styles = StyleSheet.create({
     locationToggle: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0a0a0a', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#1a1a1a', gap: 8 },
     locationToggleActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
     locationToggleText: { color: '#666', fontSize: 11, fontWeight: 'bold' },
-    locationToggleTextActive: { color: '#000' }
+    locationToggleTextActive: { color: '#000' },
+
+    // Manual Discount Styles
+    manualDiscountContainer: { backgroundColor: '#111', padding: 15, borderTopWidth: 1, borderTopColor: '#222', paddingBottom: 25 },
+    manualDiscountRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 5 },
+    manualInputWrapper: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 15, height: 45, borderWidth: 1, borderColor: '#1a1a1a', marginRight: 15 },
+    manualDiscountInput: { flex: 1, color: '#fff', fontSize: 16, fontWeight: 'bold' },
+    manualTypeGroup: { flexDirection: 'row', backgroundColor: '#000', borderRadius: 10, padding: 3, borderWidth: 1, borderColor: '#1a1a1a' },
+    manualTypeBtn: { width: 40, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
+    manualTypeBtnActive: { backgroundColor: '#d4af37' },
+    manualTypeBtnText: { color: '#444', fontWeight: 'bold', fontSize: 16 },
+    manualTypeBtnTextActive: { color: '#000' }
 });

@@ -32,8 +32,9 @@ export default function HomeScreen({ navigation }) {
     const [stats, setStats] = useState({
         todaySales: 0,
         todayNetProfit: 0,
+        totalCommissions: 0,
         monthCommissions: 0,
-        monthSales: 0,
+        totalSales: 0,
         budgetSales: 0,
         commissionRate: 0,
         lowStockCount: 0,
@@ -98,8 +99,8 @@ export default function HomeScreen({ navigation }) {
             ] = await Promise.all([
                 supabase.from('sales').select('total_amount, profit_generated, commission_amount, status').gte('created_at', startOfDay),
                 (currentRole === 'seller' && deviceSig)
-                    ? supabase.from('sales').select('total_amount, commission_amount, status, device_sig').gte('created_at', startOfMonth).eq('device_sig', deviceSig)
-                    : supabase.from('sales').select('total_amount, commission_amount, status, device_sig').gte('created_at', startOfMonth),
+                    ? supabase.from('sales').select('total_amount, commission_amount, status, device_sig').eq('device_sig', deviceSig)
+                    : supabase.from('sales').select('total_amount, commission_amount, status, device_sig'),
                 supabase.from('expenses').select('amount').gte('created_at', startOfDay),
                 supabase.from('sales').select('total_amount').eq('status', 'budget'),
                 supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5),
@@ -122,15 +123,26 @@ export default function HomeScreen({ navigation }) {
                 });
             }
 
-            // Calculate Seller's Monthly Stats
-            let monthSales = 0;
+            // Calculate Seller's Total Stats & Month Breakdown
+            let totalSales = 0;
+            let totalCommissions = 0;
             let monthCommissions = 0;
+            const startOfMonthTimestamp = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
             if (monthlySalesData) {
                 monthlySalesData.forEach(s => {
                     const status = (s.status || '').toLowerCase();
                     if (status === 'completed' || status === 'exitosa' || status === '' || status === 'vended') {
-                        monthSales += (s.total_amount || 0);
-                        monthCommissions += (s.commission_amount || 0);
+                        const amount = (s.total_amount || 0);
+                        const comm = (s.commission_amount || 0);
+                        totalSales += amount;
+                        totalCommissions += comm;
+
+                        // Check if it belongs to current month (local filtering)
+                        const saleDate = new Date(s.created_at).getTime();
+                        if (saleDate >= startOfMonthTimestamp) {
+                            monthCommissions += comm;
+                        }
                     }
                 });
             }
@@ -141,7 +153,8 @@ export default function HomeScreen({ navigation }) {
             const newStats = {
                 todaySales,
                 todayNetProfit: todayGrossProfit - todayCommissionsTotal - todayExpenses,
-                monthSales,
+                totalSales,
+                totalCommissions,
                 monthCommissions,
                 budgetSales: budgetsData ? budgetsData.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
                 commissionRate: rate,
@@ -419,7 +432,6 @@ export default function HomeScreen({ navigation }) {
                             </View>
                         </View>
                     ) : (
-                        /* PREMIUM COMMISSION BOX - SELLER ONLY */
                         <View style={styles.commissionContainer}>
                             <LinearGradient
                                 colors={['#d4af3720', '#d4af3705']}
@@ -428,40 +440,50 @@ export default function HomeScreen({ navigation }) {
                             >
                                 <View style={styles.commissionHeader}>
                                     <MaterialCommunityIcons name="star-circle" size={20} color="#d4af37" />
-                                    <Text style={styles.commissionLab}>MI COMISIÓN ACUMULADA (MES)</Text>
+                                    <Text style={styles.commissionLab}>MI COMISIÓN ACUMULADA TOTAL</Text>
                                 </View>
-                                <Text style={styles.commissionVal}>${stats.monthCommissions.toFixed(2)}</Text>
+                                <Text style={styles.commissionVal}>${stats.totalCommissions.toFixed(2)}</Text>
+
+                                {stats.totalCommissions > 0 && (
+                                    <View style={styles.monthBadgeSmall}>
+                                        <Text style={styles.monthBadgeText}>
+                                            ESTE MES: ${stats.monthCommissions.toFixed(2)} ({((stats.monthCommissions / stats.totalCommissions) * 100).toFixed(0)}%)
+                                        </Text>
+                                    </View>
+                                )}
                                 <Text style={styles.commissionSub}>Comisión del {stats.commissionRate}% sobre tus ventas directas</Text>
                             </LinearGradient>
                         </View>
                     )}
 
                     {/* DAILY MISSIONS - SELLER ONLY */}
-                    {userRole === 'seller' && missions.length > 0 && (
-                        <View style={styles.missionsSection}>
-                            <Text style={styles.sectionLabel}>MISIONES DEL DÍA ⚔️</Text>
-                            {missions.map(m => (
-                                <TouchableOpacity
-                                    key={m.id}
-                                    style={styles.missionCard}
-                                    onPress={() => handleMissionAction(m)}
-                                >
-                                    <View style={[styles.missionIcon, { backgroundColor: m.color + '20' }]}>
-                                        <MaterialCommunityIcons name={m.icon} size={22} color={m.color} />
-                                    </View>
-                                    <View style={styles.missionInfo}>
-                                        <Text style={styles.missionTitle}>{m.title}</Text>
-                                        <Text style={styles.missionDesc}>{m.desc}</Text>
-                                    </View>
-                                    {generatingMission === m.id ? (
-                                        <ActivityIndicator color={m.color} />
-                                    ) : (
-                                        m.type !== 'info' && <MaterialCommunityIcons name="chevron-right" size={20} color="#333" />
-                                    )}
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    )}
+                    {
+                        userRole === 'seller' && missions.length > 0 && (
+                            <View style={styles.missionsSection}>
+                                <Text style={styles.sectionLabel}>MISIONES DEL DÍA ⚔️</Text>
+                                {missions.map(m => (
+                                    <TouchableOpacity
+                                        key={m.id}
+                                        style={styles.missionCard}
+                                        onPress={() => handleMissionAction(m)}
+                                    >
+                                        <View style={[styles.missionIcon, { backgroundColor: m.color + '20' }]}>
+                                            <MaterialCommunityIcons name={m.icon} size={22} color={m.color} />
+                                        </View>
+                                        <View style={styles.missionInfo}>
+                                            <Text style={styles.missionTitle}>{m.title}</Text>
+                                            <Text style={styles.missionDesc}>{m.desc}</Text>
+                                        </View>
+                                        {generatingMission === m.id ? (
+                                            <ActivityIndicator color={m.color} />
+                                        ) : (
+                                            m.type !== 'info' && <MaterialCommunityIcons name="chevron-right" size={20} color="#333" />
+                                        )}
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        )
+                    }
 
                     {/* Minimalist Grid of Actions */}
                     <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
@@ -498,9 +520,9 @@ export default function HomeScreen({ navigation }) {
                             <Text style={styles.manualEntryText}>O CARGAR MANUALMENTE</Text>
                         </TouchableOpacity>
                     </View>
-                </ScrollView>
-            </SafeAreaView>
-        </View>
+                </ScrollView >
+            </SafeAreaView >
+        </View >
     );
 }
 
@@ -535,6 +557,8 @@ const styles = StyleSheet.create({
     commissionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 15 },
     commissionLab: { color: '#d4af37', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
     commissionVal: { color: '#fff', fontSize: 36, fontWeight: '900', textShadowColor: 'rgba(212,175,55,0.5)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
+    monthBadgeSmall: { backgroundColor: 'rgba(212,175,55,0.1)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, marginTop: 10, borderWidth: 1, borderColor: 'rgba(212,175,55,0.3)' },
+    monthBadgeText: { color: '#d4af37', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
     commissionSub: { color: '#666', fontSize: 12, fontWeight: '600', marginTop: 15, textAlign: 'center' },
 
     sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 15, paddingHorizontal: 25, marginTop: 20 },

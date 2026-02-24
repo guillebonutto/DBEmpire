@@ -76,36 +76,99 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     }, [route.params?.orderToEdit]);
 
     const loadLinkedItems = async (orderId) => {
-        const { data, error } = await supabase
-            .from('supplier_order_items')
-            .select('product_id, quantity, cost_per_unit, temp_product_name, supplier, color, products(id, name, current_stock)')
-            .eq('supplier_order_id', orderId);
+        try {
+            // Fetch items with a very basic query first to ensure we get data
+            const { data, error } = await supabase
+                .from('supplier_order_items')
+                .select('*, products(id, name, current_stock)')
+                .eq('supplier_order_id', orderId);
 
-        if (data) {
-            // Group items by product and cost
-            const groupedMap = {};
-            data.forEach(item => {
-                const key = item.product_id ? `prod_${item.product_id}_${item.cost_per_unit}` : `new_${item.temp_product_name}_${item.cost_per_unit}`;
-                if (!groupedMap[key]) {
-                    groupedMap[key] = {
-                        product: item.products || { id: null, name: item.temp_product_name },
-                        cost: item.cost_per_unit.toString(),
-                        variants: [],
-                        isNew: !item.product_id,
-                        tempName: item.temp_product_name,
-                        localId: Math.random().toString(36).substr(2, 9)
-                    };
-                }
-                groupedMap[key].variants.push({
-                    color: item.color || '',
-                    quantity: item.quantity.toString()
+            if (error) throw error;
+
+            if (data && data.length > 0) {
+                const groupedMap = {};
+
+                data.forEach(item => {
+                    const costVal = item.cost_per_unit || 0;
+                    const qtyVal = item.quantity || 1;
+                    const prodName = item.products?.name || item.temp_product_name || 'Producto Desconocido';
+
+                    const key = item.product_id ? `prod_${item.product_id}_${costVal}` : `new_${item.temp_product_name}_${costVal}`;
+
+                    if (!groupedMap[key]) {
+                        groupedMap[key] = {
+                            product: item.products || { id: item.product_id, name: prodName },
+                            cost: costVal.toString(),
+                            variants: [],
+                            isNew: !item.product_id,
+                            tempName: item.temp_product_name,
+                            localId: Math.random().toString(36).substr(2, 9),
+                            supplierName: item.supplier || ''
+                        };
+                    }
+
+                    groupedMap[key].variants.push({
+                        color: item.color || '',
+                        quantity: qtyVal.toString()
+                    });
                 });
+
+                setSelectedProducts(Object.values(groupedMap));
+            } else {
+                setSelectedProducts([]);
+            }
+
+            // Give layout animation time to finish before stopping load state
+            setTimeout(() => setIsInitialLoad(false), 300);
+
+        } catch (err) {
+            console.error('Error loading items:', err);
+            Alert.alert('Error', 'No pudimos cargar los items: ' + err.message);
+            setIsInitialLoad(false);
+        }
+    };
+
+    const parseItemsFromDescription = () => {
+        if (!itemsDesc) {
+            Alert.alert('Aviso', 'No hay descripción detallada para procesar.');
+            return;
+        }
+
+        try {
+            // Split by comma or dot to identify potential items
+            // Format: Product (x3), Another (x1)...
+            const parts = itemsDesc.split(/[,\.]/);
+            const newItems = [];
+
+            parts.forEach(part => {
+                const text = part.trim();
+                if (!text || text.startsWith('Consolidación')) return;
+
+                // Match "Name (x3)" or "Name x3"
+                const match = text.match(/(.*?)\s?\(?x(\d+)\)?$/);
+                if (match) {
+                    const name = match[1].trim();
+                    const qty = match[2];
+                    newItems.push({
+                        product: { id: null, name: name },
+                        cost: '0',
+                        variants: [{ color: '', quantity: qty }],
+                        isNew: true,
+                        tempName: name,
+                        localId: Math.random().toString(36).substr(2, 9),
+                        supplierName: ''
+                    });
+                }
             });
 
-            setSelectedProducts(Object.values(groupedMap));
-            setTimeout(() => setIsInitialLoad(false), 500);
-        } else {
-            setIsInitialLoad(false);
+            if (newItems.length > 0) {
+                setSelectedProducts(prev => [...prev, ...newItems]);
+                Alert.alert('✨ Magia', `He recuperado ${newItems.length} productos detectados en las notas.`);
+            } else {
+                Alert.alert('Aviso', 'No pude detectar el formato "Producto (xCantidad)" en las notas.');
+            }
+        } catch (e) {
+            Alert.alert('Error', 'No se pudo procesar la descripción.');
         }
     };
 
@@ -332,8 +395,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                             quantity: parseInt(v.quantity) || 1,
                             cost_per_unit: parseFloat(p.cost) || 0,
                             supplier: p.supplierName || payload.provider_name, // Use item supplier or fallback to order provider
-                            color: v.color || null,
-                            notes: p.quality === 'perfect' ? 'Sin fallas' : 'Con fallas'
+                            color: v.color || null
                         });
                     });
                 }
@@ -419,7 +481,18 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     />
                 </View>
 
-                <Text style={styles.label}>Productos Vinculados (Opcional)</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={styles.label}>Productos Vinculados (Opcional)</Text>
+                    {selectedProducts.length === 0 && itemsDesc.includes('(x') && (
+                        <TouchableOpacity
+                            onPress={parseItemsFromDescription}
+                            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#d4af3720', padding: 5, borderRadius: 5, borderWidth: 1, borderColor: '#d4af37' }}
+                        >
+                            <MaterialCommunityIcons name="auto-fix" size={14} color="#d4af37" />
+                            <Text style={{ color: '#d4af37', fontSize: 10, fontWeight: 'bold', marginLeft: 5 }}>IMPORTAR DE NOTAS</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
                 <View style={[
                     styles.productsListContainer,
                     selectedProducts.length >= 3 && { height: 230 }

@@ -22,6 +22,7 @@ export default function ExpensesScreen({ navigation }) {
     const [amount, setAmount] = useState('');
     const [category, setCategory] = useState('General');
     const [scanning, setScanning] = useState(false);
+    const [expandedExpenseId, setExpandedExpenseId] = useState(null);
 
     // Purchases (Supplier Orders) State
     const [orders, setOrders] = useState([]);
@@ -332,13 +333,29 @@ export default function ExpensesScreen({ navigation }) {
     // --- RENDER ITEMS ---
     const renderExpenseItem = useCallback(({ item }) => {
         const isDiscount = item.category === 'Descuento' || item.amount < 0;
+        const hasDetails = Array.isArray(item.details) && item.details.length > 0;
+        const isExpanded = expandedExpenseId === item.id;
 
         return (
-            <View style={styles.card}>
+            <TouchableOpacity
+                activeOpacity={hasDetails ? 0.7 : 1}
+                onPress={() => hasDetails && setExpandedExpenseId(isExpanded ? null : item.id)}
+                style={styles.card}
+            >
                 <View style={styles.cardHeader}>
-                    <Text style={[styles.categoryBadge, isDiscount && { color: '#2ecc71' }]}>
-                        {item.category}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.categoryBadge, isDiscount && { color: '#2ecc71' }]}>
+                            {item.category}
+                        </Text>
+                        {hasDetails && (
+                            <MaterialCommunityIcons
+                                name={isExpanded ? "chevron-up" : "chevron-down"}
+                                size={16}
+                                color="#d4af37"
+                                style={{ marginLeft: 5 }}
+                            />
+                        )}
+                    </View>
                     <Text style={styles.dateText}>
                         {new Date(item.created_at).toLocaleDateString('es-ES')}
                     </Text>
@@ -349,12 +366,25 @@ export default function ExpensesScreen({ navigation }) {
                         {isDiscount ? `+$${Math.abs(item.amount).toFixed(2)}` : `-$${parseFloat(item.amount).toFixed(2)}`}
                     </Text>
                 </View>
+
+                {isExpanded && hasDetails && (
+                    <View style={styles.detailsContainer}>
+                        <Text style={styles.detailsTitle}>DESGLOSE POR COLOR:</Text>
+                        {item.details.map((detail, idx) => (
+                            <View key={idx} style={styles.detailItem}>
+                                <Text style={styles.detailText}>{detail.color || 'Sin color'}</Text>
+                                <Text style={styles.detailQty}>x{detail.qty}</Text>
+                            </View>
+                        ))}
+                    </View>
+                )}
+
                 <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteExpense(item.id)}>
                     <Text style={styles.deleteText}>Eliminar</Text>
                 </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
         );
-    }, []);
+    }, [expandedExpenseId]);
 
     const renderOrderItem = useCallback(({ item }) => {
         const totalInstallments = item.installments_total || 1;
@@ -756,5 +786,19 @@ const styles = StyleSheet.create({
 
     scanButton: { backgroundColor: '#d4af37', flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, alignItems: 'center', gap: 5 },
     scanButtonText: { fontSize: 10, fontWeight: '900', color: '#000' },
-    loadingOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }
+    loadingOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
+
+    detailsContainer: {
+        backgroundColor: '#151515',
+        padding: 12,
+        borderRadius: 10,
+        marginTop: 5,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#222'
+    },
+    detailsTitle: { color: '#666', fontSize: 10, fontWeight: '900', marginBottom: 8, letterSpacing: 1 },
+    detailItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#222' },
+    detailText: { color: '#aaa', fontSize: 13 },
+    detailQty: { color: '#d4af37', fontWeight: 'bold', fontSize: 13 }
 });

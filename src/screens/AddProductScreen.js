@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal, FlatList, StatusBar } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -157,6 +157,15 @@ export default function AddProductScreen({ navigation, route }) {
             }
         }
     }, [productToEdit]);
+
+    const fetchAllProducts = useCallback(async () => {
+        const { data } = await supabase
+            .from('products')
+            .select('id, name, sale_price, barcode, image_url')
+            .eq('active', true)
+            .order('name');
+        setAllProducts(data || []);
+    }, []);
 
     const fetchSuppliers = useCallback(async () => {
         const { data } = await supabase.from('suppliers').select('*').eq('active', true).order('name', { ascending: true });
@@ -563,7 +572,7 @@ export default function AddProductScreen({ navigation, route }) {
                         name: formData.name, // New Name
                         sale_price: parseFloat(formData.sale_price) || 0, // New Price
                         current_stock: newStockOnly, // Only new stock
-                        barcode: formData.barcode // New Barcode (or kept from scan)
+                        barcode: formData.barcode?.trim() || null // New Barcode (or kept from scan)
                     }])
                     .select()
                     .single();
@@ -582,7 +591,7 @@ export default function AddProductScreen({ navigation, route }) {
                     stock_local: parseInt(formData.stock_local) || 0,
                     stock_cordoba: parseInt(formData.stock_cordoba) || 0,
                     current_stock: (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0),
-                    barcode: formData.barcode
+                    barcode: formData.barcode?.trim() || null
                 };
 
                 if (productToEdit) {
@@ -614,48 +623,75 @@ export default function AddProductScreen({ navigation, route }) {
             }
 
             // --- AUTO EXPENSE & ORDER GENERATION ---
-            // Only if we added stock and have a cost, AND we are NOT in Import Wizard mode (to avoid double accounting)
-            // AND it is NOT a bundle (bundles are virtual compositions, expenses are on components)
             if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle) {
                 try {
-                    const expenseAmount = stockDifference * costPrice;
+                    const oldVariants = Array.isArray(productToEdit?.variants) ? productToEdit.variants : [];
+                    const newVariants = variants || [];
+                    const additions = [];
 
-                    // 1. Create Expense
-                    const { error: expenseError } = await supabase.from('expenses').insert({
-                        description: `Inventario: ${formData.name} (x${stockDifference})`,
-                        amount: expenseAmount,
+                    if (newVariants.length > 0) {
+                        newVariants.forEach(nv => {
+                            const ov = oldVariants.find(o => o.color === nv.color);
+                            const oldQty = parseInt(ov?.stock) || 0;
+                            const newQty = parseInt(nv.stock) || 0;
+                            if (newQty > oldQty) {
+                                additions.push({ color: nv.color, qty: newQty - oldQty });
+                            }
+                        });
+                    }
+
+                    const totalExpenseAmount = stockDifference * costPrice;
+                    const details = additions.length > 0 ? additions : [{ color: 'General', qty: stockDifference }];
+
+                    await supabase.from('expenses').insert({
+                        description: `Inventario: ${formData.name}${additions.length > 0 ? ' (Color Mix)' : ''} (x${stockDifference})`,
+                        amount: totalExpenseAmount,
                         category: 'Inventario',
+                        product_id: productId,
+                        quantity: stockDifference,
+                        details: details,
                         created_at: new Date().toISOString()
                     });
-                    if (expenseError) throw expenseError;
 
                     // 2. Create Supplier Order (Auto-generated)
                     const { data: orderData, error: orderError } = await supabase
                         .from('supplier_orders')
                         .insert({
                             provider_name: formData.provider || 'Sin Proveedor',
-                            items_description: `Ingreso Manual: ${formData.name}`,
-                            total_cost: expenseAmount,
-                            status: 'received', // Already in stock
+                            items_description: `Ingreso Manual: ${formData.name} (x${stockDifference})`,
+                            total_cost: totalExpenseAmount,
+                            status: 'received',
                             installments_total: 1,
-                            installments_paid: 0,
+                            installments_paid: 1, // Already paid if it's an auto-expense
                             created_at: new Date().toISOString()
                         })
                         .select()
                         .single();
 
                     if (!orderError && orderData && productId) {
-                        // 3. Link Item
-                        await supabase.from('supplier_order_items').insert({
-                            supplier_order_id: orderData.id,
-                            product_id: productId,
-                            quantity: stockDifference,
-                            cost_per_unit: costPrice
-                        });
+                        // 3. Link Item (Detailing variants if possible)
+                        if (additions.length > 0) {
+                            for (const add of additions) {
+                                await supabase.from('supplier_order_items').insert({
+                                    supplier_order_id: orderData.id,
+                                    product_id: productId,
+                                    quantity: add.qty,
+                                    cost_per_unit: costPrice,
+                                    color: add.color
+                                });
+                            }
+                        } else {
+                            await supabase.from('supplier_order_items').insert({
+                                supplier_order_id: orderData.id,
+                                product_id: productId,
+                                quantity: stockDifference,
+                                cost_per_unit: costPrice
+                            });
+                        }
                     }
                 } catch (expErr) {
                     console.log('Auto-expense error:', expErr);
-                    Alert.alert('Nota', 'Producto guardado, pero falló el registro automático del gasto.');
+                    Alert.alert('Nota', 'Producto guardado, pero falló el registro automático del gasto detalle.');
                 }
             }
             // -------------------------------
@@ -717,7 +753,30 @@ export default function AddProductScreen({ navigation, route }) {
 
         } catch (err) {
             console.log('Error saving product:', err);
-            Alert.alert('Error', 'Hubo un error al guardar. Revisa la consola/conexión.');
+
+            if (err.code === '23505' || err.message?.includes('unique constraint')) {
+                // Duplicate Barcode check
+                try {
+                    const { data: existing } = await supabase
+                        .from('products')
+                        .select('name')
+                        .eq('barcode', formData.barcode?.trim())
+                        .single();
+
+                    if (existing) {
+                        Alert.alert(
+                            'Código Duplicado ⚠️',
+                            `El código "${formData.barcode}" ya pertenece al producto: "${existing.name}".\n\nPor favor, usa un código diferente o editá el producto existente.`
+                        );
+                    } else {
+                        Alert.alert('Error de Duplicado', 'Ya existe un producto con estos datos (posiblemente el mismo código de barras).');
+                    }
+                } catch (e) {
+                    Alert.alert('Error', 'Este código de barras ya existe en el sistema.');
+                }
+            } else {
+                Alert.alert('Error', 'Hubo un error al guardar. Revisa la consola/conexión.');
+            }
         } finally {
             setLoading(false);
         }
