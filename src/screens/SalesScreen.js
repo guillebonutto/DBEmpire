@@ -15,18 +15,24 @@ export default function SalesScreen({ navigation }) {
     const fetchSalesData = async () => {
         setLoading(true);
         try {
-            // Get COMPLETED and BUDGET sales with items
+            const now = new Date();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+
+            // Fetch all sales of the current month
             const { data, error } = await supabase
                 .from('sales')
                 .select('*, profiles(full_name), clients(name), sale_items(*, products(name))')
                 .in('status', ['completed', 'budget', 'pending', 'exitosa', ''])
+                .gte('created_at', startOfMonth)
+                .lte('created_at', endOfMonth)
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
 
             if (data) {
                 processStats(data);
-                setRecentSales(data.slice(0, 10)); // Show last 10
+                setRecentSales(data); // Show ALL sales from this month
             }
         } catch (err) {
             console.log(err);
@@ -235,7 +241,9 @@ export default function SalesScreen({ navigation }) {
                 </TouchableOpacity>
             </View>
 
-            <Text style={styles.sectionTitle}>Historial Reciente</Text>
+            <Text style={styles.sectionTitle}>
+                VENTAS DE {new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()} {new Date().getFullYear()} ({recentSales.length})
+            </Text>
 
             <FlatList
                 data={recentSales}
