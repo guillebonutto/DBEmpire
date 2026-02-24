@@ -524,7 +524,7 @@ export default function NewSaleScreen({ navigation, route }) {
                             setManualDiscount('');
                             setManualDiscountType('fixed');
                             setClientModalVisible(false);
-                            navigation.navigate('Home');
+                            navigation.navigate('Main');
                         }
                     }]
                 );

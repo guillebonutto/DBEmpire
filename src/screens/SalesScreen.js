@@ -73,14 +73,6 @@ export default function SalesScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
-            const checkRole = async () => {
-                const role = await AsyncStorage.getItem('user_role');
-                if (role !== 'admin') {
-                    Alert.alert('Acceso Denegado', 'El historial solo es visible para Líderes.');
-                    navigation.navigate('Home');
-                }
-            };
-            checkRole();
             fetchSalesData();
         }, [])
     );
