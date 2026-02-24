@@ -55,24 +55,32 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
     React.useEffect(() => {
         fetchProducts();
-        fetchSuppliers();
-        if (route.params?.orderToEdit) {
-            const order = route.params.orderToEdit;
-            setProvider(order.provider_name);
-            setTracking(order.tracking_number || '');
-            setItemsDesc(order.items_description || '');
-            setCost(order.total_cost?.toString() || '');
-            setDiscount(order.discount?.toString() || '0');
-            setInstallmentsTotal(order.installments_total?.toString() || '1');
-            setInstallmentsPaid(order.installments_paid?.toString() || '0');
-            setCourier(order.notes || '');
-            if (order.created_at) {
-                setPurchaseDate(new Date(order.created_at));
-            }
+        fetchSuppliers().then(loadedSuppliers => {
+            if (route.params?.orderToEdit) {
+                const order = route.params.orderToEdit;
+                setProvider(order.provider_name);
+                setTracking(order.tracking_number || '');
+                setItemsDesc(order.items_description || '');
+                setCost(order.total_cost?.toString() || '');
+                setDiscount(order.discount?.toString() || '0');
+                setInstallmentsTotal(order.installments_total?.toString() || '1');
+                setInstallmentsPaid(order.installments_paid?.toString() || '0');
+                setCourier(order.notes || '');
+                if (order.created_at) {
+                    setPurchaseDate(new Date(order.created_at));
+                }
 
-            // Allow editing status from here too if needed, or keep it simple
-            loadLinkedItems(order.id);
-        }
+                // Restore supplier_id by matching name from loaded suppliers list
+                if (order.supplier_id) {
+                    setSelectedSupplierId(order.supplier_id);
+                } else if (loadedSuppliers && order.provider_name) {
+                    const match = loadedSuppliers.find(s => s.name === order.provider_name);
+                    if (match) setSelectedSupplierId(match.id);
+                }
+
+                loadLinkedItems(order.id);
+            }
+        });
     }, [route.params?.orderToEdit]);
 
     const loadLinkedItems = async (orderId) => {
@@ -180,6 +188,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const fetchSuppliers = async () => {
         const { data } = await supabase.from('suppliers').select('*').eq('active', true).order('name', { ascending: true });
         if (data) setSuppliersList(data);
+        return data || []; // Return for chaining in useEffect
     };
 
     const openSupplierForProduct = (index) => {
