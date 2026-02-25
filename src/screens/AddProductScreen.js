@@ -461,27 +461,54 @@ export default function AddProductScreen({ navigation, route }) {
 
         // Check for Liquidation Condition
         if (productToEdit) {
+            const oldCost = parseFloat(productToEdit.cost_price);
+            const newCost = parseFloat(formData.cost_price);
             const oldPrice = parseFloat(productToEdit.sale_price);
             const newPrice = parseFloat(formData.sale_price);
             const oldStock = (parseInt(productToEdit.stock_local) || 0) + (parseInt(productToEdit.stock_cordoba) || 0);
             const newTotalStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
+            const addedStock = newTotalStock - oldStock;
 
-            // If price changed AND we have more stock than before (meaning we added new units)
-            // And there was actually some old stock to liquidate
-            if (oldPrice !== newPrice && newTotalStock > oldStock && oldStock > 0) {
+            // --- PROMEDIO DE PRECIO: Si cambió el costo y se está agregando stock ---
+            if (oldCost !== newCost && addedStock > 0 && oldStock > 0) {
+                const pppAvg = ((oldCost * oldStock) + (newCost * addedStock)) / (oldStock + addedStock);
+                Alert.alert(
+                    '📊 Costo Promedio Detectado',
+                    `Tenías ${oldStock} unidades a $${oldCost} y agregás ${addedStock} a $${newCost}.\n\nCosto promedio ponderado: $${pppAvg.toFixed(2)}\n\n¿Querés usar el promedio o mantener el nuevo precio?`,
+                    [
+                        {
+                            text: `Usar Promedio ($${pppAvg.toFixed(2)})`,
+                            onPress: () => {
+                                setFormData(prev => ({ ...prev, cost_price: pppAvg.toFixed(2) }));
+                                // Re-trigger save after updating
+                                setTimeout(() => checkLiquidationAndSave(false, pppAvg), 100);
+                            }
+                        },
+                        {
+                            text: `Mantener Nuevo ($${newCost})`,
+                            onPress: () => checkLiquidationAndSave(false, newCost)
+                        },
+                        { text: 'Cancelar', style: 'cancel' }
+                    ]
+                );
+                return;
+            }
+
+            // --- LIQUIDATION: Si cambió el precio venta y hay stock viejo ---
+            if (oldPrice !== newPrice && addedStock > 0 && oldStock > 0) {
                 Alert.alert(
                     'Cambio de Precio Detectado',
                     `El precio ha cambiado de $${oldPrice} a $${newPrice}.\n\n¿Qué deseas hacer con las ${oldStock} unidades anteriores?`,
                     [
                         {
                             text: 'Actualizar Todo',
-                            onPress: () => executeSave(false), // Normal update
+                            onPress: () => executeSave(false),
                             style: 'default'
                         },
                         {
                             text: 'Liquidar Viejo Stock',
-                            onPress: () => executeSave(true), // Split product
-                            style: 'destructive' // Highlight this option
+                            onPress: () => executeSave(true),
+                            style: 'destructive'
                         },
                         {
                             text: 'Cancelar',
@@ -497,7 +524,12 @@ export default function AddProductScreen({ navigation, route }) {
         executeSave(false);
     };
 
-    const executeSave = async (isLiquidation) => {
+    // Helper for post-PPP save (avoids re-running all checks)
+    const checkLiquidationAndSave = (isLiquidation, resolvedCost) => {
+        executeSave(isLiquidation, resolvedCost);
+    };
+
+    const executeSave = async (isLiquidation, overrideCost = null) => {
         setLoading(true);
         try {
             let finalImageUrl = image;
@@ -536,7 +568,7 @@ export default function AddProductScreen({ navigation, route }) {
 
             let productId = productToEdit?.id;
             let stockDifference = 0;
-            let costPrice = parseFloat(formData.cost_price) || 0;
+            let costPrice = overrideCost !== null ? overrideCost : (parseFloat(formData.cost_price) || 0);
 
             if (isLiquidation && productToEdit) {
                 // --- LIQUIDATION LOGIC ---
@@ -697,33 +729,30 @@ export default function AddProductScreen({ navigation, route }) {
             // -------------------------------
 
             if (!isLiquidation) {
-                Alert.alert('Éxito', 'Producto guardado correctamente');
-            }
+                // NOTE: Do NOT show 'guardado' Alert here if CRM modal will open.
+                // The modal itself serves as confirmation. We show it only if no clients found.
+                if (productId) {
+                    const interested = await CRMService.findInterestedClients({
+                        id: productId,
+                        name: formData.name
+                    });
 
-            // --- CRM SMART MATCH ---
-            // Only run if we have a valid productId (we should)
-            if (productId) {
-                const interested = await CRMService.findInterestedClients({
-                    id: productId, // Use the ID of the product we just worked on (New or Updated)
-                    name: formData.name
-                });
-
-                if (interested.length > 0) {
-                    setPotentialClients(interested);
-                    setShowMatchModal(true);
-                } else {
-                    navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                    if (interested.length > 0) {
+                        // Show CRM modal — navigation happens when user dismisses it
+                        setPotentialClients(interested);
+                        setShowMatchModal(true);
+                        // Navigation is handled by the modal's close/dismiss action
+                        return; // Early return — don't navigate yet
+                    } else {
+                        Alert.alert('✅ Éxito', 'Producto guardado correctamente.');
+                    }
                 }
-            } else {
-                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
             }
-            // ------------------------
 
             // --- WIZARD MODE NAVIGATION ---
             if (route.params?.importQueue && productId) {
                 const currentItem = route.params.importQueue[route.params.importIndex];
 
-                // 1. Link back to the Supplier Order Item
                 const { error: linkError } = await supabase
                     .from('supplier_order_items')
                     .update({ product_id: productId })
@@ -731,7 +760,6 @@ export default function AddProductScreen({ navigation, route }) {
 
                 if (linkError) console.log('Error linking product to order item:', linkError);
 
-                // 2. Determine Next Step
                 const nextIndex = route.params.importIndex + 1;
                 if (nextIndex < route.params.importQueue.length) {
                     Alert.alert('✅ Siguiente', 'Producto registrado. Vamos con el próximo...');
@@ -741,15 +769,13 @@ export default function AddProductScreen({ navigation, route }) {
                     });
                 } else {
                     Alert.alert('🎉 Importación Completa', 'Todos los productos nuevos han sido registrados e ingresados al inventario.');
-                    navigation.navigate('SupplierOrders'); // Or go back to specific screen
+                    navigation.navigate('SupplierOrders');
                 }
             } else {
-                // Normal Exit
-                if (productId) { // Only if success
+                if (productId) {
                     navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
                 }
             }
-            // ------------------------------
 
         } catch (err) {
             console.log('Error saving product:', err);
@@ -1018,6 +1044,11 @@ export default function AddProductScreen({ navigation, route }) {
                         <View style={styles.crmModalHeader}>
                             <MaterialCommunityIcons name="target" size={32} color="#d4af37" />
                             <Text style={styles.crmModalTitle}>¡Oportunidad Imperial!</Text>
+                        </View>
+
+                        <View style={{ backgroundColor: 'rgba(46,204,113,0.1)', borderRadius: 10, padding: 10, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <MaterialCommunityIcons name="check-circle" size={18} color="#2ecc71" />
+                            <Text style={{ color: '#2ecc71', fontWeight: 'bold', fontSize: 13 }}>✅ Producto guardado correctamente</Text>
                         </View>
 
                         <Text style={styles.crmModalSubtitle}>
