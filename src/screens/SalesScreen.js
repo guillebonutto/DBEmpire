@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Alert } from 'react-native';
+import React, { useState, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Alert, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
@@ -9,6 +9,7 @@ export default function SalesScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
     const [stats, setStats] = useState({ today: 0, month: 0, countToday: 0, commissions: 0 });
     const [recentSales, setRecentSales] = useState([]);
+    const [searchQuery, setSearchQuery] = useState('');
 
     const [expandedSale, setExpandedSale] = useState(null);
 
@@ -17,22 +18,21 @@ export default function SalesScreen({ navigation }) {
         try {
             const now = new Date();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
 
-            // Fetch all sales of the current month
+            // Logic:
+            // 1. Fetch EVERYTHING that is 'budget' or 'pending' (regardless of date)
+            // 2. Fetch 'completed/exitosa' ONLY for the current month
             const { data, error } = await supabase
                 .from('sales')
                 .select('*, profiles(full_name), clients(name), sale_items(*, products(name))')
-                .in('status', ['completed', 'budget', 'pending', 'exitosa', ''])
-                .gte('created_at', startOfMonth)
-                .lte('created_at', endOfMonth)
+                .or(`status.in.(budget,pending),and(status.in.(completed,exitosa,"",vended),created_at.gte.${startOfMonth})`)
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
 
             if (data) {
                 processStats(data);
-                setRecentSales(data); // Show ALL sales from this month
+                setRecentSales(data);
             }
         } catch (err) {
             console.log(err);
@@ -40,6 +40,17 @@ export default function SalesScreen({ navigation }) {
             setLoading(false);
         }
     };
+
+    // Filtered sales based on search query
+    const filteredRecentSales = useMemo(() => {
+        if (!searchQuery.trim()) return recentSales;
+        const lowQuery = searchQuery.toLowerCase();
+        return recentSales.filter(sale => {
+            const clientName = (sale.clients?.name || 'anónimo').toLowerCase();
+            const saleIdShort = sale.id.slice(0, 4).toLowerCase();
+            return clientName.includes(lowQuery) || saleIdShort.includes(lowQuery);
+        });
+    }, [searchQuery, recentSales]);
 
     const processStats = (sales) => {
         const now = new Date();
@@ -82,6 +93,45 @@ export default function SalesScreen({ navigation }) {
             fetchSalesData();
         }, [])
     );
+
+    const handleCancelSale = async (sale) => {
+        const isBudget = sale.status === 'budget';
+        const title = isBudget ? 'Anular Presupuesto' : 'Anular Venta';
+        const message = isBudget
+            ? '¿Estás seguro de que deseas anular este presupuesto? Se eliminará de la lista activa.'
+            : '¿Deseas anular esta operación? Ten en cuenta que esto no devolverá el stock automáticamente si ya fue descontado.';
+
+        Alert.alert(
+            title,
+            message,
+            [
+                { text: 'No, mantener', style: 'cancel' },
+                {
+                    text: 'SÍ, ANULAR',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            const { error } = await supabase
+                                .from('sales')
+                                .update({ status: 'cancelled' })
+                                .eq('id', sale.id);
+
+                            if (error) throw error;
+
+                            Alert.alert('✅ Anulado', 'La operación ha sido anulada con éxito.');
+                            fetchSalesData();
+                        } catch (err) {
+                            console.error(err);
+                            Alert.alert('Error', 'No se pudo anular la operación.');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
 
     const handleConvertToSale = async (sale) => {
         Alert.alert(
@@ -184,16 +234,27 @@ export default function SalesScreen({ navigation }) {
                                 <Text style={styles.detailPrice}>${detail.unit_price_at_sale}</Text>
                             </View>
                         ))}
-                        {isBudget && (
+                        <View style={{ flexDirection: 'row', gap: 10, marginTop: 15 }}>
+                            {isBudget && (
+                                <TouchableOpacity
+                                    style={styles.convertBtn}
+                                    onPress={() => handleConvertToSale(item)}
+                                    disabled={loading}
+                                >
+                                    <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
+                                    <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
+                                </TouchableOpacity>
+                            )}
+
                             <TouchableOpacity
-                                style={styles.convertBtn}
-                                onPress={() => handleConvertToSale(item)}
+                                style={[styles.convertBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#ff4444' }]}
+                                onPress={() => handleCancelSale(item)}
                                 disabled={loading}
                             >
-                                <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
-                                <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
+                                <MaterialCommunityIcons name="delete-outline" size={14} color="#ff4444" />
+                                <Text style={[styles.convertBtnText, { color: '#ff4444' }]}>ANULAR</Text>
                             </TouchableOpacity>
-                        )}
+                        </View>
                     </View>
                 )}
             </TouchableOpacity>
@@ -241,12 +302,29 @@ export default function SalesScreen({ navigation }) {
                 </TouchableOpacity>
             </View>
 
+            {/* SEARCH BAR */}
+            <View style={styles.searchContainer}>
+                <MaterialCommunityIcons name="magnify" size={20} color="#666" style={{ marginLeft: 10 }} />
+                <TextInput
+                    style={styles.searchInput}
+                    placeholder="Buscar por cliente o ID..."
+                    placeholderTextColor="#666"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                />
+                {searchQuery !== '' && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                        <MaterialCommunityIcons name="close-circle" size={18} color="#666" style={{ marginRight: 10 }} />
+                    </TouchableOpacity>
+                )}
+            </View>
+
             <Text style={styles.sectionTitle}>
-                VENTAS DE {new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()} {new Date().getFullYear()} ({recentSales.length})
+                OPERACIONES ({filteredRecentSales.length})
             </Text>
 
             <FlatList
-                data={recentSales}
+                data={filteredRecentSales}
                 keyExtractor={item => item.id}
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
@@ -333,5 +411,24 @@ const styles = StyleSheet.create({
         marginTop: 10,
         gap: 5
     },
-    convertBtnText: { color: '#000', fontSize: 10, fontWeight: '900' }
+    convertBtnText: { color: '#000', fontSize: 10, fontWeight: '900' },
+
+    // Search Styles
+    searchContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#1a1a1a',
+        borderRadius: 12,
+        marginHorizontal: 0,
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    searchInput: {
+        flex: 1,
+        color: '#fff',
+        paddingVertical: 12,
+        paddingHorizontal: 10,
+        fontSize: 14
+    }
 });
