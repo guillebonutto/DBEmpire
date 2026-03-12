@@ -4,13 +4,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
+import { GlobalDataService } from '../services/GlobalDataService';
 
 export default function CatalogScreen({ navigation }) {
-    const [products, setProducts] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [products, setProducts] = useState(GlobalDataService.getProducts());
+    const [loading, setLoading] = useState(products.length === 0);
 
     useEffect(() => {
-        fetchProducts();
+        if (products.length === 0) {
+            fetchProducts();
+        } else {
+            // Background refresh to keep data fresh but show cache immediately
+            fetchProducts();
+        }
     }, []);
 
     const fetchProducts = async () => {
@@ -20,7 +26,11 @@ export default function CatalogScreen({ navigation }) {
                 .select('*')
                 .eq('active', true)
                 .order('name');
-            if (data) setProducts(data);
+            if (data) {
+                setProducts(data);
+                // Sync to global cache too
+                GlobalDataService.refreshTable('products');
+            }
         } catch (e) {
             console.error(e);
         } finally {

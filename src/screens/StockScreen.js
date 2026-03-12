@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView, InteractionManager } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -13,12 +13,109 @@ import { logoBase64 } from '../assets/logoBase64';
 import { GeminiService } from '../services/geminiService';
 import { CRMService } from '../services/crmService';
 import { SecurityService } from '../services/securityService';
+import { GlobalDataService } from '../services/GlobalDataService';
+
+// 1. Move Item Renderer OUTSIDE and Memoize it to prevent re-setup during navigation
+const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing, stockColor, totalStock }) => {
+    return (
+        <TouchableOpacity
+            style={styles.productCard}
+            onPress={() => {
+                if (userRole === 'admin') {
+                    navigation.navigate('AddProduct', { product: item });
+                }
+            }}
+            activeOpacity={userRole === 'admin' ? 0.7 : 1}
+        >
+            <LinearGradient colors={['#1a1a1a', '#0d0d0d']} style={styles.cardInner}>
+                <View style={styles.imageWrapper}>
+                    {item.image_url ? (
+                        <Image source={{ uri: item.image_url }} style={styles.productImage} />
+                    ) : (
+                        <View style={styles.placeholderImage}>
+                            <MaterialCommunityIcons name="image-off-outline" size={24} color="#333" />
+                        </View>
+                    )}
+                    {userRole === 'admin' && (
+                        <TouchableOpacity
+                            style={styles.deleteBadge}
+                            onPress={() => handleDelete(item)}
+                        >
+                            <MaterialCommunityIcons name="delete-outline" size={14} color="#e74c3c" />
+                        </TouchableOpacity>
+                    )}
+                    <View style={[styles.stockGlow, { backgroundColor: stockColor + '20', borderColor: stockColor + '60' }]}>
+                        <Text style={[styles.stockText, { color: stockColor }]}>{totalStock}</Text>
+                    </View>
+                </View>
+
+                <View style={styles.productInfo}>
+                    <View style={styles.infoTop}>
+                        <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
+                        <Text style={styles.salePrice}>${item.sale_price}</Text>
+                    </View>
+
+                    <View style={styles.locationStockRow}>
+                        <View style={styles.locationItem}>
+                            <MaterialCommunityIcons name="home-map-marker" size={14} color="#888" />
+                            <Text style={styles.locationLabel}>Jujuy: </Text>
+                            <Text style={[styles.locationQty, (parseInt(item.stock_local) || 0) <= 0 && { color: '#e74c3c' }]}>
+                                {item.stock_local || 0}
+                            </Text>
+                        </View>
+                        <View style={styles.locationDivider} />
+                        <View style={styles.locationItem}>
+                            <MaterialCommunityIcons name="map-marker-distance" size={14} color="#888" />
+                            <Text style={styles.locationLabel}>Cba: </Text>
+                            <Text style={[styles.locationQty, (parseInt(item.stock_cordoba) || 0) > 0 ? { color: '#3498db' } : { color: '#666' }]}>
+                                {item.stock_cordoba || 0}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <View style={styles.infoBottom}>
+                        <View style={styles.metaRow}>
+                            <MaterialCommunityIcons name="factory" size={12} color="#555" />
+                            <Text style={styles.metaText} numberOfLines={1}>{item.provider || 'Sin Proveedor'}</Text>
+                        </View>
+                        <View style={styles.metaRow}>
+                            <MaterialCommunityIcons name="barcode" size={12} color="#555" />
+                            <Text style={styles.metaText}>{item.barcode || 'S/C'}</Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* Marketing Action Button */}
+                <View style={styles.actionButtonsContainer}>
+                    <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => handleFindBuyers(item)}
+                    >
+                        <LinearGradient colors={['#3498db', '#2980b9']} style={styles.iconBtnBg}>
+                            <MaterialCommunityIcons name="target-account" size={18} color="#fff" />
+                        </LinearGradient>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => handleGenerateMarketing(item)}
+                    >
+                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.iconBtnBg}>
+                            <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
+                        </LinearGradient>
+                    </TouchableOpacity>
+                </View>
+            </LinearGradient>
+        </TouchableOpacity>
+    );
+});
 
 export default function StockScreen({ navigation, route }) {
+    const cachedItems = GlobalDataService.getProducts();
     const [userRole, setUserRole] = useState('seller');
-    const [products, setProducts] = useState([]);
-    const [filteredProducts, setFilteredProducts] = useState([]);
+    const [products, setProducts] = useState([]); // Start empty to avoid blocking mount
     const [loading, setLoading] = useState(false);
+    const [screenReady, setScreenReady] = useState(false); // Gate heavy UI
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
     const [isFastMode, setIsFastMode] = useState(false);
@@ -43,9 +140,18 @@ export default function StockScreen({ navigation, route }) {
             const role = await AsyncStorage.getItem('user_role');
             if (role) setUserRole(role);
         };
-        getRole();
-        // Warm up permissions
-        requestPermission();
+        
+        // 2. Ultra-fast mount: render shell first, then data in next frame
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                setScreenReady(true);
+                const cached = GlobalDataService.getProducts();
+                if (cached && cached.length > 0) setProducts(cached);
+                getRole();
+                requestPermission();
+                fetchProducts(true);
+            }, 0);
+        });
     }, []);
 
     // Scanner
@@ -164,8 +270,9 @@ export default function StockScreen({ navigation, route }) {
         }
     };
 
-    const fetchProducts = async () => {
-        setLoading(true);
+    const fetchProducts = useCallback(async (isBackground = false) => {
+        if (products.length === 0 && !isBackground) setLoading(true);
+        
         try {
             const { data, error } = await supabase
                 .from('products')
@@ -182,16 +289,16 @@ export default function StockScreen({ navigation, route }) {
                 });
 
                 setProducts(validProducts);
-                setFilteredProducts(validProducts);
+                GlobalDataService.refreshTable('products');
             }
         } catch (error) {
             console.log('Error fetching products:', error.message);
         } finally {
             setLoading(false);
         }
-    };
+    }, [products.length, showHiddenStock]);
 
-    const handleDelete = async (product) => {
+    const handleDelete = useCallback(async (product) => {
         Alert.alert(
             'Eliminar Producto',
             `¿Estás seguro de que quieres eliminar "${product.name}"?`,
@@ -234,7 +341,7 @@ export default function StockScreen({ navigation, route }) {
                 }
             ]
         );
-    };
+    }, [fetchProducts]);
 
     const filteredProductsList = React.useMemo(() => {
         if (!searchQuery) return products;
@@ -248,11 +355,22 @@ export default function StockScreen({ navigation, route }) {
 
     useFocusEffect(
         useCallback(() => {
-            fetchProducts();
-        }, [showHiddenStock])
+            if (screenReady) {
+                fetchProducts(true); // Keep data fresh silently
+            }
+        }, [showHiddenStock, screenReady, fetchProducts])
     );
 
-    const renderProductItem = ({ item }) => {
+    // Dummy Skeleton for instant feedback
+    const renderSkeleton = () => (
+        <View style={styles.listContent}>
+            {[1, 2, 3, 4].map(i => (
+                <View key={i} style={[styles.productCard, { height: 90, backgroundColor: '#0a0a0a', opacity: 0.5 }]} />
+            ))}
+        </View>
+    );
+
+    const renderProductItem = useCallback(({ item }) => {
         const stockLocal = parseInt(item.stock_local) || 0;
         const stockCordoba = parseInt(item.stock_cordoba) || 0;
         const totalStock = stockLocal + stockCordoba;
@@ -262,93 +380,18 @@ export default function StockScreen({ navigation, route }) {
         else if (totalStock <= 5) stockColor = '#f1c40f';
 
         return (
-            <TouchableOpacity
-                style={styles.productCard}
-                onPress={() => {
-                    if (userRole === 'admin') {
-                        navigation.navigate('AddProduct', { product: item });
-                    }
-                }}
-                activeOpacity={userRole === 'admin' ? 0.7 : 1}
-            >
-                <LinearGradient colors={['#1a1a1a', '#0d0d0d']} style={styles.cardInner}>
-                    <View style={styles.imageWrapper}>
-                        {item.image_url ? (
-                            <Image source={{ uri: item.image_url }} style={styles.productImage} />
-                        ) : (
-                            <View style={styles.placeholderImage}>
-                                <MaterialCommunityIcons name="image-off-outline" size={24} color="#333" />
-                            </View>
-                        )}
-                        {userRole === 'admin' && (
-                            <TouchableOpacity
-                                style={styles.deleteBadge}
-                                onPress={() => handleDelete(item)}
-                            >
-                                <MaterialCommunityIcons name="delete-outline" size={14} color="#e74c3c" />
-                            </TouchableOpacity>
-                        )}
-                        <View style={[styles.stockGlow, { backgroundColor: stockColor + '20', borderColor: stockColor + '60' }]}>
-                            <Text style={[styles.stockText, { color: stockColor }]}>{totalStock}</Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.productInfo}>
-                        <View style={styles.infoTop}>
-                            <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
-                            <Text style={styles.salePrice}>${item.sale_price}</Text>
-                        </View>
-
-                        <View style={styles.locationStockRow}>
-                            <View style={styles.locationItem}>
-                                <MaterialCommunityIcons name="home-map-marker" size={14} color="#888" />
-                                <Text style={styles.locationLabel}>Jujuy: </Text>
-                                <Text style={[styles.locationQty, stockLocal <= 0 && { color: '#e74c3c' }]}>{stockLocal}</Text>
-                            </View>
-                            <View style={styles.locationDivider} />
-                            <View style={styles.locationItem}>
-                                <MaterialCommunityIcons name="map-marker-distance" size={14} color="#888" />
-                                <Text style={styles.locationLabel}>Cba: </Text>
-                                <Text style={[styles.locationQty, stockCordoba > 0 ? { color: '#3498db' } : { color: '#666' }]}>{stockCordoba}</Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.infoBottom}>
-                            <View style={styles.metaRow}>
-                                <MaterialCommunityIcons name="factory" size={12} color="#555" />
-                                <Text style={styles.metaText} numberOfLines={1}>{item.provider || 'Sin Proveedor'}</Text>
-                            </View>
-                            <View style={styles.metaRow}>
-                                <MaterialCommunityIcons name="barcode" size={12} color="#555" />
-                                <Text style={styles.metaText}>{item.barcode || 'S/C'}</Text>
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Marketing Action Button */}
-                    <View style={styles.actionButtonsContainer}>
-                        <TouchableOpacity
-                            style={styles.iconBtn}
-                            onPress={() => handleFindBuyers(item)}
-                        >
-                            <LinearGradient colors={['#3498db', '#2980b9']} style={styles.iconBtnBg}>
-                                <MaterialCommunityIcons name="target-account" size={18} color="#fff" />
-                            </LinearGradient>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={styles.iconBtn}
-                            onPress={() => handleGenerateMarketing(item)}
-                        >
-                            <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.iconBtnBg}>
-                                <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
-                            </LinearGradient>
-                        </TouchableOpacity>
-                    </View>
-                </LinearGradient>
-            </TouchableOpacity>
+            <ProductCard 
+                item={item} 
+                userRole={userRole} 
+                navigation={navigation} 
+                handleDelete={handleDelete}
+                handleFindBuyers={handleFindBuyers}
+                handleGenerateMarketing={handleGenerateMarketing}
+                stockColor={stockColor}
+                totalStock={totalStock}
+            />
         );
-    };
+    }, [userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing]);
 
     const exportToPDF = async () => {
         setLoading(true);
@@ -591,24 +634,32 @@ export default function StockScreen({ navigation, route }) {
                 )}
             </View>
 
-            <FlatList
-                data={filteredProductsList}
-                keyExtractor={(item) => item.id}
-                renderItem={renderProductItem}
-                initialNumToRender={10}
-                maxToRenderPerBatch={10}
-                windowSize={5}
-                removeClippedSubviews={true}
-                contentContainerStyle={styles.listContent}
-                alwaysBounceVertical={false}
-                refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchProducts} tintColor="#d4af37" />}
-                ListEmptyComponent={
-                    <View style={styles.emptyContainer}>
-                        <Text style={styles.emptyText}>{searchQuery ? 'No encontrado.' : 'Bóveda vacía.'}</Text>
-                        {!searchQuery && <Text style={styles.emptySubtext}>Añade activos para comenzar.</Text>}
-                    </View>
-                }
-            />
+            {!screenReady ? (
+                renderSkeleton()
+            ) : products.length === 0 && loading ? (
+                <View style={styles.emptyContainer}>
+                    <ActivityIndicator color="#d4af37" size="large" />
+                </View>
+            ) : (
+                <FlatList
+                    data={filteredProductsList}
+                    keyExtractor={(item) => item.id}
+                    renderItem={renderProductItem}
+                    initialNumToRender={1}
+                    maxToRenderPerBatch={2}
+                    windowSize={3}
+                    removeClippedSubviews={true}
+                    contentContainerStyle={styles.listContent}
+                    alwaysBounceVertical={false}
+                    refreshControl={<RefreshControl refreshing={loading} onRefresh={() => fetchProducts(false)} tintColor="#d4af37" />}
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyText}>{searchQuery ? 'No encontrado.' : 'Bóveda vacía.'}</Text>
+                            {!searchQuery && <Text style={styles.emptySubtext}>Añade activos para comenzar.</Text>}
+                        </View>
+                    }
+                />
+            )}
 
             <Modal visible={isScanning} animationType="slide">
                 <View style={{ flex: 1, backgroundColor: 'black' }}>

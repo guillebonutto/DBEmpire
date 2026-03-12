@@ -13,6 +13,8 @@ import { NotificationService } from '../services/notificationService';
 import { SyncService } from '../services/syncService';
 import NetInfo from '@react-native-community/netinfo';
 
+import { GlobalDataService } from '../services/GlobalDataService';
+
 // New Components
 import CartItem from '../components/CartItem';
 import ClientSelector from '../components/ClientSelector';
@@ -24,8 +26,10 @@ import ClientModal from '../components/ClientModal';
 
 export default function NewSaleScreen({ navigation, route }) {
     const [cart, setCart] = useState([]);
-    const [products, setProducts] = useState([]);
-    const [clients, setClients] = useState([]);
+    const [products, setProducts] = useState(GlobalDataService.getProducts());
+    const [clients, setClients] = useState(GlobalDataService.getClients());
+    const [promos, setPromos] = useState(GlobalDataService.getPromotions());
+    const [commissionRate, setCommissionRate] = useState(GlobalDataService.getSetting('commission_rate') || 0.10);
     const [currentUserRole, setCurrentUserRole] = useState('seller');
 
     // Modals
@@ -42,12 +46,10 @@ export default function NewSaleScreen({ navigation, route }) {
 
     // Selection State
     const [selectedClient, setSelectedClient] = useState(null);
-    const [promos, setPromos] = useState([]);
     const [selectedPromo, setSelectedPromo] = useState(null);
     const [manualDiscount, setManualDiscount] = useState('');
     const [manualDiscountType, setManualDiscountType] = useState('fixed'); // 'fixed' or 'percent'
     const [loading, setLoading] = useState(false);
-    const [commissionRate, setCommissionRate] = useState(0.10);
     const [isLeaderSale, setIsLeaderSale] = useState(false);
 
     // Inline Quantity State
@@ -66,7 +68,6 @@ export default function NewSaleScreen({ navigation, route }) {
             if (role) setCurrentUserRole(role);
         });
 
-        // Use requestAnimationFrame for param handling to avoid blocking transition
         requestAnimationFrame(() => {
             if (route.params?.preselectedProduct) {
                 const product = route.params.preselectedProduct;
@@ -93,19 +94,17 @@ export default function NewSaleScreen({ navigation, route }) {
     }, [route.params?.preselectedProduct, route.params?.mode, route.params?.autoSearch]);
 
     const fetchInitialData = async () => {
-        setLoading(true);
-        try {
-            const [productsRes, clientsRes, promosRes, commRes] = await Promise.all([
-                supabase.from('products').select('*').eq('active', true).order('name'),
-                supabase.from('clients').select('*').order('created_at', { ascending: false }),
-                supabase.from('promotions').select('*, promotion_products(product_id)').eq('active', true).order('created_at', { ascending: false }),
-                supabase.from('settings').select('value').eq('key', 'commission_rate').single()
-            ]);
+        // If we already have data, don't show loading spinner (fluidity)
+        const hasData = products.length > 0;
+        if (!hasData) setLoading(true);
 
-            if (productsRes.data) setProducts(productsRes.data);
-            if (clientsRes.data) setClients(clientsRes.data || []);
-            if (promosRes.data) setPromos(promosRes.data || []);
-            if (commRes.data) setCommissionRate(parseFloat(commRes.data.value));
+        try {
+            // Fresh download in background
+            await GlobalDataService.preloadAll();
+            setProducts(GlobalDataService.getProducts());
+            setClients(GlobalDataService.getClients());
+            setPromos(GlobalDataService.getPromotions());
+            setCommissionRate(parseFloat(GlobalDataService.getSetting('commission_rate')) || 0.10);
 
         } catch (error) {
             console.log('Error fetching initial data:', error);
