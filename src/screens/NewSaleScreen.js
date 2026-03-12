@@ -699,10 +699,10 @@ export default function NewSaleScreen({ navigation, route }) {
     };
 
     const renderHeader = () => (
-        <LinearGradient colors={['#000000', '#1a1a1a']} style={styles.header}>
+        <View style={styles.header}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15 }}>
-                <TouchableOpacity onPress={() => navigation.goBack()}>
-                    <MaterialCommunityIcons name="arrow-left" size={24} color="#666" />
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+                    <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>NUEVA VENTA</Text>
                 <View style={{ width: 24 }} />
@@ -715,7 +715,7 @@ export default function NewSaleScreen({ navigation, route }) {
                     <Text style={styles.clientLabel}>CLIENTE: {selectedClient.name}</Text>
                 )}
             </View>
-        </LinearGradient>
+        </View>
     );
 
     if (isScanning) {
@@ -984,18 +984,19 @@ export default function NewSaleScreen({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000000' },
+    container: { flex: 1, backgroundColor: '#000' },
+    container: { flex: 1, backgroundColor: '#000' },
+    header: { paddingHorizontal: 20, paddingVertical: 15, backgroundColor: '#000' },
+    backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#111' },
+    headerTitle: { color: '#d4af37', fontSize: 13, fontWeight: '900', letterSpacing: 2 },
+    totalBadge: { backgroundColor: '#050505', padding: 25, borderRadius: 25, alignItems: 'center', marginTop: 10, borderWidth: 1, borderColor: '#111' },
+    totalLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 5 },
+    totalAmount: { color: '#fff', fontSize: 38, fontWeight: '900', textShadowColor: 'rgba(212, 175, 55, 0.4)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 15 },
+    clientLabel: { color: '#d4af37', fontSize: 11, fontWeight: '900', marginTop: 10, textTransform: 'uppercase' },
 
-    header: { padding: 20, paddingBottom: 30, borderBottomWidth: 1, borderBottomColor: '#333' },
-    headerTitle: { color: '#666', fontSize: 14, fontWeight: '900', letterSpacing: 2, textAlign: 'center' },
-    totalBadge: { alignItems: 'center', marginTop: 10 },
-    totalLabel: { color: '#888', fontSize: 10, letterSpacing: 2, fontWeight: '900', marginBottom: 5 },
-    totalAmount: { color: '#d4af37', fontSize: 48, fontWeight: '900' },
-    clientLabel: { color: '#fff', marginTop: 5, fontWeight: 'bold', fontSize: 14, letterSpacing: 1 },
-
-    emptyContainer: { alignItems: 'center', marginTop: 60, opacity: 0.7 },
-    emptyText: { fontSize: 18, fontWeight: '900', marginTop: 10, color: '#666' },
-    emptySubtext: { fontSize: 14, color: '#444' },
+    emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 100 },
+    emptyText: { color: '#222', fontSize: 18, fontWeight: '900', marginTop: 15 },
+    emptySubtext: { color: '#111', fontSize: 12, fontWeight: '700', marginTop: 5 },
 
     footer: { padding: 20, paddingBottom: 30, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderTopColor: '#333', flexDirection: 'row' },
     addProductBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#ccc', borderRadius: 10, padding: 15, marginRight: 10 },

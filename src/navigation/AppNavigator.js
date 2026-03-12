@@ -68,8 +68,8 @@ function MainTabs() {
                     elevation: 0,
                     borderTopWidth: 1
                 },
-                tabBarActiveTintColor: '#d4af37',
-                tabBarInactiveTintColor: '#666',
+                tabBarActiveTintColor: '#d4af37', // Original Gold
+                tabBarInactiveTintColor: '#444',
                 tabBarLabelStyle: {
                     fontSize: 10,
                     fontWeight: '700'
@@ -86,7 +86,12 @@ function MainTabs() {
                         <View style={focused ? {
                             backgroundColor: 'rgba(212, 175, 55, 0.1)',
                             padding: 8,
-                            borderRadius: 12
+                            borderRadius: 15,
+                            shadowColor: '#d4af37',
+                            shadowOffset: { width: 0, height: 0 },
+                            shadowOpacity: 0.6,
+                            shadowRadius: 10,
+                            elevation: 5
                         } : null}>
                             <MaterialCommunityIcons name={iconName} size={24} color={color} />
                         </View>

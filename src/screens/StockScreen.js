@@ -27,7 +27,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
             }}
             activeOpacity={userRole === 'admin' ? 0.7 : 1}
         >
-            <LinearGradient colors={['#1a1a1a', '#0d0d0d']} style={styles.cardInner}>
+            <View style={styles.cardInner}>
                 <View style={styles.imageWrapper}>
                     {item.image_url ? (
                         <Image source={{ uri: item.image_url }} style={styles.productImage} />
@@ -41,10 +41,10 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                             style={styles.deleteBadge}
                             onPress={() => handleDelete(item)}
                         >
-                            <MaterialCommunityIcons name="delete-outline" size={14} color="#e74c3c" />
+                            <MaterialCommunityIcons name="delete-outline" size={14} color="#ff3b3b" />
                         </TouchableOpacity>
                     )}
-                    <View style={[styles.stockGlow, { backgroundColor: stockColor + '20', borderColor: stockColor + '60' }]}>
+                    <View style={[styles.stockGlow, { backgroundColor: stockColor + '30', borderColor: stockColor }]}>
                         <Text style={[styles.stockText, { color: stockColor }]}>{totalStock}</Text>
                     </View>
                 </View>
@@ -57,17 +57,17 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
 
                     <View style={styles.locationStockRow}>
                         <View style={styles.locationItem}>
-                            <MaterialCommunityIcons name="home-map-marker" size={14} color="#888" />
+                            <MaterialCommunityIcons name="home-map-marker" size={14} color="#555" />
                             <Text style={styles.locationLabel}>Jujuy: </Text>
-                            <Text style={[styles.locationQty, (parseInt(item.stock_local) || 0) <= 0 && { color: '#e74c3c' }]}>
+                            <Text style={[styles.locationQty, (parseInt(item.stock_local) || 0) <= 0 && { color: '#ff3b3b' }]}>
                                 {item.stock_local || 0}
                             </Text>
                         </View>
                         <View style={styles.locationDivider} />
                         <View style={styles.locationItem}>
-                            <MaterialCommunityIcons name="map-marker-distance" size={14} color="#888" />
+                            <MaterialCommunityIcons name="map-marker-distance" size={14} color="#555" />
                             <Text style={styles.locationLabel}>Cba: </Text>
-                            <Text style={[styles.locationQty, (parseInt(item.stock_cordoba) || 0) > 0 ? { color: '#3498db' } : { color: '#666' }]}>
+                            <Text style={[styles.locationQty, (parseInt(item.stock_cordoba) || 0) > 0 ? { color: '#d4af37' } : { color: '#444' }]}>
                                 {item.stock_cordoba || 0}
                             </Text>
                         </View>
@@ -75,37 +75,22 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
 
                     <View style={styles.infoBottom}>
                         <View style={styles.metaRow}>
-                            <MaterialCommunityIcons name="factory" size={12} color="#555" />
+                            <MaterialCommunityIcons name="factory" size={12} color="#333" />
                             <Text style={styles.metaText} numberOfLines={1}>{item.provider || 'Sin Proveedor'}</Text>
-                        </View>
-                        <View style={styles.metaRow}>
-                            <MaterialCommunityIcons name="barcode" size={12} color="#555" />
-                            <Text style={styles.metaText}>{item.barcode || 'S/C'}</Text>
                         </View>
                     </View>
                 </View>
 
-                {/* Marketing Action Button */}
                 <View style={styles.actionButtonsContainer}>
-                    <TouchableOpacity
-                        style={styles.iconBtn}
-                        onPress={() => handleFindBuyers(item)}
-                    >
-                        <LinearGradient colors={['#3498db', '#2980b9']} style={styles.iconBtnBg}>
-                            <MaterialCommunityIcons name="target-account" size={18} color="#fff" />
-                        </LinearGradient>
+                    <TouchableOpacity style={styles.neonIconBtn} onPress={() => handleFindBuyers(item)}>
+                        <MaterialCommunityIcons name="target-account" size={18} color="#d4af37" />
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                        style={styles.iconBtn}
-                        onPress={() => handleGenerateMarketing(item)}
-                    >
-                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.iconBtnBg}>
-                            <MaterialCommunityIcons name="whatsapp" size={18} color="#000" />
-                        </LinearGradient>
+                    <TouchableOpacity style={styles.neonIconBtn} onPress={() => handleGenerateMarketing(item)}>
+                        <MaterialCommunityIcons name="whatsapp" size={18} color="#00ff88" />
                     </TouchableOpacity>
                 </View>
-            </LinearGradient>
+            </View>
         </TouchableOpacity>
     );
 });
@@ -375,9 +360,9 @@ export default function StockScreen({ navigation, route }) {
         const stockCordoba = parseInt(item.stock_cordoba) || 0;
         const totalStock = stockLocal + stockCordoba;
 
-        let stockColor = '#2ecc71';
-        if (totalStock <= 0) stockColor = '#e74c3c';
-        else if (totalStock <= 5) stockColor = '#f1c40f';
+        let stockColor = '#00ff88'; // Neon Green
+        if (totalStock <= 0) stockColor = '#ff3b3b'; // Neon Red
+        else if (totalStock <= 5) stockColor = '#ffaa00'; // Neon Orange
 
         return (
             <ProductCard 
@@ -948,10 +933,10 @@ export default function StockScreen({ navigation, route }) {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000000' },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, paddingVertical: 15, backgroundColor: '#000' },
-    headerLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 2 },
-    title: { fontSize: 24, fontWeight: '900', color: '#d4af37', letterSpacing: 1 },
+    headerLabel: { color: '#222', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 2 },
+    title: { fontSize: 24, fontWeight: '900', color: '#d4af37', letterSpacing: 1, textShadowColor: 'rgba(212, 175, 55, 0.4)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
     headerActions: { flexDirection: 'row', gap: 10 },
-    headerBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#222', justifyContent: 'center', alignItems: 'center' },
+    headerBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#050505', borderWidth: 1, borderColor: '#111', justifyContent: 'center', alignItems: 'center' },
     headerBtnActive: { borderColor: '#d4af37', backgroundColor: '#d4af3710' },
 
     searchSection: { flexDirection: 'row', paddingHorizontal: 20, paddingBottom: 20, gap: 10, alignItems: 'center' },
@@ -962,9 +947,9 @@ const styles = StyleSheet.create({
     addBtnGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
     listContent: { paddingHorizontal: 20, paddingBottom: 0 },
-    productCard: { marginBottom: 12, borderRadius: 20, borderWidth: 1, borderColor: '#222', overflow: 'hidden' },
+    productCard: { marginBottom: 12, borderRadius: 20, borderWidth: 1, borderColor: '#111', overflow: 'hidden', backgroundColor: '#050505' },
     cardInner: { flexDirection: 'row', padding: 12, alignItems: 'center' },
-    imageWrapper: { width: 70, height: 70, borderRadius: 15, backgroundColor: '#111', overflow: 'hidden', position: 'relative' },
+    imageWrapper: { width: 70, height: 70, borderRadius: 15, backgroundColor: '#080808', overflow: 'hidden', position: 'relative' },
     productImage: { width: '100%', height: '100%', objectFit: 'cover' },
     placeholderImage: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
     stockGlow: { position: 'absolute', bottom: 0, right: 0, paddingHorizontal: 6, paddingVertical: 2, borderTopLeftRadius: 10, borderWidth: 1 },
@@ -973,8 +958,8 @@ const styles = StyleSheet.create({
     productInfo: { flex: 1, marginLeft: 15 },
     infoTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
     productName: { color: '#fff', fontSize: 15, fontWeight: 'bold', flex: 1, marginRight: 10 },
-    salePrice: { color: '#2ecc71', fontSize: 16, fontWeight: '900' },
-    metaText: { color: '#555', fontSize: 11, fontWeight: '600', flex: 1 },
+    salePrice: { color: '#00ff88', fontSize: 16, fontWeight: '900' },
+    metaText: { color: '#333', fontSize: 11, fontWeight: '600', flex: 1 },
 
     locationStockRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 10 },
     locationItem: { flexDirection: 'row', alignItems: 'center' },
@@ -997,25 +982,24 @@ const styles = StyleSheet.create({
     emptyText: { fontSize: 18, color: '#444', fontWeight: '900', letterSpacing: 1 },
     emptySubtext: { fontSize: 12, color: '#222', marginTop: 5, fontWeight: '600' },
 
-    actionButtonsContainer: { position: 'absolute', right: 12, bottom: 12, zIndex: 5, flexDirection: 'row', gap: 8 },
-    iconBtn: { shadowColor: '#000', shadowOpacity: 0.5, elevation: 5 },
-    iconBtnBg: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+    actionButtonsContainer: { position: 'absolute', right: 12, bottom: 8, zIndex: 5, flexDirection: 'row', gap: 5 },
+    neonIconBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#080808', borderWidth: 1, borderColor: '#111', justifyContent: 'center', alignItems: 'center' },
 
     // Marketing Modal Styles
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },
-    marketingModalContent: { backgroundColor: '#111', borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#333', maxHeight: '80%' },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', padding: 20 },
+    marketingModalContent: { backgroundColor: '#050505', borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#111', maxHeight: '80%' },
     marketingHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
     marketingTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
-    marketingSubtitle: { color: '#888', fontSize: 13, fontWeight: '600', marginTop: 2 },
+    marketingSubtitle: { color: '#444', fontSize: 13, fontWeight: '600', marginTop: 2 },
     marketingBody: { marginVertical: 10, minHeight: 150 },
     loadingBox: { height: 150, justifyContent: 'center', alignItems: 'center' },
     loadingText: { color: '#d4af37', marginTop: 15, fontWeight: 'bold' },
-    copyContainer: { backgroundColor: '#0a0a0a', padding: 20, borderRadius: 15, borderWidth: 1, borderColor: '#222' },
-    copyText: { color: '#ccc', fontSize: 15, lineHeight: 22, fontWeight: '600' },
+    copyContainer: { backgroundColor: '#000', padding: 20, borderRadius: 15, borderWidth: 1, borderColor: '#111' },
+    copyText: { color: '#888', fontSize: 15, lineHeight: 22, fontWeight: '600' },
     marketingFooter: { flexDirection: 'row', gap: 10, marginTop: 20 },
-    copyBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#222', padding: 15, borderRadius: 12, gap: 8 },
+    copyBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111', padding: 15, borderRadius: 12, gap: 8 },
     shareBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d4af37', padding: 15, borderRadius: 12, gap: 10 },
-    actionBtnText: { color: '#fff', fontWeight: '900', fontSize: 13, letterSpacing: 0.5 },
+    actionBtnText: { color: '#000', fontWeight: '900', fontSize: 13, letterSpacing: 0.5 },
 
     // Tools Menu Styles
     toolsMenuContent: {

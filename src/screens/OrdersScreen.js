@@ -13,11 +13,11 @@ export default function OrdersScreen({ navigation }) {
     const fetchOrders = async () => {
         setLoading(true);
         try {
-            // Fetch everything that is NOT completed (e.g., pending, shipped)
+            // Fetch ONLY active items (pending or budget) and exclude finished/cancelled ones
             const { data, error } = await supabase
                 .from('sales')
                 .select('*, clients(name)')
-                .neq('status', 'completed')
+                .not('status', 'in', '("completed","cancelled","exitosa","vended")')
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
@@ -82,8 +82,17 @@ export default function OrdersScreen({ navigation }) {
                     <Text style={styles.orderId}>Pedido #{item.id.slice(0, 4)}</Text>
                     <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
                 </View>
-                <View style={[styles.statusBadge, { backgroundColor: item.tracking_number ? '#2980b9' : '#e67e22' }]}>
-                    <Text style={styles.statusText}>{item.tracking_number ? 'ENVIADO' : 'PENDIENTE'}</Text>
+                <View style={[
+                    styles.statusBadge,
+                    {
+                        backgroundColor: item.status === 'budget' ? '#e67e22' :
+                            (item.tracking_number ? '#2980b9' : '#d4af37')
+                    }
+                ]}>
+                    <Text style={styles.statusText}>
+                        {item.status === 'budget' ? 'PRESUPUESTO' :
+                            (item.tracking_number ? 'ENVIADO' : 'PENDIENTE')}
+                    </Text>
                 </View>
             </View>
 

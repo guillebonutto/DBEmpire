@@ -17,8 +17,8 @@ import { Linking } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
-const MinimalModule = React.memo(({ title, icon, color, isNew, onPress }) => (
-    <TouchableOpacity style={styles.miniCard} onPress={onPress} activeOpacity={0.7}>
+const MinimalModule = React.memo(({ title, icon, color, isNew, onPress, fullWidth }) => (
+    <TouchableOpacity style={[styles.miniCard, fullWidth && styles.fullWidthCard]} onPress={onPress} activeOpacity={0.7}>
         <View style={[styles.miniIcon, { backgroundColor: color + '15', borderColor: color + '40' }]}>
             <MaterialCommunityIcons name={icon} size={24} color={color} />
         </View>
@@ -405,12 +405,14 @@ export default function HomeScreen({ navigation }) {
                     <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
                         <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
                     </TouchableOpacity>
+                    {/* NEON HEADER LINE */}
+                    <View style={styles.neonHeaderLine} />
                 </View>
 
                 <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
                     {/* Minimal Insight */}
                     <View style={styles.insightBox}>
-                        <LinearGradient colors={['rgba(212,175,55,0.1)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.insightGrad} />
+                        <LinearGradient colors={['rgba(212, 175, 55, 0.1)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.insightGrad} />
                         <MaterialCommunityIcons name="lightning-bolt" size={18} color="#d4af37" />
                         <Text style={styles.insightText}>{getAICounsel()}</Text>
                     </View>
@@ -485,16 +487,13 @@ export default function HomeScreen({ navigation }) {
                     {/* Minimalist Grid of Actions */}
                     <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
                     <View style={styles.actionGrid}>
-                        <MinimalModule title="Plan IA" icon="robot-happy" color="#3498db" isNew onPress={() => setAiModalVisible(true)} />
-                        <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
-                        <MinimalModule title="Venta Manual" icon="text-search" color="#d4af37" onPress={() => navigation.navigate('NewSale', { autoSearch: true })} />
-                        <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
-                        <MinimalModule title="Inventario" icon="package-variant-closed" color="#e67e22" onPress={() => navigation.navigate('Inventario')} />
-                        <MinimalModule title="Historial" icon="history" color="#bdc3c7" onPress={() => navigation.navigate('Sales')} />
-                        <MinimalModule title="Reportes" icon="chart-bar" color="#f1c40f" onPress={() => navigation.navigate('Reports')} />
-                        <MinimalModule title="Pedidos" icon="clipboard-list-outline" color="#3498db" onPress={() => navigation.navigate('Orders')} />
-                        <MinimalModule title="Compras" icon="cube-send" color="#f1c40f" onPress={() => navigation.navigate('SupplierOrders')} />
-                        <MinimalModule title="Proveedores" icon="factory" color="#d4af37" onPress={() => navigation.navigate('Suppliers')} />
+                        <MinimalModule title="Coach personalizado" icon="robot-happy" color="#d4af37" isNew fullWidth onPress={() => setAiModalVisible(true)} />
+                        
+                        <View style={styles.actionSubGrid}>
+                            <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
+                            <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
+                            <MinimalModule title="Pedidos" icon="clipboard-list-outline" color="#3498db" onPress={() => navigation.navigate('Orders')} />
+                        </View>
                     </View>
 
                     {/* Primary Action: Minimalist Giant Scanner */}
@@ -509,7 +508,7 @@ export default function HomeScreen({ navigation }) {
                             style={styles.manualEntryBtn}
                             onPress={() => navigation.navigate('NewSale', { autoSearch: true })}
                         >
-                            <MaterialCommunityIcons name="cursor-default-click-outline" size={16} color="#444" />
+                            <MaterialCommunityIcons name="cursor-default-click-outline" size={18} color="#555" />
                             <Text style={styles.manualEntryText}>O CARGAR MANUALMENTE</Text>
                         </TouchableOpacity>
                     </View>
@@ -523,9 +522,10 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
     background: { ...StyleSheet.absoluteFillObject },
     safe: { flex: 1 },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, paddingVertical: 20 },
-    brandName: { color: '#d4af37', fontSize: 22, fontWeight: '900', letterSpacing: 2 },
-    headerRole: { color: '#666', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginTop: 2 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 25, paddingVertical: 20, position: 'relative' },
+    neonHeaderLine: { position: 'absolute', bottom: 0, left: 25, right: 25, height: 1, backgroundColor: '#d4af37', shadowColor: '#d4af37', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 10, elevation: 5 },
+    brandName: { color: '#d4af37', fontSize: 24, fontWeight: '900', letterSpacing: 3, textShadowColor: '#ffcc00', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 20 },
+    headerRole: { color: '#444', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginTop: 2 },
 
     scroll: { paddingBottom: 0 },
 
@@ -546,39 +546,62 @@ const styles = StyleSheet.create({
     missionDesc: { color: '#eee', fontSize: 13, fontWeight: '700' },
 
     commissionContainer: { paddingHorizontal: 25, marginTop: 20 },
-    commissionBox: { padding: 25, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(212,175,55,0.3)', alignItems: 'center' },
+    commissionBox: { padding: 25, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.4)', alignItems: 'center', backgroundColor: '#020202' },
     commissionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 15 },
     commissionLab: { color: '#d4af37', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
-    commissionVal: { color: '#fff', fontSize: 36, fontWeight: '900', textShadowColor: 'rgba(212,175,55,0.5)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
-    monthBadgeSmall: { backgroundColor: 'rgba(212,175,55,0.1)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, marginTop: 10, borderWidth: 1, borderColor: 'rgba(212,175,55,0.3)' },
+    commissionVal: { color: '#fff', fontSize: 36, fontWeight: '900', textShadowColor: '#ffcc00', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 15 },
+    monthBadgeSmall: { backgroundColor: 'rgba(212, 175, 55, 0.15)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, marginTop: 10, borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.5)' },
     monthBadgeText: { color: '#d4af37', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
     commissionSub: { color: '#666', fontSize: 12, fontWeight: '600', marginTop: 15, textAlign: 'center' },
 
     sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 15, paddingHorizontal: 25, marginTop: 20 },
 
-    actionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, gap: 10, justifyContent: 'flex-start' },
-    miniCard: { width: (width - 70) / 3, backgroundColor: '#0a0a0a', padding: 15, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#1a1a1a' },
-    miniIcon: { width: 45, height: 45, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, marginBottom: 10 },
-    miniTitle: { color: '#888', fontSize: 10, fontWeight: '800' },
-    miniBadge: { position: 'absolute', top: 10, right: 10, width: 6, height: 6, borderRadius: 3, backgroundColor: '#d4af37' },
+    actionGrid: { paddingHorizontal: 25, gap: 12 },
+    actionSubGrid: { flexDirection: 'row', gap: 10, marginTop: 5 },
+    fullWidthCard: { width: '100%', paddingVertical: 20 },
+    miniCard: { flex: 1, backgroundColor: '#080808', padding: 15, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#151515', shadowColor: '#d4af37', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.1, shadowRadius: 5 },
+    miniIcon: { width: 45, height: 45, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 0, marginBottom: 10 },
+    miniTitle: { color: '#888', fontSize: 10, fontWeight: '800', textAlign: 'center' },
+    miniBadge: { position: 'absolute', top: 15, right: 15, width: 8, height: 8, borderRadius: 4, backgroundColor: '#d4af37', shadowColor: '#d4af37', shadowRadius: 5, shadowOpacity: 1 },
 
     scannerCenter: { alignItems: 'center', marginTop: 40 },
-    scannerTap: { width: 180, height: 180, borderRadius: 90, elevation: 20, shadowColor: '#d4af37', shadowOpacity: 0.3, shadowRadius: 20 },
-    scannerCircle: { flex: 1, borderRadius: 90, justifyContent: 'center', alignItems: 'center', padding: 20 },
+    scannerTap: { 
+        width: 180, 
+        height: 180, 
+        borderRadius: 90, 
+        backgroundColor: '#000', // Essential for shadows to render properly on some devices
+        shadowColor: '#d4af37', 
+        shadowOpacity: 0.7, 
+        shadowRadius: 30,
+        // Remove high elevation which causes square artifacts on many Android versions
+        elevation: 10, 
+        justifyContent: 'center',
+        alignItems: 'center'
+    },
+    scannerCircle: { 
+        width: 176, 
+        height: 176, 
+        borderRadius: 88, 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        padding: 20, 
+        borderWidth: 1, 
+        borderColor: '#d4af3750' 
+    },
     scannerLabel: { color: '#000', fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 10, letterSpacing: 1 },
-    manualEntryBtn: { marginTop: 20, flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10 },
-    manualEntryText: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+    manualEntryBtn: { marginTop: 25, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 15 },
+    manualEntryText: { color: '#555', fontSize: 11, fontWeight: '900', letterSpacing: 1.2 },
 
     scannerFull: { flex: 1, backgroundColor: '#000' },
     closeBtn: { position: 'absolute', top: 50, right: 30 },
 
     // Modal Styles
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: '#111', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '80%', borderTopWidth: 1, borderTopColor: '#333' },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'flex-end' },
+    modalContent: { backgroundColor: '#050505', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '80%', borderTopWidth: 1, borderTopColor: '#111' },
     modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 25 },
     modalTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
     modalBody: { marginBottom: 20 },
-    aiAdviceBox: { backgroundColor: '#1a1a1a', padding: 20, borderRadius: 15, marginBottom: 25, borderWidth: 1, borderColor: '#333' },
+    aiAdviceBox: { backgroundColor: '#000', padding: 20, borderRadius: 15, marginBottom: 25, borderWidth: 1, borderColor: '#111' },
     aiAdviceText: { color: '#fff', fontSize: 16, lineHeight: 24, fontWeight: '600' },
 
     restockSection: { marginBottom: 20 },
@@ -586,7 +609,7 @@ const styles = StyleSheet.create({
     restockItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#222' },
     restockInfo: { flex: 1 },
     restockName: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-    restockStock: { color: '#e74c3c', fontSize: 12, marginTop: 2 },
+    restockStock: { color: '#ff4444', fontSize: 12, marginTop: 2 },
     orderBtn: { backgroundColor: '#d4af37', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
     orderBtnText: { color: '#000', fontSize: 12, fontWeight: '900' },
 
