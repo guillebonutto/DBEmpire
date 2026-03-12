@@ -6,6 +6,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LineChart, PieChart } from 'react-native-chart-kit';
 import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import CustomProgressChart from '../components/CustomProgressChart';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -27,7 +28,6 @@ export default function AdminScreen({ navigation }) {
     const [dateFilter, setDateFilter] = useState('month'); // 'week', 'month', 'year'
     const [currentDate, setCurrentDate] = useState(new Date()); // For specific month navigation
     const [viewAllMonths, setViewAllMonths] = useState(false); // Toggle for General View
-    const [tooltip, setTooltip] = useState({ visible: false, value: 0, x: 0, y: 0 });
     const [deviceData, setDeviceData] = useState([]);
     const [profitSplit, setProfitSplit] = useState({ imperio: 70, vendedores: 30 });
     const [totalDebt, setTotalDebt] = useState(0);
@@ -427,40 +427,6 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
-    const progressChart = useMemo(() => {
-        if (!progressData?.datasets || progressData.datasets.length === 0) return null;
-        const statusColor = stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c';
-
-        // Check if data is just single 0 to avoid render error or ugly chart
-        const isDataEmpty = progressData.datasets[0].data.length === 1 && progressData.datasets[0].data[0] === 0;
-
-        return (
-            <LineChart
-                data={progressData}
-                width={screenWidth - 60}
-                height={220}
-                yAxisLabel="$"
-                chartConfig={{
-                    backgroundColor: '#1e1e1e',
-                    backgroundGradientFrom: '#1e1e1e',
-                    backgroundGradientTo: '#1e1e1e',
-                    decimalPlaces: 0,
-                    color: (opacity = 1) => statusColor, // Line color
-                    labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-                    style: { borderRadius: 16 },
-                    propsForDots: { r: '6', strokeWidth: '2', stroke: statusColor },
-                    fillShadowGradient: statusColor, // This is the "franja" (fill)
-                    fillShadowGradientOpacity: 0.2
-                }}
-                bezier
-                style={styles.chart}
-                onDataPointClick={({ value, x, y }) => {
-                    setTooltip({ visible: true, value, x, y });
-                }}
-            />
-        );
-    }, [progressData, stats.netProfit]);
-
     const changeMonth = (increment) => {
         const newDate = new Date(currentDate);
         newDate.setMonth(newDate.getMonth() + increment);
@@ -701,20 +667,30 @@ export default function AdminScreen({ navigation }) {
                                 labels: salesData.labels,
                                 datasets: [{ data: salesData.data }]
                             }}
-                            width={screenWidth - 60}
-                            height={220}
+                            width={screenWidth - 80}
+                            height={250}
                             chartConfig={{
                                 backgroundColor: '#1e1e1e',
                                 backgroundGradientFrom: '#1e1e1e',
                                 backgroundGradientTo: '#1e1e1e',
+                                backgroundGradientFromOpacity: 0,
+                                backgroundGradientToOpacity: 0,
                                 decimalPlaces: 0,
                                 color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
-                                labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+                                labelColor: (opacity = 1) => `rgba(150, 150, 150, ${opacity})`,
                                 style: { borderRadius: 16 },
                                 propsForDots: {
-                                    r: '6',
+                                    r: '4',
                                     strokeWidth: '2',
                                     stroke: '#d4af37'
+                                },
+                                fillShadowGradient: '#d4af37',
+                                fillShadowGradientOpacity: 0.4,
+                                useShadowColorFromDataset: false,
+                                paddingRight: 35, // Added some right padding for labels
+                                propsForBackgroundLines: {
+                                    strokeDasharray: '',
+                                    stroke: '#222'
                                 }
                             }}
                             bezier
@@ -729,26 +705,7 @@ export default function AdminScreen({ navigation }) {
                 <View style={styles.chartCard}>
                     <Text style={styles.sectionTitle}>RECUPERACIÓN DE INVERSIÓN (ROI)</Text>
                     {progressData.datasets?.length > 0 ? (
-                        <View>
-                            {progressChart}
-                            {tooltip.visible && (
-                                <View style={{
-                                    position: 'absolute',
-                                    top: tooltip.y - 20,
-                                    left: (tooltip.index === (progressData.labels.length - 1) || tooltip.x > (screenWidth - 100)) ? tooltip.x - 50 : tooltip.x - 30,
-                                    backgroundColor: '#333',
-                                    padding: 8,
-                                    borderRadius: 8,
-                                    zIndex: 100,
-                                    borderWidth: 1,
-                                    borderColor: Number(tooltip.value) >= 0 ? '#2ecc71' : '#e74c3c'
-                                }}>
-                                    <Text style={{ color: Number(tooltip.value) >= 0 ? '#2ecc71' : '#e74c3c', fontWeight: 'bold' }}>
-                                        ${Number(tooltip.value).toFixed(2)}
-                                    </Text>
-                                </View>
-                            )}
-                        </View>
+                        <CustomProgressChart progressData={progressData} />
                     ) : (
                         <Text style={styles.noDataText}>No hay datos suficientes</Text>
                     )}
@@ -760,15 +717,16 @@ export default function AdminScreen({ navigation }) {
                     {productData.length > 0 ? (
                         <PieChart
                             data={productData}
-                            width={screenWidth - 60}
+                            width={screenWidth - 100}
                             height={220}
                             chartConfig={{
                                 color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
                             }}
                             accessor="quantity"
                             backgroundColor="transparent"
-                            paddingLeft="15"
+                            paddingLeft="0"
                             absolute
+                            style={{ alignSelf: 'center' }}
                         />
                     ) : (
                         <Text style={styles.noDataText}>No hay datos de productos disponibles</Text>
