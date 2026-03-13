@@ -310,19 +310,18 @@ export default function HomeScreen({ navigation }) {
             const trend = diffPct > 0 ? `+${diffPct}% arriba` : `${diffPct}% debajo`;
             // 2. Build JSON Prompt
             let prompt = `
-            Eres el "Empire AI Coach", un asesor táctico de élite integrado en "Digital Boost Empire" (App de punto de venta).
-            CONTEXTO DEL NEGOCIO: Es una tiendita/emprendimiento dedicado a vender GADGETS PARA EL USO COTIDIANO, artículos prácticos, curiosos y tecnología útil para el día a día (novedades, accesorios hogar/oficina, etc.).
-            Tu objetivo es generar estrategias de alta rotación, armar combos estratégicos, detectar "capital dormido" y SUGERIR NUEVOS PRODUCTOS.
+            Eres el "Empire AI Coach", un asesor financiero y táctico en "Digital Boost Empire".
+            CONTEXTO: Tiendita de GADGETS COTIDIANOS (novedades, accesorios).
             
-            Analiza los datos y devuelve una ESTRATEGIA INMEDIATA formateada SOLO COMO UN OBJETO JSON válido (sin código markdown \`\`\`json).
+            Analiza los datos y devuelve una ESTRATEGIA INMEDIATA formateada SOLO COMO UN OBJETO JSON válido (sin markdown).
 
-            DATOS ACTUALES DEL NEGOCIO:
-            - Nivel del Imperio: ${empLevel}
-            - Rol: ${userRole === 'admin' ? 'Admin' : 'Vendedor'}
+            DATOS ACTUALES DEL NEGOCIO (MONEDA: ARS PESOS ARGENTINOS):
+            - Nivel: ${empLevel}
             - Ventas Hoy: $${stats.todaySales} (Tendencia: ${trend} del promedio semanal de $${dailyAvg.toFixed(2)}/día)
-            - Proyección Semanal Actual: $${stats.weekSales}
+            - Ganancia Neta Hoy: $${stats.todayNetProfit?.toFixed(2)} (Si es negativo, gastó en stock/gastos más de lo que vendió)
+            - Proyección Semanal: $${stats.weekSales}
             - Inventario Crítico o Dormido: ${stats.lowStockCount} productos
-            - Capital Retenido (Valor aprox): $${stats.lockedCapital}
+            - Capital Retenido (Valor a Precio de Venta final en $ARS): $${stats.lockedCapital} (Nota: ESTO ES PRECIO FINAL. Si recomiendas descuentos agresivos, anulas su margen de ganancia. Sugiere descuentos ligeros 10-15% o Combos con productos estrella para no perder plata, solo si es estrictamente necesario para fluidez de stock).
             
             TOP PRODUCTOS DE LA SEMANA:
             ${topProductsText}
@@ -330,34 +329,44 @@ export default function HomeScreen({ navigation }) {
 
             if (customQuery) {
                 prompt += `
-                ATENCIÓN: EL USUARIO HA LANZADO EL SIMULADOR DE DECISIONES CON ESTA PREGUNTA: "${customQuery}"
-                Debes responder ESPECÍFICAMENTE simulando matemáticamente y logísticamente qué pasaría si hace eso.
-                Calcula si mantiene márgenes, cuánto capital compromete, o cuántas unidades extra tiene que vender.
+                SIMULADOR DE DECISIONES LANZADO: "${customQuery}"
+                Simula matemáticamente qué pasaría. Muestra ROI estimado.
                 `;
             } else {
                 prompt += `
-                INSTRUCCIONES PARA EL DIAGNÓSTICO LIBRE:
-                Detecta oportunidades ocultas. Si hay productos estrella sin stock, sugiere reponer.
-                IMPORTANTE: Analiza su historial y el nicho para sugerir QUÉ NUEVOS PRODUCTOS DEBERÍA COMPRAR mañana para expandir su catálogo (productos de tendencia o complementarios que aún no tiene pero que sus clientes comprarían).
-                Si hay capital bloqueado, sugiere crear "Combos Relámpago". 
+                ⚠️ IMPORTANTE - MODELO DE NEGOCIO (IMPORTACIÓN):
+                1. El usuario COMPRA en el exterior (Alibaba, AliExpress, etc.) en DÓLARES (USD) pero vende en Argentina en PESOS (ARS).
+                2. Cotización promedio para tus cálculos: $1 USD = $1200 ARS aprox (o la actual si la tienes).
+                3. Sé COHERENTE: Si sugieres una inversión en ARS, asegúrate de que al pasarla a USD alcance para comprar las unidades sugeridas a precio mayorista internacional.
+                4. Investiga precios en sitios globales (USD) y haz la conversión a ARS para dar la sugerencia de inversión final en PESOS.
+                5. Los consejos de "Invertir capital recuperado" deben contemplar este arbitraje: "Recuperas X pesos, que son Y dólares, con eso compras Z unidades afuera".
                 `;
             }
 
             prompt += `
-            Debes devolver EXACTAMENTE este objeto JSON con las claves exactas (reemplaza los valores con tu análisis de alto impacto enfocado en tecnología/accesorios):
+            Debes devolver EXACTAMENTE este JSON:
             {
               "empireLevel": "${empLevel}",
               "urgency": "${customQuery ? "Simulación" : "Estable"}" | "Atención" | "Crítico",
-              "urgencyReason": "${customQuery ? "Resultado simulado en proceso..." : "Razón corta de la urgencia (ej: 'Tienes 18k retenidos en capital muerto. Usa combos para accesorios.')"}",
-              "impact": "Explica el impacto en dinero (ej: 'Si reduces un 10%, necesitas vender 3 fundas extra para mantener ganancia.')",
-              "trend": "Comparación temporal o análisis de mercado tech (ej: 'Tus cables USB-C bajaron rotación. Combínalos con cargadores.')",
-              "prediction": "Predicción financiera brutal (ej: 'Si inviertes $5,000 extra en los top 2 gadgets hoy, la proyección de la semana se dispara a $42,000 en ventas.')",
-              "plan": [
-                "1️⃣ Acción específica (Ej: 'Crea Combo Cargador+Cable 15% OFF')",
-                "2️⃣ Segunda acción concreta"
+              "urgencyReason": "Razón corta de la urgencia",
+              "trendRadar": "Radar: Qué producto viral/novedoso está en tendencia mundial ahora mismo en gadgets y por qué.",
+              "trendScore": "87/100",
+              "opportunityIndex": [
+                { "product": "Nombre Top seller", "demand": "Alta", "opportunity": "🟢 Promocionar" },
+                { "product": "Producto estancado", "demand": "Baja", "opportunity": "🔴 Liquidar" },
+                { "product": "Tendencia mundial (del radar)", "demand": "Novedad", "opportunity": "🟡 Invertir capital" }
               ],
+              "strategyA": { "name": "ESTRATEGIA A — LIQUIDAR", "plan": "Vende [X] con [Y]% OFF para liberar $[Z] de capital en [W] días." },
+              "strategyB": { 
+                  "name": "ESTRATEGIA B — PIVOTAR", 
+                  "plan": "Invierte tu dinero en [Producto Trend Radar].",
+                  "suggestedInvestment": "$32.000",
+                  "suggestedStock": "18 unidades",
+                  "estimatedMargin": "42%"
+              },
+              "prediction": "Predicción brutal (Ej: Si aplicas el Pivot, la proyección sube a $42,000).",
               "actionId": "create_promo" | "restock" | "close_budgets",
-              "actionText": "${customQuery ? "APLICAR ESTRATEGIA" : "CREAR COMBO O REPONER"}"
+              "actionText": "${customQuery ? "APLICAR ESTRATEGIA" : "EJECUTAR PLAN"}"
             }
             IMPORTANTE: Solo devuelve el JSON puro, nada de texto antes o después.
             `;
@@ -531,31 +540,91 @@ export default function HomeScreen({ navigation }) {
                                     </View>
                                 </View>
 
-                                {/* Impact & Trend */}
-                                <View style={styles.coachCard}>
-                                    <View style={styles.coachCardRow}>
-                                        <MaterialCommunityIcons name="chart-bell-curve-cumulative" size={20} color="#d4af37" />
-                                        <Text style={styles.coachCardText}>{aiAdvice.trend}</Text>
+                                {/* Trend Radar */}
+                                {aiAdvice.trendRadar && (
+                                    <View style={styles.trendRadarBox}>
+                                        <MaterialCommunityIcons name="radar" size={24} color="#00ff88" />
+                                        <View style={{ flex: 1 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <Text style={{ color: '#00ff88', fontSize: 10, fontWeight: '900', letterSpacing: 1 }}>RADAR GLOBAL</Text>
+                                                {aiAdvice.trendScore && (
+                                                    <View style={{ backgroundColor: '#00ff8820', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                                                        <Text style={{ color: '#00ff88', fontSize: 10, fontWeight: '900' }}>🔥 {aiAdvice.trendScore}</Text>
+                                                    </View>
+                                                )}
+                                            </View>
+                                            <Text style={styles.trendRadarText}>{aiAdvice.trendRadar}</Text>
+                                        </View>
                                     </View>
-                                    <View style={[styles.coachCardRow, { marginTop: 10, borderTopWidth: 1, borderTopColor: '#222', paddingTop: 10 }]}>
-                                        <MaterialCommunityIcons name="currency-usd" size={20} color="#2ecc71" />
-                                        <Text style={styles.coachCardText}>{aiAdvice.impact}</Text>
-                                    </View>
-                                </View>
+                                )}
 
-                                {/* Priority Plan */}
-                                <View style={styles.coachCard}>
-                                    <Text style={styles.planTitle}>PLAN TÁCTICO INMEDIATO</Text>
-                                    {aiAdvice.plan && aiAdvice.plan.map((step, idx) => (
-                                        <Text key={idx} style={styles.planStep}>{step}</Text>
-                                    ))}
-                                </View>
+                                {/* Opportunity Index Table */}
+                                {aiAdvice.opportunityIndex && aiAdvice.opportunityIndex.length > 0 && (
+                                    <View style={styles.coachCard}>
+                                        <Text style={styles.planTitle}>ÍNDICE DE OPORTUNIDAD</Text>
+                                        <View style={styles.tableHeader}>
+                                            <Text style={[styles.tableColTitle, { flex: 2 }]}>Producto</Text>
+                                            <Text style={styles.tableColTitle}>Demanda</Text>
+                                            <Text style={styles.tableColTitle}>Nivel</Text>
+                                        </View>
+                                        {aiAdvice.opportunityIndex.map((row, idx) => (
+                                            <View key={idx} style={styles.tableRow}>
+                                                <Text style={[styles.tableCell, { flex: 2, color: '#fff' }]}>{row.product}</Text>
+                                                <Text style={styles.tableCell}>{row.demand}</Text>
+                                                <Text style={styles.tableCell}>{row.opportunity}</Text>
+                                            </View>
+                                        ))}
+                                    </View>
+                                )}
+
+                                {/* Strategies A & B */}
+                                {(aiAdvice.strategyA || aiAdvice.strategyB) && (
+                                    <View style={{ gap: 10, marginBottom: 20 }}>
+                                        {aiAdvice.strategyA && (
+                                            <View style={[styles.coachCard, { borderColor: '#e74c3c60', marginBottom: 0 }]}>
+                                                <Text style={[styles.planTitle, { color: '#e74c3c' }]}>{aiAdvice.strategyA.name}</Text>
+                                                <Text style={styles.planStep}>{aiAdvice.strategyA.plan}</Text>
+                                            </View>
+                                        )}
+                                        <View style={{alignItems: 'center', marginVertical: -8, zIndex: 10}}>
+                                            <View style={{backgroundColor: '#0a0a0a', paddingHorizontal: 10, paddingVertical: 2, borderRadius: 10, borderWidth: 1, borderColor: '#333'}}>
+                                                <Text style={{color: '#666', fontSize: 10, fontWeight: '900'}}>VS</Text>
+                                            </View>
+                                        </View>
+                                        {aiAdvice.strategyB && (
+                                            <View style={[styles.coachCard, { borderColor: '#3498db60', marginTop: 0, marginBottom: 0 }]}>
+                                                <Text style={[styles.planTitle, { color: '#3498db' }]}>{aiAdvice.strategyB.name}</Text>
+                                                <Text style={styles.planStep}>{aiAdvice.strategyB.plan}</Text>
+                                                
+                                                {/* Inversion Suggestion block */}
+                                                {aiAdvice.strategyB.suggestedInvestment && (
+                                                    <View style={{ marginTop: 15, padding: 12, backgroundColor: '#3498db15', borderRadius: 8, borderWidth: 1, borderColor: '#3498db30' }}>
+                                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+                                                            <Text style={{ color: '#888', fontSize: 10, fontWeight: '900' }}>INVERSIÓN SUGERIDA:</Text>
+                                                            <Text style={{ color: '#3498db', fontSize: 11, fontWeight: '900' }}>{aiAdvice.strategyB.suggestedInvestment}</Text>
+                                                        </View>
+                                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+                                                            <Text style={{ color: '#888', fontSize: 10, fontWeight: '900' }}>STOCK RECOMENDADO:</Text>
+                                                            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{aiAdvice.strategyB.suggestedStock}</Text>
+                                                        </View>
+                                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                                                            <Text style={{ color: '#888', fontSize: 10, fontWeight: '900' }}>MARGEN ESTIMADO:</Text>
+                                                            <Text style={{ color: '#2ecc71', fontSize: 11, fontWeight: '900' }}>{aiAdvice.strategyB.estimatedMargin}</Text>
+                                                        </View>
+                                                    </View>
+                                                )}
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
 
                                 {/* Prediction */}
-                                <View style={styles.predictionBox}>
-                                    <MaterialCommunityIcons name="crystal-ball" size={24} color="#9b59b6" />
-                                    <Text style={styles.predictionText}>{aiAdvice.prediction}</Text>
-                                </View>
+                                {aiAdvice.prediction && (
+                                    <View style={styles.predictionBox}>
+                                        <MaterialCommunityIcons name="crystal-ball" size={24} color="#9b59b6" />
+                                        <Text style={styles.predictionText}>{aiAdvice.prediction}</Text>
+                                    </View>
+                                )}
 
                                 {/* Action Action */}
                                 <TouchableOpacity 
@@ -847,6 +916,21 @@ const styles = StyleSheet.create({
     simulatorInput: { flex: 1, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#444', borderRadius: 8, paddingHorizontal: 12, color: '#fff', fontSize: 13, minHeight: 40 },
     simulatorBtn: { backgroundColor: '#9b59b6', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 15, borderRadius: 8 },
 
+    // New Coach Components
+    trendRadarBox: { flexDirection: 'row', backgroundColor: '#00ff8815', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#00ff8840', marginBottom: 15, gap: 10, alignItems: 'center' },
+    trendRadarText: { color: '#00ff88', fontSize: 13, fontWeight: '800', flex: 1, lineHeight: 20, letterSpacing: 0.5 },
+    tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#333', paddingBottom: 8, marginBottom: 8 },
+    tableColTitle: { flex: 1, color: '#666', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+    tableRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'center' },
+    tableCell: { flex: 1, color: '#bbb', fontSize: 11, fontWeight: '500' },
+    
     closeModalBtn: { backgroundColor: '#1a1a1a', padding: 15, borderRadius: 12, alignItems: 'center' },
-    closeModalBtnText: { color: '#aaa', fontSize: 12, fontWeight: '900', letterSpacing: 1 }
+    closeModalBtnText: { color: '#aaa', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+
+    trendRadarBox: { flexDirection: 'row', backgroundColor: '#00ff8815', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#00ff8840', marginBottom: 15, gap: 10, alignItems: 'center' },
+    trendRadarText: { color: '#00ff88', fontSize: 13, fontWeight: '800', flex: 1, lineHeight: 20, letterSpacing: 0.5 },
+    tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#333', paddingBottom: 8, marginBottom: 8 },
+    tableColTitle: { flex: 1, color: '#666', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+    tableRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'center' },
+    tableCell: { flex: 1, color: '#bbb', fontSize: 11, fontWeight: '500' }
 });
