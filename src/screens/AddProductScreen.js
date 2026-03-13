@@ -655,7 +655,8 @@ export default function AddProductScreen({ navigation, route }) {
             }
 
             // --- AUTO EXPENSE & ORDER GENERATION ---
-            if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle) {
+            // Only runs when receiving stock from Supplier Orders (Wizard Mode), never on manual edits.
+            if (stockDifference > 0 && costPrice > 0 && isWizardMode && !isBundle) {
                 try {
                     const oldVariants = Array.isArray(productToEdit?.variants) ? productToEdit.variants : [];
                     const newVariants = variants || [];
