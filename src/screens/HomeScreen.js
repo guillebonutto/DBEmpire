@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator, Modal, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -16,6 +16,17 @@ import { GeminiService } from '../services/geminiService';
 import { Linking } from 'react-native';
 
 const { width } = Dimensions.get('window');
+
+const renderMarkdownText = (text) => {
+    if (!text) return null;
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+            return <Text key={index} style={{ fontWeight: '900', color: '#d4af37' }}>{part.slice(2, -2)}</Text>;
+        }
+        return <Text key={index}>{part}</Text>;
+    });
+};
 
 const MinimalModule = React.memo(({ title, icon, color, isNew, onPress, fullWidth }) => (
     <TouchableOpacity style={[styles.miniCard, fullWidth && styles.fullWidthCard]} onPress={onPress} activeOpacity={0.7}>
@@ -44,6 +55,9 @@ export default function HomeScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
     const [generatingMission, setGeneratingMission] = useState(null);
     const [aiModalVisible, setAiModalVisible] = useState(false);
+    const [aiAdvice, setAiAdvice] = useState(null);
+    const [isAiLoading, setIsAiLoading] = useState(false);
+    const [simulatorQuery, setSimulatorQuery] = useState('');
 
     // Camera State
     const [permission, requestPermission] = useCameraPermissions();
@@ -99,11 +113,11 @@ export default function HomeScreen({ navigation }) {
             ] = await Promise.all([
                 supabase.from('sales').select('total_amount, profit_generated, commission_amount, status').gte('created_at', startOfDay),
                 (currentRole === 'seller' && deviceSig)
-                    ? supabase.from('sales').select('total_amount, commission_amount, status, device_sig').eq('device_sig', deviceSig)
-                    : supabase.from('sales').select('total_amount, commission_amount, status, device_sig'),
+                    ? supabase.from('sales').select('total_amount, commission_amount, status, device_sig, created_at').eq('device_sig', deviceSig)
+                    : supabase.from('sales').select('total_amount, commission_amount, status, device_sig, created_at'),
                 supabase.from('expenses').select('amount').gte('created_at', startOfDay),
                 supabase.from('sales').select('total_amount').eq('status', 'budget'),
-                supabase.from('products').select('id, name, current_stock').eq('active', true).lte('current_stock', 5),
+                supabase.from('products').select('id, name, current_stock, sale_price').eq('active', true).lte('current_stock', 5),
                 supabase.from('settings').select('value').eq('key', 'commission_rate').single(),
                 supabase.from('supplier_orders').select('id, total_cost').eq('status', 'received').gte('created_at', startOfLastWeek)
             ]);
@@ -127,7 +141,10 @@ export default function HomeScreen({ navigation }) {
             let totalSales = 0;
             let totalCommissions = 0;
             let monthCommissions = 0;
+            let monthSales = 0;
+            let weekSales = 0;
             const startOfMonthTimestamp = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+            const startOfWeekTimestamp = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).getTime();
 
             if (monthlySalesData) {
                 monthlySalesData.forEach(s => {
@@ -142,6 +159,10 @@ export default function HomeScreen({ navigation }) {
                         const saleDate = new Date(s.created_at).getTime();
                         if (saleDate >= startOfMonthTimestamp) {
                             monthCommissions += comm;
+                            monthSales += amount;
+                        }
+                        if (saleDate >= startOfWeekTimestamp) {
+                            weekSales += amount;
                         }
                     }
                 });
@@ -149,9 +170,15 @@ export default function HomeScreen({ navigation }) {
 
             const todayExpenses = expensesData ? expensesData.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
             const rate = settingsData ? parseFloat(settingsData.value) * 100 : 0;
+            
+            // Calculate locked capital in low stock items
+            const lockedCapital = lowStockData ? lowStockData.reduce((sum, p) => sum + ((p.current_stock || 0) * (parseFloat(p.sale_price) || 0)), 0) : 0;
 
             const newStats = {
                 todaySales,
+                weekSales,
+                monthSales,
+                lockedCapital,
                 todayNetProfit: todayGrossProfit - todayCommissionsTotal - todayExpenses,
                 totalSales,
                 totalCommissions,
@@ -221,26 +248,143 @@ export default function HomeScreen({ navigation }) {
     };
 
     const getAICounsel = useCallback(() => {
-        if (loading) return "Analizando panorama imperial...";
+        if (loading) return "Sincronizando con data central...";
         if (userRole === 'admin') {
-            const lowStock = stats.lowStockCount;
-            const restocks = stats.recentRestockCount || 0;
+            if (stats.lowStockCount > 3) return "⚠️ Atención: Tienes varios productos en reserva crítica.";
+            if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales.toFixed(2)} en presupuestos por cerrar.`;
+            return "Las métricas están estables. Entra al Coach para un análisis profundo.";
+        } else {
+            if (missions.length > 0) return `⚔️ Tienes ${missions.length} misiones pendientes de venta.`;
+            return "Buen trabajo. Entra al Coach para estrategias de venta.";
+        }
+    }, [loading, userRole, stats.lowStockCount, stats.budgetSales, missions.length]);
 
-            if (lowStock > 3) {
-                if (restocks > 0) {
-                    return `📈 Entraron ${restocks} pedidos esta semana, pero aún quedan ${lowStock} productos en reserva crítica.`;
-                }
-                return "⚠️ Hay productos críticos sin reposición. El Imperio pierde ventas.";
+    // ── DYNAMIC AI BUSINESS COACH & DECISION SIMULATOR ──
+    const generateAiInsights = async (customQuery = null) => {
+        setIsAiLoading(true);
+        if (!customQuery) setAiAdvice(null);
+        try {
+            // 1. Fetch Top Products sold this week to give AI context
+            const now = new Date();
+            const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+            
+            const { data: recentItems } = await supabase
+                .from('sale_items')
+                .select('quantity, products(name, current_stock, sale_price)')
+                .gte('created_at', startOfWeek);
+
+            const productStats = {};
+            let topProductsText = "Aún no hay ventas esta semana.";
+
+            if (recentItems && recentItems.length > 0) {
+                recentItems.forEach(item => {
+                    if (!item.products) return;
+                    const name = item.products.name;
+                    if (!productStats[name]) {
+                        productStats[name] = { 
+                            qty: 0, 
+                            stock: item.products.current_stock || 0,
+                            price: item.products.sale_price || 0
+                        };
+                    }
+                    productStats[name].qty += item.quantity;
+                });
+                
+                topProductsText = Object.entries(productStats)
+                    .sort((a, b) => b[1].qty - a[1].qty)
+                    .slice(0, 5)
+                    .map(([name, data]) => `- ${name}: ${data.qty} vendidos (Stock restante: ${data.stock}, Precio $${data.price})`)
+                    .join('\n');
             }
 
-            if (restocks > 0) return `✅ La reposición de esta semana fortaleció el stock. El Imperio prospera.`;
-            if (stats.budgetSales > 0) return `💡 Tienes $${stats.budgetSales.toFixed(2)} en presupuestos por cerrar.`;
-            return "Las finanzas están estables. Es momento de expandir.";
-        } else {
-            if (missions.length > 0) return `⚔️ Tienes ${missions.length} misiones pendientes. Conquista el mercado hoy.`;
-            return "Buen trabajo, Aliado. Sigue alimentando el catálogo.";
+            const getEmpireLevel = (sales) => {
+                if (sales < 1000) return 'Nivel 1: Emprendedor 🌱';
+                if (sales < 5000) return 'Nivel 2: Comerciante 🏪';
+                if (sales < 20000) return 'Nivel 3: Mercader 🚢';
+                return 'Nivel 4: Imperio 👑';
+            };
+
+            const empLevel = getEmpireLevel(stats.monthSales);
+            const dailyAvg = stats.weekSales / 7;
+            const diffPct = dailyAvg > 0 ? (((stats.todaySales - dailyAvg) / dailyAvg) * 100).toFixed(0) : 0;
+            const trend = diffPct > 0 ? `+${diffPct}% arriba` : `${diffPct}% debajo`;
+            // 2. Build JSON Prompt
+            let prompt = `
+            Eres el "Empire AI Coach", un asesor táctico de élite integrado en "Digital Boost Empire" (App de punto de venta).
+            CONTEXTO DEL NEGOCIO: Es una tiendita/emprendimiento dedicado a vender GADGETS PARA EL USO COTIDIANO, artículos prácticos, curiosos y tecnología útil para el día a día (novedades, accesorios hogar/oficina, etc.).
+            Tu objetivo es generar estrategias de alta rotación, armar combos estratégicos, detectar "capital dormido" y SUGERIR NUEVOS PRODUCTOS.
+            
+            Analiza los datos y devuelve una ESTRATEGIA INMEDIATA formateada SOLO COMO UN OBJETO JSON válido (sin código markdown \`\`\`json).
+
+            DATOS ACTUALES DEL NEGOCIO:
+            - Nivel del Imperio: ${empLevel}
+            - Rol: ${userRole === 'admin' ? 'Admin' : 'Vendedor'}
+            - Ventas Hoy: $${stats.todaySales} (Tendencia: ${trend} del promedio semanal de $${dailyAvg.toFixed(2)}/día)
+            - Proyección Semanal Actual: $${stats.weekSales}
+            - Inventario Crítico o Dormido: ${stats.lowStockCount} productos
+            - Capital Retenido (Valor aprox): $${stats.lockedCapital}
+            
+            TOP PRODUCTOS DE LA SEMANA:
+            ${topProductsText}
+            `;
+
+            if (customQuery) {
+                prompt += `
+                ATENCIÓN: EL USUARIO HA LANZADO EL SIMULADOR DE DECISIONES CON ESTA PREGUNTA: "${customQuery}"
+                Debes responder ESPECÍFICAMENTE simulando matemáticamente y logísticamente qué pasaría si hace eso.
+                Calcula si mantiene márgenes, cuánto capital compromete, o cuántas unidades extra tiene que vender.
+                `;
+            } else {
+                prompt += `
+                INSTRUCCIONES PARA EL DIAGNÓSTICO LIBRE:
+                Detecta oportunidades ocultas. Si hay productos estrella sin stock, sugiere reponer.
+                IMPORTANTE: Analiza su historial y el nicho para sugerir QUÉ NUEVOS PRODUCTOS DEBERÍA COMPRAR mañana para expandir su catálogo (productos de tendencia o complementarios que aún no tiene pero que sus clientes comprarían).
+                Si hay capital bloqueado, sugiere crear "Combos Relámpago". 
+                `;
+            }
+
+            prompt += `
+            Debes devolver EXACTAMENTE este objeto JSON con las claves exactas (reemplaza los valores con tu análisis de alto impacto enfocado en tecnología/accesorios):
+            {
+              "empireLevel": "${empLevel}",
+              "urgency": "${customQuery ? "Simulación" : "Estable"}" | "Atención" | "Crítico",
+              "urgencyReason": "${customQuery ? "Resultado simulado en proceso..." : "Razón corta de la urgencia (ej: 'Tienes 18k retenidos en capital muerto. Usa combos para accesorios.')"}",
+              "impact": "Explica el impacto en dinero (ej: 'Si reduces un 10%, necesitas vender 3 fundas extra para mantener ganancia.')",
+              "trend": "Comparación temporal o análisis de mercado tech (ej: 'Tus cables USB-C bajaron rotación. Combínalos con cargadores.')",
+              "prediction": "Predicción financiera brutal (ej: 'Si inviertes $5,000 extra en los top 2 gadgets hoy, la proyección de la semana se dispara a $42,000 en ventas.')",
+              "plan": [
+                "1️⃣ Acción específica (Ej: 'Crea Combo Cargador+Cable 15% OFF')",
+                "2️⃣ Segunda acción concreta"
+              ],
+              "actionId": "create_promo" | "restock" | "close_budgets",
+              "actionText": "${customQuery ? "APLICAR ESTRATEGIA" : "CREAR COMBO O REPONER"}"
+            }
+            IMPORTANTE: Solo devuelve el JSON puro, nada de texto antes o después.
+            `;
+
+            const adviceJsonStr = await GeminiService.handleGeneralRequest(prompt);
+            let adviceData;
+            try {
+                adviceData = JSON.parse(adviceJsonStr.replace(/```json/g, '').replace(/```/g, '').trim());
+            } catch (e) {
+                console.error("Error parsing AI JSON", e);
+                throw new Error("Formato de respuesta IA inválido");
+            }
+            setAiAdvice(adviceData);
+
+        } catch (error) {
+            console.error('Error generating AI coach insight:', error);
+            setAiAdvice("error");
+        } finally {
+            setIsAiLoading(false);
         }
-    }, [loading, userRole, stats.lowStockCount, stats.budgetSales, stats.recentRestockCount, missions.length]);
+    };
+
+    useEffect(() => {
+        if (aiModalVisible && !aiAdvice && !isAiLoading) {
+            generateAiInsights();
+        }
+    }, [aiModalVisible]);
 
     const handleMissionAction = async (mission) => {
         if (mission.type === 'crm') {
@@ -318,46 +462,119 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.modalContent}>
                     <View style={styles.modalHeader}>
                         <MaterialCommunityIcons name="robot-happy" size={32} color="#d4af37" />
-                        <Text style={styles.modalTitle}>EMPIRE AI COACH</Text>
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text style={styles.modalTitle}>EMPIRE AI COACH</Text>
+                            {aiAdvice && aiAdvice !== "error" && (
+                                <Text style={styles.empireLevelText}>{aiAdvice.empireLevel}</Text>
+                            )}
+                        </View>
                         <TouchableOpacity onPress={() => setAiModalVisible(false)}>
                             <MaterialCommunityIcons name="close" size={24} color="#666" />
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView style={styles.modalBody}>
-                        <View style={styles.aiAdviceBox}>
-                            <Text style={styles.aiAdviceText}>{getAICounsel()}</Text>
-                        </View>
+                    <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+                        {isAiLoading ? (
+                            <View style={[styles.aiAdviceBox, { alignItems: 'center', paddingVertical: 40 }]}>
+                                <ActivityIndicator size="large" color="#d4af37" />
+                                <Text style={[styles.aiAdviceText, { marginTop: 15, textAlign: 'center' }]}>
+                                    Sincronizando con redes neuronales...{'\n'}Calculando proyecciones financieras.
+                                </Text>
+                            </View>
+                        ) : aiAdvice && aiAdvice !== "error" ? (
+                            <View style={{ gap: 15 }}>
+                                {/* Urgency Banner */}
+                                <View style={[
+                                    styles.urgencyBanner, 
+                                    aiAdvice.urgency === 'Crítico' ? { borderColor: '#e74c3c', backgroundColor: '#e74c3c20' } :
+                                    aiAdvice.urgency === 'Atención' ? { borderColor: '#f39c12', backgroundColor: '#f39c1220' } :
+                                    { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }
+                                ]}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                        <View style={[
+                                            styles.urgencyDot, 
+                                            aiAdvice.urgency === 'Crítico' ? { backgroundColor: '#e74c3c' } :
+                                            aiAdvice.urgency === 'Atención' ? { backgroundColor: '#f39c12' } :
+                                            { backgroundColor: '#2ecc71' }
+                                        ]} />
+                                        <Text style={[
+                                            styles.urgencyLabel,
+                                            aiAdvice.urgency === 'Crítico' ? { color: '#e74c3c' } :
+                                            aiAdvice.urgency === 'Atención' ? { color: '#f39c12' } :
+                                            { color: '#2ecc71' }
+                                        ]}>{aiAdvice.urgency.toUpperCase()}</Text>
+                                    </View>
+                                    <Text style={styles.urgencyReason}>{aiAdvice.urgencyReason}</Text>
+                                </View>
 
-                        {stats.lowStockProducts.length > 0 && (
-                            <View style={styles.restockSection}>
-                                <Text style={styles.sectionSub}>PRODUCTOS A REPONER:</Text>
-                                {stats.lowStockProducts.map((item, index) => (
-                                    <View key={item.id} style={styles.restockItem}>
-                                        <View style={styles.restockInfo}>
-                                            <Text style={styles.restockName}>{item.name}</Text>
-                                            <Text style={styles.restockStock}>Stock actual: {item.current_stock}</Text>
-                                        </View>
+                                {/* Decision Simulator Input */}
+                                <View style={styles.simulatorContainer}>
+                                    <View style={styles.simulatorHeader}>
+                                        <MaterialCommunityIcons name="brain" size={18} color="#9b59b6" />
+                                        <Text style={styles.simulatorTitle}>SIMULADOR DE DECISIONES</Text>
+                                    </View>
+                                    <View style={styles.simulatorInputRow}>
+                                        <TextInput
+                                            style={styles.simulatorInput}
+                                            placeholder="Ej: 'Si bajo 10% el precio de fundas...'"
+                                            placeholderTextColor="#666"
+                                            value={simulatorQuery}
+                                            onChangeText={setSimulatorQuery}
+                                            onSubmitEditing={() => generateAiInsights(simulatorQuery)}
+                                        />
                                         <TouchableOpacity
-                                            style={styles.orderBtn}
-                                            onPress={() => {
-                                                setAiModalVisible(false);
-                                                navigation.navigate('NewSupplierOrder', { preselectedProduct: item });
-                                            }}
+                                            style={styles.simulatorBtn}
+                                            onPress={() => generateAiInsights(simulatorQuery)}
                                         >
-                                            <Text style={styles.orderBtnText}>PEDIR</Text>
+                                            <MaterialCommunityIcons name="send" size={20} color="#000" />
                                         </TouchableOpacity>
                                     </View>
-                                ))}
-                            </View>
-                        )}
+                                </View>
 
-                        {stats.budgetSales > 0 && (
-                            <View style={styles.opportunityBox}>
-                                <MaterialCommunityIcons name="lightbulb-on" size={20} color="#f1c40f" />
-                                <Text style={styles.opportunityText}>
-                                    Tienes ${stats.budgetSales.toFixed(2)} en presupuestos. ¡Es hora de cerrar esas ventas!
-                                </Text>
+                                {/* Impact & Trend */}
+                                <View style={styles.coachCard}>
+                                    <View style={styles.coachCardRow}>
+                                        <MaterialCommunityIcons name="chart-bell-curve-cumulative" size={20} color="#d4af37" />
+                                        <Text style={styles.coachCardText}>{aiAdvice.trend}</Text>
+                                    </View>
+                                    <View style={[styles.coachCardRow, { marginTop: 10, borderTopWidth: 1, borderTopColor: '#222', paddingTop: 10 }]}>
+                                        <MaterialCommunityIcons name="currency-usd" size={20} color="#2ecc71" />
+                                        <Text style={styles.coachCardText}>{aiAdvice.impact}</Text>
+                                    </View>
+                                </View>
+
+                                {/* Priority Plan */}
+                                <View style={styles.coachCard}>
+                                    <Text style={styles.planTitle}>PLAN TÁCTICO INMEDIATO</Text>
+                                    {aiAdvice.plan && aiAdvice.plan.map((step, idx) => (
+                                        <Text key={idx} style={styles.planStep}>{step}</Text>
+                                    ))}
+                                </View>
+
+                                {/* Prediction */}
+                                <View style={styles.predictionBox}>
+                                    <MaterialCommunityIcons name="crystal-ball" size={24} color="#9b59b6" />
+                                    <Text style={styles.predictionText}>{aiAdvice.prediction}</Text>
+                                </View>
+
+                                {/* Action Action */}
+                                <TouchableOpacity 
+                                    style={styles.coachActionBtn}
+                                    onPress={() => {
+                                        setAiModalVisible(false);
+                                        if (aiAdvice.actionId === 'create_promo') navigation.navigate('Catalog');
+                                        else if (aiAdvice.actionId === 'restock') navigation.navigate('Stock');
+                                        else if (aiAdvice.actionId === 'close_budgets') navigation.navigate('Orders');
+                                        else navigation.navigate('Catalog');
+                                    }}
+                                >
+                                    <MaterialCommunityIcons name="lightning-bolt" size={20} color="#000" />
+                                    <Text style={styles.coachActionBtnText}>{aiAdvice.actionText}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ) : (
+                            <View style={styles.aiAdviceBox}>
+                                <Text style={styles.aiAdviceText}>Error de conexión. Intenta nuevamente.</Text>
                             </View>
                         )}
                     </ScrollView>
@@ -597,25 +814,39 @@ const styles = StyleSheet.create({
 
     // Modal Styles
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: '#050505', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '80%', borderTopWidth: 1, borderTopColor: '#111' },
-    modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 25 },
-    modalTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+    modalContent: { backgroundColor: '#080808', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '85%', borderTopWidth: 1, borderTopColor: '#1a1a1a' },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+    modalTitle: { color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
+    empireLevelText: { color: '#aaa', fontSize: 11, fontWeight: '600', marginTop: 3 },
     modalBody: { marginBottom: 20 },
-    aiAdviceBox: { backgroundColor: '#000', padding: 20, borderRadius: 15, marginBottom: 25, borderWidth: 1, borderColor: '#111' },
-    aiAdviceText: { color: '#fff', fontSize: 16, lineHeight: 24, fontWeight: '600' },
+    
+    urgencyBanner: { padding: 15, borderRadius: 12, borderWidth: 1, marginBottom: 15 },
+    urgencyDot: { width: 10, height: 10, borderRadius: 5 },
+    urgencyLabel: { fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+    urgencyReason: { color: '#eee', fontSize: 13, fontWeight: '600', marginTop: 8 },
 
-    restockSection: { marginBottom: 20 },
-    sectionSub: { color: '#666', fontSize: 12, fontWeight: '900', marginBottom: 15, letterSpacing: 1 },
-    restockItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#222' },
-    restockInfo: { flex: 1 },
-    restockName: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-    restockStock: { color: '#ff4444', fontSize: 12, marginTop: 2 },
-    orderBtn: { backgroundColor: '#d4af37', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
-    orderBtnText: { color: '#000', fontSize: 12, fontWeight: '900' },
+    coachCard: { backgroundColor: '#111', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#222' },
+    coachCardRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+    coachCardText: { color: '#bbb', fontSize: 13, flex: 1, lineHeight: 20 },
+    
+    planTitle: { color: '#888', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 10 },
+    planStep: { color: '#ddd', fontSize: 14, fontWeight: '700', marginBottom: 8, lineHeight: 20 },
 
-    opportunityBox: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f1c40f15', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#f1c40f30' },
-    opportunityText: { color: '#f1c40f', fontSize: 13, fontWeight: '600', flex: 1 },
+    predictionBox: { flexDirection: 'row', backgroundColor: '#9b59b615', padding: 15, borderRadius: 12, gap: 12, alignItems: 'center', borderColor: '#9b59b640', borderWidth: 1, marginBottom: 20 },
 
-    closeModalBtn: { backgroundColor: '#333', padding: 18, borderRadius: 15, alignItems: 'center' },
-    closeModalBtnText: { color: '#fff', fontWeight: '900', fontSize: 16, letterSpacing: 1 }
+    predictionText: { color: '#e0bbf3', fontSize: 13, fontWeight: '800', flex: 1, lineHeight: 20 },
+    coachActionBtn: { backgroundColor: '#d4af37', padding: 18, borderRadius: 15, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
+    coachActionBtnText: { color: '#000', fontSize: 13, fontWeight: '900', letterSpacing: 1.5 },
+    aiAdviceBox: { backgroundColor: '#111', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#d4af3740' },
+    aiAdviceText: { color: '#ccc', fontSize: 14, lineHeight: 22 },
+    
+    simulatorContainer: { backgroundColor: '#181818', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    simulatorHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
+    simulatorTitle: { color: '#9b59b6', fontSize: 11, fontWeight: '900', letterSpacing: 1.2 },
+    simulatorInputRow: { flexDirection: 'row', gap: 10 },
+    simulatorInput: { flex: 1, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#444', borderRadius: 8, paddingHorizontal: 12, color: '#fff', fontSize: 13, minHeight: 40 },
+    simulatorBtn: { backgroundColor: '#9b59b6', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 15, borderRadius: 8 },
+
+    closeModalBtn: { backgroundColor: '#1a1a1a', padding: 15, borderRadius: 12, alignItems: 'center' },
+    closeModalBtnText: { color: '#aaa', fontSize: 12, fontWeight: '900', letterSpacing: 1 }
 });
