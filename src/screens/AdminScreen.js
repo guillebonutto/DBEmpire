@@ -1,14 +1,30 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions, RefreshControl, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LineChart, PieChart } from 'react-native-chart-kit';
-import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CustomProgressChart from '../components/CustomProgressChart';
+import { useAuthStore } from '../store/useAuthStore';
+import { useProductStore } from '../store/useProductStore';
+import { useFinanceStore } from '../store/useFinanceStore';
+import { supabase } from '../services/supabase';
 
 const screenWidth = Dimensions.get('window').width;
+
+// 🛡️ Silence React Native Web Chart warnings
+if (Platform.OS === 'web') {
+    const originalWarn = console.error;
+    console.error = (...args) => {
+        if (args[0] && typeof args[0] === 'string' &&
+            (args[0].includes('Invalid DOM property `transform-origin`') ||
+                args[0].includes('Unknown event handler property `onStartShouldSetResponder`'))) {
+            return;
+        }
+        originalWarn(...args);
+    };
+}
 
 export default function AdminScreen({ navigation }) {
     const [commissionRate, setCommissionRate] = useState('10');
@@ -32,31 +48,105 @@ export default function AdminScreen({ navigation }) {
     const [profitSplit, setProfitSplit] = useState({ imperio: 70, vendedores: 30 });
     const [totalDebt, setTotalDebt] = useState(0);
     const [nextMonthlyPayment, setNextMonthlyPayment] = useState(0);
+    const [aiPerformance, setAiPerformance] = useState({
+        total_profit: 0,
+        successful_actions: 0,
+        failed_actions: 0,
+        top_type: 'N/A'
+    });
 
-    // ── In-memory cache ────────────────────────────────────────────────────────
-    const cachedSettings = useRef(null);
-    const cachedDebt = useRef(null);
-    const cachedAllSales = useRef(null);
-    const cachedAllExpenses = useRef(null);
-    const cachedAllSaleItems = useRef(null);
+    const { sales, expenses, supplierOrders, saleItems, settings, isLoading: storeLoading, fetchAllData } = useFinanceStore();
 
     // ── Keep a ref copy of filter state so processLocalData can read them sync ─
     const dateFilterRef = useRef('month');
     const currentDateRef = useRef(new Date());
     const viewAllMonthsRef = useRef(false);
 
-    // ── On mount: check role once, then load all data ──────────────────────────
+    // ── On mount: check role once, then let it fetch finance ──────────────────
     useEffect(() => {
         const checkRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
-                Alert.alert('Acceso Denegado', 'No tienes permisos para ver esta sección.');
+            // AHORA TANTO ADMIN COMO SELLER (SOCIO) TIENEN ACCESO TOTAL
+            if (role !== 'admin' && role !== 'seller') {
+                Alert.alert('Acceso Denegado', 'No tienes permisos de administrador.');
                 navigation.replace('Main');
             }
         };
         checkRole();
-        fetchAllData();
+        fetchAllData(true); // ✅ Force fresh fetch every time we open Balance panel
+
+        // 🔄 RECONCILIACIÓN SILENCIOSA EN BACKGROUND AL ENTRAR AL PANEL
+        useProductStore.getState().fetchProducts(true);
+        fetchAIPerformance();
     }, []);
+
+    const fetchAIPerformance = async () => {
+        try {
+            // Read from our new SQL View
+            const { data, error } = await supabase.from('ai_action_performance').select('*');
+            if (error) throw error;
+            if (data && data.length > 0) {
+                let totalProfit = 0, success = 0, fail = 0;
+                let topProfit = -999999, topType = 'Ninguna';
+
+                data.forEach(row => {
+                    totalProfit += (parseFloat(row.total_profit_generated) || 0);
+                    success += (parseInt(row.successful_actions) || 0);
+                    fail += (parseInt(row.failed_actions) || 0);
+                    if ((parseFloat(row.total_profit_generated) || 0) > topProfit) {
+                        topProfit = parseFloat(row.total_profit_generated);
+                        topType = row.action_type || 'Desconocida';
+                    }
+                });
+
+                setAiPerformance({
+                    total_profit: totalProfit,
+                    successful_actions: success,
+                    failed_actions: fail,
+                    top_type: topType
+                });
+            }
+        } catch (e) {
+            console.log("No se pudo cargar la vista de rendimiento IA (tal vez falte crearla).", e.message);
+        }
+    };
+
+    // ── Watch store data changes to process derivatives automatically ──────────
+    useEffect(() => {
+        if (!sales || !expenses) return; // wait until store has data
+        processLocalData(dateFilterRef.current, currentDateRef.current, viewAllMonthsRef.current);
+        calculateTopLevelStats();
+    }, [sales, expenses, saleItems, supplierOrders, settings]); // re-run when store data arrives
+
+    const calculateTopLevelStats = useCallback(() => {
+        // Settings
+        const comm = settings.find(s => s.key === 'commission_rate');
+        const key = settings.find(s => s.key === 'google_api_key');
+        if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
+        if (key) setGoogleKey(key.value);
+        const splitImp = settings.find(s => s.key === 'profit_split_imperio');
+        const splitVend = settings.find(s => s.key === 'profit_split_vendedores');
+        if (splitImp && splitVend) {
+            setProfitSplit({ imperio: parseInt(splitImp.value), vendedores: parseInt(splitVend.value) });
+        }
+
+        // Supplier debt
+        let debt = 0, monthly = 0;
+        supplierOrders.forEach(order => {
+            const isConsignment = order.status === 'consigned' || (order.notes || '').toUpperCase().includes('CONSIGNACION');
+            if (isConsignment) return; // Skip consignment from main debt
+            const totalInst = order.installments_total || 1;
+            const paidInst = order.installments_paid || 0;
+            if (paidInst < totalInst) {
+                const effectiveTotal = (parseFloat(order.total_cost) || 0) - (parseFloat(order.discount) || 0);
+                const perIns = effectiveTotal / totalInst;
+                debt += perIns * (totalInst - paidInst);
+                monthly += perIns;
+            }
+        });
+        setTotalDebt(debt);
+        setNextMonthlyPayment(monthly);
+    }, [settings, supplierOrders]);
 
     // ── Generate timeline (pure, no state reads — uses params) ─────────────────
     const generateTimeline = (filter, date, allMonths) => {
@@ -131,25 +221,27 @@ export default function AdminScreen({ navigation }) {
     // ── Get date range for a given filter/date combo ───────────────────────────
     const getDateRange = (filter, date, allMonths) => {
         const now = new Date();
-        let startDate, endDate;
+        let startMs, endMs;
 
         if (filter === 'day') {
-            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            startMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
         } else if (filter === 'week') {
-            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            startMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
         } else if (filter === 'month') {
             if (allMonths) {
-                startDate = new Date(now.getFullYear(), 0, 1);
-                endDate = new Date(now.getFullYear(), 11, 31);
+                startMs = new Date(now.getFullYear(), 0, 1).getTime();
+                // End of Dec 31st, 23:59:59.999
+                endMs = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999).getTime();
             } else {
-                startDate = new Date(date.getFullYear(), date.getMonth(), 1);
-                endDate = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+                startMs = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+                // End of last day of month at 23:59:59.999
+                endMs = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
             }
         } else if (filter === 'year') {
-            startDate = new Date(now.getFullYear() - 4, 0, 1);
+            startMs = new Date(now.getFullYear() - 4, 0, 1).getTime();
         }
 
-        return { startISO: startDate.toISOString(), endISO: endDate ? endDate.toISOString() : null };
+        return { startMs, endMs: endMs || null };
     };
 
     // ── Helper: get timeline bucket key for a date (O(1) lookup) ───────────────
@@ -166,34 +258,38 @@ export default function AdminScreen({ navigation }) {
 
     // ── Process all charts/stats from local cache — SYNCHRONOUS, no await ─────
     const processLocalData = useCallback((filter, date, allMonths) => {
-        if (!cachedAllSales.current) return;
-
-        const { startISO, endISO } = getDateRange(filter, date, allMonths);
+        const { startMs, endMs } = getDateRange(filter, date, allMonths);
 
         // Single-pass: split into current/prev in one loop
-        let prevIncome = 0, prevExp = 0;
+        // Use parsed timestamps (ms) to avoid string comparison issues with mixed timezones
+        let prevIncome = 0, prevExpCaja = 0, prevExpROI = 0;
         const currentSales = [];
         const currentExpenses = [];
-
-        for (const s of cachedAllSales.current) {
-            if (s.created_at < startISO) {
+        for (const s of (sales || [])) {
+            const sMs = new Date(s.created_at).getTime();
+            if (sMs < startMs) {
                 const st = (s.status || '').toLowerCase();
                 if (st === 'completed' || st === 'exitosa' || st === 'vended' || st === '') {
                     prevIncome += (parseFloat(s.total_amount) || 0);
                 }
-            } else if (!endISO || s.created_at <= endISO) {
+            } else if (!endMs || sMs <= endMs) {
                 currentSales.push(s);
             }
         }
-        for (const e of cachedAllExpenses.current) {
-            if (e.created_at < startISO) {
-                prevExp += (parseFloat(e.amount) || 0);
-            } else if (!endISO || e.created_at <= endISO) {
+        for (const e of (expenses || [])) {
+            const eMs = new Date(e.created_at).getTime();
+            const val = parseFloat(e.amount) || 0;
+            const isDebt = e.category === 'Pago de Deuda';
+            if (eMs < startMs) {
+                prevExpCaja += val;
+                if (!isDebt) prevExpROI += val;
+            } else if (!endMs || eMs <= endMs) {
                 currentExpenses.push(e);
             }
         }
 
-        const histBal = prevIncome - prevExp;
+        const histBalCaja = prevIncome - prevExpCaja;
+        const histBalROI = prevIncome - prevExpROI;
 
         // Finalized sales only
         const finalSales = currentSales.filter(s => {
@@ -221,7 +317,8 @@ export default function AdminScreen({ navigation }) {
             const d = new Date(e.created_at);
             const key = getBucketKey(filter, date, allMonths, d);
             const idx = bucketIndex.get(key);
-            if (idx !== undefined) timeline[idx].expense += (parseFloat(e.amount) || 0);
+            const isDebt = e.category === 'Pago de Deuda';
+            if (idx !== undefined && !isDebt) timeline[idx].expense += (parseFloat(e.amount) || 0);
         });
 
         setSalesData({
@@ -229,7 +326,7 @@ export default function AdminScreen({ navigation }) {
             data: timeline.map(t => t.total)
         });
 
-        let runningTotal = histBal;
+        let runningTotal = histBalROI;
         const netData = timeline.map(t => {
             runningTotal += t.income - t.expense;
             return runningTotal;
@@ -248,10 +345,15 @@ export default function AdminScreen({ navigation }) {
         const totalSales = finalSales.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
         const grossProfit = finalSales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
         const totalCommissions = finalSales.reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
-        const totalExpenses = currentExpenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
-        const netProfit = histBal + totalSales - totalExpenses;
+        
+        const totalExpensesCaja = currentExpenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+        const totalExpensesROI = currentExpenses.reduce((sum, e) => sum + (e.category !== 'Pago de Deuda' ? (parseFloat(e.amount) || 0) : 0), 0);
+        const debtPayments = totalExpensesCaja - totalExpensesROI;
 
-        setStats({ totalSales, totalProfit: grossProfit, totalCommissions, totalExpenses, netProfit, sellerCount: 1 });
+        const netCaja = histBalCaja + totalSales - totalExpensesCaja; // Liquidez real (Caja Fuerte)
+        const netProfit = histBalROI + totalSales - totalExpensesROI; // Rentabilidad pura del negocio
+
+        setStats({ totalSales, totalProfit: grossProfit, totalCommissions, totalExpenses: totalExpensesROI, debtPayments, netCaja, netProfit, sellerCount: 1 });
 
         // ── Device breakdown ───────────────────────────────────────────────────
         const deviceMap = {};
@@ -266,7 +368,7 @@ export default function AdminScreen({ navigation }) {
         })).sort((a, b) => b.total - a.total));
 
         // ── Products ───────────────────────────────────────────────────────────
-        const currentSaleItems = cachedAllSaleItems.current.filter(item =>
+        const currentSaleItems = saleItems.filter(item =>
             finalSales.some(s => s.id === item.sale_id)
         );
         if (currentSaleItems.length > 0) {
@@ -285,83 +387,11 @@ export default function AdminScreen({ navigation }) {
         } else {
             setProductData([]);
         }
-    }, []);
-
-    // ── Fetch ALL data from Supabase once ──────────────────────────────────────
-    const fetchAllData = async () => {
-        setLoading(true);
-        try {
-            const [settingsRes, debtRes, salesRes, expensesRes, itemsRes] = await Promise.all([
-                supabase.from('settings').select('*'),
-                supabase.from('supplier_orders').select('*'),
-                supabase.from('sales')
-                    .select('id, created_at, total_amount, profit_generated, commission_amount, status, device_sig')
-                    .order('created_at', { ascending: false }),
-                supabase.from('expenses')
-                    .select('amount, created_at')
-                    .order('created_at', { ascending: false }),
-                supabase.from('sale_items').select('sale_id, quantity, products(name)')
-            ]);
-
-            // Settings
-            cachedSettings.current = settingsRes.data || [];
-            const settingsData = cachedSettings.current;
-            const comm = settingsData.find(s => s.key === 'commission_rate');
-            const key = settingsData.find(s => s.key === 'google_api_key');
-            if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
-            if (key) setGoogleKey(key.value);
-            const splitImp = settingsData.find(s => s.key === 'profit_split_imperio');
-            const splitVend = settingsData.find(s => s.key === 'profit_split_vendedores');
-            if (splitImp && splitVend) {
-                setProfitSplit({ imperio: parseInt(splitImp.value), vendedores: parseInt(splitVend.value) });
-            }
-
-            // Supplier debt
-            cachedDebt.current = debtRes.data || [];
-            let debt = 0, monthly = 0;
-            cachedDebt.current.forEach(order => {
-                const totalInst = order.installments_total || 1;
-                const paidInst = order.installments_paid || 0;
-                if (paidInst < totalInst) {
-                    const effectiveTotal = (parseFloat(order.total_cost) || 0) - (parseFloat(order.discount) || 0);
-                    const perIns = effectiveTotal / totalInst;
-                    debt += perIns * (totalInst - paidInst);
-                    monthly += perIns;
-                }
-            });
-            setTotalDebt(debt);
-            setNextMonthlyPayment(monthly);
-
-            // Sales (with device_sig fallback)
-            let fetchedSales = salesRes.data || [];
-            if (salesRes.error && salesRes.error.message.includes('device_sig')) {
-                const retry = await supabase.from('sales')
-                    .select('id, created_at, total_amount, profit_generated, commission_amount, status')
-                    .order('created_at', { ascending: false });
-                fetchedSales = retry.data || [];
-            }
-            cachedAllSales.current = fetchedSales;
-            cachedAllExpenses.current = expensesRes.data || [];
-            cachedAllSaleItems.current = itemsRes.data || [];
-
-            // Process with current filter state
-            processLocalData(dateFilterRef.current, currentDateRef.current, viewAllMonthsRef.current);
-
-        } catch (error) {
-            console.log('Error fetching admin data:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
+    }, [sales, expenses, supplierOrders, saleItems, settings]);
 
     // ── Force full refresh (pull-to-refresh) ───────────────────────────────────
     const forceRefresh = () => {
-        cachedSettings.current = null;
-        cachedDebt.current = null;
-        cachedAllSales.current = null;
-        cachedAllExpenses.current = null;
-        cachedAllSaleItems.current = null;
-        fetchAllData();
+        fetchAllData(true);
     };
 
     // ── Change month: update ref + state + process immediately ────────────────
@@ -393,17 +423,20 @@ export default function AdminScreen({ navigation }) {
     const updateCommissionRate = async () => {
         const rate = parseFloat(commissionRate);
         if (isNaN(rate) || rate < 0 || rate > 100) {
-            Alert.alert('Error', 'Ingresa un porcentaje válido entre 0 y 100');
+            if (Platform.OS === 'web') alert('Error: Ingresa un porcentaje válido entre 0 y 100');
+            else Alert.alert('Error', 'Ingresa un porcentaje válido entre 0 y 100');
             return;
         }
         setLoading(true);
         try {
             const { error } = await supabase.from('settings').upsert({ key: 'commission_rate', value: (rate / 100).toString() }, { onConflict: 'key' });
             if (error) throw error;
-            cachedSettings.current = null;
-            Alert.alert('✅ Actualizado', `La comisión ahora es del ${rate}%`);
+            forceRefresh(); // Triggers force sync with Supabase and reloads UI
+            if (Platform.OS === 'web') alert(`✅ Actualizado: La comisión ahora es del ${rate}%`);
+            else Alert.alert('✅ Actualizado', `La comisión ahora es del ${rate}%`);
         } catch (error) {
-            Alert.alert('Error', 'No se pudo actualizar la comisión');
+            if (Platform.OS === 'web') alert('Error: No se pudo actualizar la comisión');
+            else Alert.alert('Error', 'No se pudo actualizar la comisión');
         } finally {
             setLoading(false);
         }
@@ -411,17 +444,20 @@ export default function AdminScreen({ navigation }) {
 
     const updateGoogleKey = async () => {
         if (!googleKey.trim()) {
-            Alert.alert('Error', 'Ingresa una API Key válida');
+            if (Platform.OS === 'web') alert('Error: Ingresa una API Key válida');
+            else Alert.alert('Error', 'Ingresa una API Key válida');
             return;
         }
         setLoading(true);
         try {
             const { error } = await supabase.from('settings').upsert({ key: 'google_api_key', value: googleKey.trim() }, { onConflict: 'key' });
             if (error) throw error;
-            cachedSettings.current = null;
-            Alert.alert('✅ Desbloqueado', 'Google Gemini está listo para trabajar 🧠⚡');
+            forceRefresh();
+            if (Platform.OS === 'web') alert('✅ Desbloqueado: Google Gemini está listo para trabajar 🧠⚡');
+            else Alert.alert('✅ Desbloqueado', 'Google Gemini está listo para trabajar 🧠⚡');
         } catch (error) {
-            Alert.alert('Error', 'No se pudo guardar la API Key');
+            if (Platform.OS === 'web') alert('Error: No se pudo guardar la API Key');
+            else Alert.alert('Error', 'No se pudo guardar la API Key');
         } finally {
             setLoading(false);
         }
@@ -481,7 +517,7 @@ export default function AdminScreen({ navigation }) {
             <ScrollView
                 style={styles.scrollView}
                 contentContainerStyle={styles.content}
-                refreshControl={<RefreshControl refreshing={loading} onRefresh={forceRefresh} tintColor="#d4af37" />}
+                refreshControl={<RefreshControl refreshing={loading || storeLoading} onRefresh={forceRefresh} tintColor="#d4af37" />}
             >
                 {/* Stats Cards */}
                 <View style={styles.statsGrid}>
@@ -500,15 +536,32 @@ export default function AdminScreen({ navigation }) {
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
                         <MaterialCommunityIcons name="cash-minus" size={28} color="#e74c3c" />
-                        <Text style={styles.statValue}>${stats.totalExpenses.toFixed(0)}</Text>
+                        <Text style={styles.statValue}>${stats.totalExpenses?.toFixed(0)}</Text>
                         <Text style={styles.statLabel}>Gastos Operativos</Text>
+                    </View>
+                    <View style={styles.statCard}>
+                        <MaterialCommunityIcons name="credit-card-minus" size={28} color="#f39c12" />
+                        <Text style={[styles.statValue, { color: '#f39c12' }]}>
+                            ${stats.debtPayments?.toFixed(0)}
+                        </Text>
+                        <Text style={[styles.statLabel, { color: '#f39c12' }]}>Deudas Pagadas</Text>
+                    </View>
+                </View>
+
+                <View style={[styles.statsGrid, { marginTop: 5 }]}>
+                    <View style={[styles.statCard, { borderColor: '#3498db' }]}>
+                        <MaterialCommunityIcons name="safe" size={28} color="#3498db" />
+                        <Text style={[styles.statValue, { color: '#3498db' }]}>
+                            ${stats.netCaja?.toFixed(0)}
+                        </Text>
+                        <Text style={[styles.statLabel, { color: '#3498db' }]}>Caja Fuerte (Liquidez)</Text>
                     </View>
                     <View style={[styles.statCard, { borderColor: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
                         <MaterialCommunityIcons name="scale-balance" size={28} color={stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c'} />
                         <Text style={[styles.statValue, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
-                            ${stats.netProfit.toFixed(0)}
+                            ${stats.netProfit?.toFixed(0)}
                         </Text>
-                        <Text style={[styles.statLabel, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>Estado ROI / Balance</Text>
+                        <Text style={[styles.statLabel, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>Rentabilidad (ROI)</Text>
                     </View>
                 </View>
 
@@ -576,14 +629,19 @@ export default function AdminScreen({ navigation }) {
                             <Text style={styles.quickAccessTitle}>Promociones</Text>
                             <Text style={styles.quickAccessSubtitle}>Activas</Text>
                         </TouchableOpacity>
+                        <TouchableOpacity style={[styles.quickAccessCard, { borderColor: '#d4af37', borderWidth: 1.5 }]} onPress={() => navigation.navigate('AIDashboard')}>
+                            <MaterialCommunityIcons name="brain" size={32} color="#d4af37" />
+                            <Text style={[styles.quickAccessTitle, { color: '#d4af37' }]}>Empire AI</Text>
+                            <Text style={styles.quickAccessSubtitle}>Dashboard</Text>
+                        </TouchableOpacity>
                     </View>
 
                     <Text style={styles.categoryLabel}>📦 Logística & Envíos</Text>
                     <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ShippingPackages')}>
-                            <MaterialCommunityIcons name="package-variant" size={32} color="#f39c12" />
-                            <Text style={styles.quickAccessTitle}>Paquetes</Text>
-                            <Text style={styles.quickAccessSubtitle}>Tracking</Text>
+                        <TouchableOpacity style={[styles.quickAccessCard, { minWidth: '60%' }]} onPress={() => navigation.navigate('Transfers')}>
+                            <MaterialCommunityIcons name="truck-delivery" size={32} color="#d4af37" />
+                            <Text style={styles.quickAccessTitle}>LOGÍSTICA EMPIRE</Text>
+                            <Text style={styles.quickAccessSubtitle}>Gestión Córdoba & Envíos</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ShippingRates')}>
                             <MaterialCommunityIcons name="currency-usd" size={32} color="#16a085" />
@@ -599,6 +657,37 @@ export default function AdminScreen({ navigation }) {
                             <Text style={styles.quickAccessTitle}>Auditoría</Text>
                             <Text style={styles.quickAccessSubtitle}>Actividad</Text>
                         </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* 🤖 Rendimiento del Asesor Inteligente (IA Feedback Loop) */}
+                <View style={styles.chartCard}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 15 }}>
+                        <MaterialCommunityIcons name="brain" size={24} color="#bdc3c7" />
+                        <Text style={[styles.sectionTitle, { marginLeft: 8, marginTop: 0, marginBottom: 0 }]}>RENDIMIENTO MOTOR DE IA</Text>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                        <View style={{ flex: 1 }}>
+                            <Text style={{ color: '#bdc3c7', fontSize: 12 }}>GANANCIA GENERADA IA</Text>
+                            <Text style={{ color: aiPerformance.total_profit >= 0 ? '#2ecc71' : '#e74c3c', fontSize: 22, fontWeight: 'bold' }}>
+                                ${aiPerformance.total_profit.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
+                            </Text>
+                        </View>
+                        <View style={{ flex: 1, alignItems: 'center' }}>
+                            <Text style={{ color: '#bdc3c7', fontSize: 12 }}>ACERTADAS / FALLIDAS</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                                <MaterialCommunityIcons name="arrow-up-circle" size={16} color="#2ecc71" />
+                                <Text style={{ color: 'white', fontWeight: 'bold', marginHorizontal: 4 }}>{aiPerformance.successful_actions}</Text>
+                                <MaterialCommunityIcons name="arrow-down-circle" size={16} color="#e74c3c" />
+                                <Text style={{ color: 'white', fontWeight: 'bold', marginLeft: 4 }}>{aiPerformance.failed_actions}</Text>
+                            </View>
+                        </View>
+                    </View>
+
+                    <View style={{ backgroundColor: '#111', padding: 12, borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ color: '#d4af37', fontSize: 13, fontWeight: 'bold' }}>ESTRATEGIA MÁS RENTABLE</Text>
+                        <Text style={{ color: 'white', fontSize: 13, textTransform: 'uppercase' }}>{aiPerformance.top_type}</Text>
                     </View>
                 </View>
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Alert, Dimensions, ActivityIndicator, Modal, TextInput, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -13,6 +13,8 @@ import NetInfo from '@react-native-community/netinfo';
 import { DeviceAuthService } from '../services/deviceAuth';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
+import { SecurityService } from '../services/securityService';
+import { EmpireAIService } from '../services/empireAIService';
 import { Linking } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -117,7 +119,7 @@ export default function HomeScreen({ navigation }) {
                     : supabase.from('sales').select('total_amount, commission_amount, status, device_sig, created_at'),
                 supabase.from('expenses').select('amount').gte('created_at', startOfDay),
                 supabase.from('sales').select('total_amount').eq('status', 'budget'),
-                supabase.from('products').select('id, name, current_stock, sale_price').eq('active', true).lte('current_stock', 5),
+                supabase.from('products').select('id, name, current_stock, sale_price, stock_local, stock_cordoba').eq('active', true),
                 supabase.from('settings').select('value').eq('key', 'commission_rate').single(),
                 supabase.from('supplier_orders').select('id, total_cost').eq('status', 'received').gte('created_at', startOfLastWeek)
             ]);
@@ -170,9 +172,13 @@ export default function HomeScreen({ navigation }) {
 
             const todayExpenses = expensesData ? expensesData.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0) : 0;
             const rate = settingsData ? parseFloat(settingsData.value) * 100 : 0;
-            
+
             // Calculate locked capital in low stock items
-            const lockedCapital = lowStockData ? lowStockData.reduce((sum, p) => sum + ((p.current_stock || 0) * (parseFloat(p.sale_price) || 0)), 0) : 0;
+            // All products: split into low stock (<=5) and stagnant (stock>5 but no recent sales focus for coach)
+            const allProducts = lowStockData || [];
+            const trulyLowStock = allProducts.filter(p => (p.current_stock || 0) <= 5);
+            const stagnantStock = allProducts.filter(p => (p.current_stock || 0) > 5);
+            const lockedCapital = allProducts.reduce((sum, p) => sum + ((p.current_stock || 0) * (parseFloat(p.sale_price) || 0)), 0);
 
             const newStats = {
                 todaySales,
@@ -185,23 +191,51 @@ export default function HomeScreen({ navigation }) {
                 monthCommissions,
                 budgetSales: budgetsData ? budgetsData.reduce((acc, s) => acc + (s.total_amount || 0), 0) : 0,
                 commissionRate: rate,
-                lowStockCount: lowStockData ? lowStockData.length : 0,
-                lowStockProducts: lowStockData || [],
+                lowStockCount: trulyLowStock.length,
+                lowStockProducts: trulyLowStock,
+                stagnantProducts: stagnantStock,
                 recentRestockCount: recentRestocks ? recentRestocks.length : 0
             };
             setStats(newStats);
 
-            // --- MISSION GENERATION (Only for Sellers) ---
-            if (currentRole === 'seller') {
-                const dailyMissions = [];
+            // --- MISSION GENERATION (Collaborative & Local) ---
+            const dailyMissions = [];
 
+            // 1. Fetch Internal Reports (Collaborative Missions)
+            try {
+                const { data: internalReports } = await supabase
+                    .from('activity_logs')
+                    .select('*')
+                    .eq('action_type', 'BUSINESS_REPORT')
+                    .order('created_at', { ascending: false })
+                    .limit(3);
+
+                if (internalReports) {
+                    internalReports.forEach(report => {
+                        // Only show reports FROM the other role
+                        if (report.user_role !== currentRole) {
+                            dailyMissions.push({
+                                id: `report_${report.id}`,
+                                title: 'MENSAJE DEL SOCIO',
+                                desc: report.description.substring(0, 50) + '...',
+                                fullText: report.description,
+                                icon: 'office-building-marker',
+                                color: '#d4af37',
+                                type: 'internal_report'
+                            });
+                        }
+                    });
+                }
+            } catch (e) { console.log("Internal reports fetch failed", e); }
+
+            if (currentRole === 'seller') {
                 // Parallel mission data fetching
                 const [inactive, { data: randomProduct }] = await Promise.all([
                     CRMService.getInactiveClients(20),
                     supabase.from('products').select('name').eq('active', true).limit(1).single()
                 ]);
 
-                // 1. Client Recovery Mission
+                // 2. Client Recovery Mission
                 if (inactive && inactive.length > 0) {
                     const target = inactive[0];
                     dailyMissions.push({
@@ -215,7 +249,7 @@ export default function HomeScreen({ navigation }) {
                     });
                 }
 
-                // 2. Content Mission
+                // 3. Content Mission
                 if (randomProduct) {
                     dailyMissions.push({
                         id: 'content',
@@ -227,19 +261,19 @@ export default function HomeScreen({ navigation }) {
                         type: 'creative'
                     });
                 }
-
-                // 3. Goal Mission
-                dailyMissions.push({
-                    id: 'goal',
-                    title: 'META DEL DÍA',
-                    desc: totalSales > 0 ? '¡Sigue así! Supera tu récord hoy.' : '¡Hoy es el día! Logra tu primera venta.',
-                    icon: 'trophy-award',
-                    color: '#fdcb6e',
-                    type: 'info'
-                });
-
-                setMissions(dailyMissions);
             }
+
+            // 4. Goal Mission (Visible to both if they want)
+            dailyMissions.push({
+                id: 'goal',
+                title: 'META DEL DÍA',
+                desc: totalSales > 0 ? '¡Sigue así! Supera tu récord hoy.' : '¡Hoy es el día! Logra tu primera venta.',
+                icon: 'trophy-award',
+                color: '#fdcb6e',
+                type: 'info'
+            });
+
+            setMissions(dailyMissions);
         } catch (error) {
             console.log('Stats error:', error);
         } finally {
@@ -259,139 +293,64 @@ export default function HomeScreen({ navigation }) {
         }
     }, [loading, userRole, stats.lowStockCount, stats.budgetSales, missions.length]);
 
+    const getEmpireLevel = (sales) => {
+        if (sales < 1000) return 'Nivel 1: Emprendedor 🌱';
+        if (sales < 5000) return 'Nivel 2: Comerciante 🏪';
+        if (sales < 20000) return 'Nivel 3: Mercader 🚢';
+        return 'Nivel 4: Imperio 👑';
+    };
+
     // ── DYNAMIC AI BUSINESS COACH & DECISION SIMULATOR ──
-    const generateAiInsights = async (customQuery = null) => {
+    const generateAiInsights = async (forceRef = true) => {
         setIsAiLoading(true);
-        if (!customQuery) setAiAdvice(null);
         try {
-            // 1. Fetch Top Products sold this week to give AI context
-            const now = new Date();
-            const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+            const adviceData = await EmpireAIService.getInsights(forceRef);
             
-            const { data: recentItems } = await supabase
-                .from('sale_items')
-                .select('quantity, products(name, current_stock, sale_price)')
-                .gte('created_at', startOfWeek);
-
-            const productStats = {};
-            let topProductsText = "Aún no hay ventas esta semana.";
-
-            if (recentItems && recentItems.length > 0) {
-                recentItems.forEach(item => {
-                    if (!item.products) return;
-                    const name = item.products.name;
-                    if (!productStats[name]) {
-                        productStats[name] = { 
-                            qty: 0, 
-                            stock: item.products.current_stock || 0,
-                            price: item.products.sale_price || 0
-                        };
-                    }
-                    productStats[name].qty += item.quantity;
+            // Map the missions returned by EmpireAIService into the UI state
+            if (adviceData && adviceData.missions && !adviceData.error) {
+                // Prepend AI missions to existing local missions
+                const aiMissions = adviceData.missions.map((m, idx) => ({
+                    id: `ai_${Date.now()}_${idx}`,
+                    title: String(m.title || 'Misión Estratégica').toUpperCase(),
+                    desc: m.reason || adviceData.summary || 'Revisar detalles en la app.',
+                    icon: m.action_type === 'restock' ? 'package-variant-closed' : 
+                          m.action_type === 'pricing' ? 'cash-multiple' : 
+                          m.action_type === 'marketing' ? 'bullhorn' : 'lightning-bolt',
+                    color: m.impact === 'high' ? '#e74c3c' : 
+                           m.impact === 'medium' ? '#f39c12' : '#2ecc71',
+                    type: 'ai_action',
+                    action_type: m.action_type,
+                    target: m.target_id || null
+                }));
+                
+                setMissions(prev => {
+                    const nonAiMissions = prev.filter(p => p.type !== 'ai_action');
+                    return [...aiMissions, ...nonAiMissions];
                 });
                 
-                topProductsText = Object.entries(productStats)
-                    .sort((a, b) => b[1].qty - a[1].qty)
-                    .slice(0, 5)
-                    .map(([name, data]) => `- ${name}: ${data.qty} vendidos (Stock restante: ${data.stock}, Precio $${data.price})`)
-                    .join('\n');
-            }
-
-            const getEmpireLevel = (sales) => {
-                if (sales < 1000) return 'Nivel 1: Emprendedor 🌱';
-                if (sales < 5000) return 'Nivel 2: Comerciante 🏪';
-                if (sales < 20000) return 'Nivel 3: Mercader 🚢';
-                return 'Nivel 4: Imperio 👑';
-            };
-
-            const empLevel = getEmpireLevel(stats.monthSales);
-            const dailyAvg = stats.weekSales / 7;
-            const diffPct = dailyAvg > 0 ? (((stats.todaySales - dailyAvg) / dailyAvg) * 100).toFixed(0) : 0;
-            const trend = diffPct > 0 ? `+${diffPct}% arriba` : `${diffPct}% debajo`;
-            // 2. Build JSON Prompt
-            let prompt = `
-            Eres el "Empire AI Coach", un asesor financiero y táctico en "Digital Boost Empire".
-            CONTEXTO: Tiendita de GADGETS COTIDIANOS (novedades, accesorios).
-            
-            Analiza los datos y devuelve una ESTRATEGIA INMEDIATA formateada SOLO COMO UN OBJETO JSON válido (sin markdown).
-
-            DATOS ACTUALES DEL NEGOCIO (MONEDA: ARS PESOS ARGENTINOS):
-            - Nivel: ${empLevel}
-            - Ventas Hoy: $${stats.todaySales} (Tendencia: ${trend} del promedio semanal de $${dailyAvg.toFixed(2)}/día)
-            - Ganancia Neta Hoy: $${stats.todayNetProfit?.toFixed(2)} (Si es negativo, gastó en stock/gastos más de lo que vendió)
-            - Proyección Semanal: $${stats.weekSales}
-            - Inventario Crítico o Dormido: ${stats.lowStockCount} productos
-            - Capital Retenido (Valor a Precio de Venta final en $ARS): $${stats.lockedCapital} (Nota: ESTO ES PRECIO FINAL. Si recomiendas descuentos agresivos, anulas su margen de ganancia. Sugiere descuentos ligeros 10-15% o Combos con productos estrella para no perder plata, solo si es estrictamente necesario para fluidez de stock).
-            
-            TOP PRODUCTOS DE LA SEMANA:
-            ${topProductsText}
-            `;
-
-            if (customQuery) {
-                prompt += `
-                SIMULADOR DE DECISIONES LANZADO: "${customQuery}"
-                Simula matemáticamente qué pasaría. Muestra ROI estimado.
-                `;
+                setAiAdvice(adviceData);
             } else {
-                prompt += `
-                ⚠️ IMPORTANTE - MODELO DE NEGOCIO (IMPORTACIÓN):
-                1. El usuario COMPRA en el exterior (Alibaba, AliExpress, etc.) en DÓLARES (USD) pero vende en Argentina en PESOS (ARS).
-                2. Cotización promedio para tus cálculos: $1 USD = $1200 ARS aprox (o la actual si la tienes).
-                3. Sé COHERENTE: Si sugieres una inversión en ARS, asegúrate de que al pasarla a USD alcance para comprar las unidades sugeridas a precio mayorista internacional.
-                4. Investiga precios en sitios globales (USD) y haz la conversión a ARS para dar la sugerencia de inversión final en PESOS.
-                5. Los consejos de "Invertir capital recuperado" deben contemplar este arbitraje: "Recuperas X pesos, que son Y dólares, con eso compras Z unidades afuera".
-                `;
+                setAiAdvice(adviceData || "error");
             }
-
-            prompt += `
-            Debes devolver EXACTAMENTE este JSON:
-            {
-              "empireLevel": "${empLevel}",
-              "urgency": "${customQuery ? "Simulación" : "Estable"}" | "Atención" | "Crítico",
-              "urgencyReason": "Razón corta de la urgencia",
-              "trendRadar": "Radar: Qué producto viral/novedoso está en tendencia mundial ahora mismo en gadgets y por qué.",
-              "trendScore": "87/100",
-              "opportunityIndex": [
-                { "product": "Nombre Top seller", "demand": "Alta", "opportunity": "🟢 Promocionar" },
-                { "product": "Producto estancado", "demand": "Baja", "opportunity": "🔴 Liquidar" },
-                { "product": "Tendencia mundial (del radar)", "demand": "Novedad", "opportunity": "🟡 Invertir capital" }
-              ],
-              "strategyA": { "name": "ESTRATEGIA A — LIQUIDAR", "plan": "Vende [X] con [Y]% OFF para liberar $[Z] de capital en [W] días." },
-              "strategyB": { 
-                  "name": "ESTRATEGIA B — PIVOTAR", 
-                  "plan": "Invierte tu dinero en [Producto Trend Radar].",
-                  "suggestedInvestment": "$32.000",
-                  "suggestedStock": "18 unidades",
-                  "estimatedMargin": "42%"
-              },
-              "prediction": "Predicción brutal (Ej: Si aplicas el Pivot, la proyección sube a $42,000).",
-              "actionId": "create_promo" | "restock" | "close_budgets",
-              "actionText": "${customQuery ? "APLICAR ESTRATEGIA" : "EJECUTAR PLAN"}"
-            }
-            IMPORTANTE: Solo devuelve el JSON puro, nada de texto antes o después.
-            `;
-
-            const adviceJsonStr = await GeminiService.handleGeneralRequest(prompt);
-            let adviceData;
-            try {
-                adviceData = JSON.parse(adviceJsonStr.replace(/```json/g, '').replace(/```/g, '').trim());
-            } catch (e) {
-                console.error("Error parsing AI JSON", e);
-                throw new Error("Formato de respuesta IA inválido");
-            }
-            setAiAdvice(adviceData);
-
         } catch (error) {
-            console.error('Error generating AI coach insight:', error);
+            console.error('Error fetching AI insights:', error);
             setAiAdvice("error");
         } finally {
             setIsAiLoading(false);
         }
     };
 
+    // Auto-fetch missions on load (silent trigger intelligently cached in service)
+    useFocusEffect(
+        useCallback(() => { 
+            fetchDashboardStats(); 
+            generateAiInsights(false); // background silent fetch
+        }, [])
+    );
+
     useEffect(() => {
-        if (aiModalVisible && !aiAdvice && !isAiLoading) {
-            generateAiInsights();
+        if (aiModalVisible && (!aiAdvice || aiAdvice === 'error') && !isAiLoading) {
+            generateAiInsights(true); // force fresh on manual open
         }
     }, [aiModalVisible]);
 
@@ -416,70 +375,138 @@ export default function HomeScreen({ navigation }) {
                 Usa un tono viral. Devuelve texto plano sin markdown.`;
                 const script = await GeminiService.handleGeneralRequest(prompt);
 
+                if (Platform.OS === 'web') {
+                    if (confirm(`🎬 Guion Generado:\n\n${script}\n\n¿Copiar al portapapeles?`)) {
+                        require('expo-clipboard').setStringAsync(script);
+                    }
+                } else {
+                    Alert.alert(
+                        '🎬 Guion Generado',
+                        script,
+                        [
+                            { text: 'OK' },
+                            {
+                                text: 'ENVIAR A MI PC (WA)',
+                                onPress: () => Linking.openURL(`whatsapp://send?text=${encodeURIComponent("🚀 GUION PARA MI PC:\n\n" + script)}`)
+                            }
+                        ]
+                    );
+                }
+            } catch (e) { 
+                if (Platform.OS === 'web') alert(`Error IA: ${e.message}`);
+                else Alert.alert('Error IA', e.message); 
+            }
+            finally { setGeneratingMission(null); }
+        } else if (mission.type === 'branding') {
+            navigation.navigate('Branding');
+        } else if (mission.type === 'internal_report') {
+            if (Platform.OS === 'web') {
+                alert(`${mission.title}\n\n${mission.fullText}`);
+            } else {
                 Alert.alert(
-                    '🎬 Guion Generado',
-                    script,
+                    mission.title,
+                    mission.fullText,
                     [
-                        { text: 'OK' },
+                        { text: 'ENTENDIDO' },
                         {
-                            text: 'ENVIAR A MI PC (WA)',
-                            onPress: () => Linking.openURL(`whatsapp://send?text=${encodeURIComponent("🚀 GUION PARA MI PC:\n\n" + script)}`)
+                            text: 'RESPONDER POR WA',
+                            onPress: () => Linking.openURL(`whatsapp://send?text=${encodeURIComponent("Recibí tu reporte: " + mission.desc)}`)
                         }
                     ]
                 );
-            } catch (e) { Alert.alert('Error IA', 'No se pudo generar el guion'); }
-            finally { setGeneratingMission(null); }
+            }
+        } else if (mission.type === 'ai_action') {
+            // DIRECT AI ACTIONS ORCHESTRATION & TRACKING
+            EmpireAIService.markActionExecuted(mission.title);
+            
+            if (mission.action_type === 'restock') {
+                navigation.navigate('NewSupplierOrder');
+            } else if (mission.action_type === 'pricing') {
+                navigation.navigate('Catalog');
+            } else if (mission.action_type === 'marketing') {
+                navigation.navigate('Promotions');
+            } else {
+                navigation.navigate('Admin');
+            }
         }
     };
-
-    useFocusEffect(useCallback(() => { fetchDashboardStats(); }, []));
 
     const handleBarcodeScanned = async ({ data }) => {
         if (scanned) return;
+        setScanned(true);
 
         let barcodeData = data;
-        // SMART QR HANDLE
-        if (data.includes('linktr.ee/digital_boost_empire')) {
-            const parts = data.split('barcode=');
-            if (parts.length > 1) barcodeData = parts[1];
-        }
-
-        setScanned(true);
-        setIsScanning(false);
-        try {
-            const { data: product } = await supabase.from('products').select('*').eq('barcode', barcodeData).single();
-            if (product) {
-                navigation.navigate('NewSale', { preselectedProduct: product });
-            } else {
-                navigation.navigate('AddProduct', { scannedBarcode: barcodeData });
+        // Detectamos "barcode=" o el corto "bc="
+        if (data.includes('barcode=') || data.includes('bc=')) {
+            const separator = data.includes('barcode=') ? 'barcode=' : 'bc=';
+            const parts = data.split(separator);
+            if (parts.length > 1) {
+                barcodeData = parts[1].split('&')[0].split('?')[0].split(' ')[0].split(')')[0].split('%')[0].trim();
             }
-        } catch (err) {
-            navigation.navigate('AddProduct', { scannedBarcode: barcodeData });
-        } finally {
-            setScanned(false);
         }
+        
+        Alert.alert(
+            "🔎 PRUEBA DE CAMARA",
+            `LECTURA:\n${data}\n\nRESULTADO:\n[${barcodeData}]`,
+            [{ 
+                text: "BUSCAR", 
+                onPress: async () => {
+                    setIsScanning(false);
+                    try {
+                        const { data: product } = await supabase.from('products').select('*').eq('barcode', barcodeData).single();
+                        if (product) {
+                            navigation.navigate('NewSale', { preselectedProduct: product });
+                        } else {
+                            navigation.navigate('AddProduct', { scannedBarcode: barcodeData });
+                        }
+                    } catch (err) {
+                        navigation.navigate('AddProduct', { scannedBarcode: barcodeData });
+                    } finally {
+                        setScanned(false);
+                    }
+                }
+            },
+            {
+                text: "REINTENTAR",
+                onPress: () => setScanned(false)
+            }]
+        );
     };
 
-    const renderAIModal = () => (
-        <Modal
-            visible={aiModalVisible}
-            transparent={true}
-            animationType="slide"
-            onRequestClose={() => setAiModalVisible(false)}
-        >
+    const renderAIModal = () => {
+        const empLevel = getEmpireLevel(stats.monthSales);
+        return (
+            <Modal
+                visible={aiModalVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setAiModalVisible(false)}
+            >
             <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <View style={styles.modalHeader}>
-                        <MaterialCommunityIcons name="robot-happy" size={32} color="#d4af37" />
-                        <View style={{ flex: 1, marginLeft: 10 }}>
-                            <Text style={styles.modalTitle}>EMPIRE AI COACH</Text>
-                            {aiAdvice && aiAdvice !== "error" && (
-                                <Text style={styles.empireLevelText}>{aiAdvice.empireLevel}</Text>
-                            )}
+                <View style={[styles.aiModalContent, { maxHeight: '90%' }]}>
+                    <View style={styles.aiModalHeader}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                            <MaterialCommunityIcons name="robot" size={32} color="#d4af37" />
+                            <View style={{ marginLeft: 15 }}>
+                                <Text style={styles.aiModalTitle}>EMPIRE AI COACH</Text>
+                                <Text style={styles.aiModalSubtitle}>{empLevel}</Text>
+                            </View>
                         </View>
-                        <TouchableOpacity onPress={() => setAiModalVisible(false)}>
-                            <MaterialCommunityIcons name="close" size={24} color="#666" />
-                        </TouchableOpacity>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+                            <TouchableOpacity
+                                onPress={() => {
+                                    if (!aiAdvice || aiAdvice === 'error') return;
+                                    const shareText = `💎 *CONSEJO DEL EMPIRE AI COACH* 💎\n\nNivel: ${empLevel}\n\n📍 *Estado:* ${aiAdvice.prediction || 'Analizando...'}\n\n🚀 *Estrategia:* ${aiAdvice.strategyB?.plan || aiAdvice.strategyA?.plan || 'Ver más en la app'}\n\n💰 *Sugerencia:* ${aiAdvice.strategyB?.suggestedInvestment || ''}`;
+                                    Linking.openURL(`whatsapp://send?text=${encodeURIComponent(shareText)}`);
+                                }}
+                                style={{ padding: 5 }}
+                            >
+                                <MaterialCommunityIcons name="whatsapp" size={24} color="#25D366" />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => setAiModalVisible(false)} style={{ padding: 5 }}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
 
                     <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
@@ -494,26 +521,26 @@ export default function HomeScreen({ navigation }) {
                             <View style={{ gap: 15 }}>
                                 {/* Urgency Banner */}
                                 <View style={[
-                                    styles.urgencyBanner, 
-                                    aiAdvice.urgency === 'Crítico' ? { borderColor: '#e74c3c', backgroundColor: '#e74c3c20' } :
-                                    aiAdvice.urgency === 'Atención' ? { borderColor: '#f39c12', backgroundColor: '#f39c1220' } :
-                                    { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }
+                                    styles.urgencyBanner,
+                                    (aiAdvice.urgency || 'Estable') === 'Crítico' ? { borderColor: '#e74c3c', backgroundColor: '#e74c3c20' } :
+                                        (aiAdvice.urgency || 'Estable') === 'Atención' ? { borderColor: '#f39c12', backgroundColor: '#f39c1220' } :
+                                            { borderColor: '#2ecc71', backgroundColor: '#2ecc7120' }
                                 ]}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                         <View style={[
-                                            styles.urgencyDot, 
-                                            aiAdvice.urgency === 'Crítico' ? { backgroundColor: '#e74c3c' } :
-                                            aiAdvice.urgency === 'Atención' ? { backgroundColor: '#f39c12' } :
-                                            { backgroundColor: '#2ecc71' }
+                                            styles.urgencyDot,
+                                            (aiAdvice.urgency || 'Estable') === 'Crítico' ? { backgroundColor: '#e74c3c' } :
+                                                (aiAdvice.urgency || 'Estable') === 'Atención' ? { backgroundColor: '#f39c12' } :
+                                                    { backgroundColor: '#2ecc71' }
                                         ]} />
                                         <Text style={[
                                             styles.urgencyLabel,
-                                            aiAdvice.urgency === 'Crítico' ? { color: '#e74c3c' } :
-                                            aiAdvice.urgency === 'Atención' ? { color: '#f39c12' } :
-                                            { color: '#2ecc71' }
-                                        ]}>{aiAdvice.urgency.toUpperCase()}</Text>
+                                            (aiAdvice.urgency || 'Estable') === 'Crítico' ? { color: '#e74c3c' } :
+                                                (aiAdvice.urgency || 'Estable') === 'Atención' ? { color: '#f39c12' } :
+                                                    { color: '#2ecc71' }
+                                        ]}>{String(aiAdvice.urgency || 'ESTABLE').toUpperCase()}</Text>
                                     </View>
-                                    <Text style={styles.urgencyReason}>{aiAdvice.urgencyReason}</Text>
+                                    <Text style={styles.urgencyReason}>{aiAdvice.urgencyReason || 'El negocio avanza según lo esperado.'}</Text>
                                 </View>
 
                                 {/* Decision Simulator Input */}
@@ -586,16 +613,16 @@ export default function HomeScreen({ navigation }) {
                                                 <Text style={styles.planStep}>{aiAdvice.strategyA.plan}</Text>
                                             </View>
                                         )}
-                                        <View style={{alignItems: 'center', marginVertical: -8, zIndex: 10}}>
-                                            <View style={{backgroundColor: '#0a0a0a', paddingHorizontal: 10, paddingVertical: 2, borderRadius: 10, borderWidth: 1, borderColor: '#333'}}>
-                                                <Text style={{color: '#666', fontSize: 10, fontWeight: '900'}}>VS</Text>
+                                        <View style={{ alignItems: 'center', marginVertical: -8, zIndex: 10 }}>
+                                            <View style={{ backgroundColor: '#0a0a0a', paddingHorizontal: 10, paddingVertical: 2, borderRadius: 10, borderWidth: 1, borderColor: '#333' }}>
+                                                <Text style={{ color: '#666', fontSize: 10, fontWeight: '900' }}>VS</Text>
                                             </View>
                                         </View>
                                         {aiAdvice.strategyB && (
                                             <View style={[styles.coachCard, { borderColor: '#3498db60', marginTop: 0, marginBottom: 0 }]}>
                                                 <Text style={[styles.planTitle, { color: '#3498db' }]}>{aiAdvice.strategyB.name}</Text>
                                                 <Text style={styles.planStep}>{aiAdvice.strategyB.plan}</Text>
-                                                
+
                                                 {/* Inversion Suggestion block */}
                                                 {aiAdvice.strategyB.suggestedInvestment && (
                                                     <View style={{ marginTop: 15, padding: 12, backgroundColor: '#3498db15', borderRadius: 8, borderWidth: 1, borderColor: '#3498db30' }}>
@@ -626,14 +653,61 @@ export default function HomeScreen({ navigation }) {
                                     </View>
                                 )}
 
-                                {/* Action Action */}
-                                <TouchableOpacity 
+                                {/* Enviar al Socio (Interno App) */}
+                                {stats.stagnantProducts && stats.stagnantProducts.length > 0 && (
+                                    <TouchableOpacity
+                                        style={[styles.coachActionBtn, { backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#2ecc71', marginBottom: 10 }]}
+                                        onPress={async () => {
+                                            const stagnantContext = stats.stagnantProducts
+                                                .map(p => `${p.name} (Stock: ${p.current_stock} un., Precio $${p.sale_price})`)
+                                                .join(', ');
+                                            const message = `REPORTE DE NEGOCIO: Nivel ${getEmpireLevel(stats.monthSales)}. Estado: ${aiAdvice.prediction || 'Analizando...'}. Stock Crítico/Dormido detectado en: ${stagnantContext}. Por favor, revisa estas prioridades.`;
+                                            
+                                            setAiModalVisible(false);
+                                            setLoading(true);
+                                            try {
+                                                await SecurityService.logActivity('BUSINESS_REPORT', message);
+                                                Alert.alert('✅ ¡Reporte Enviado!', 'Tu socio verá este mensaje al abrir su Dashboard de la App.');
+                                            } catch (e) {
+                                                Alert.alert('Error', 'No se pudo enviar el reporte interno.');
+                                            } finally {
+                                                setLoading(false);
+                                                fetchDashboardStats();
+                                            }
+                                        }}
+                                    >
+                                        <MaterialCommunityIcons name="cellphone-arrow-down" size={20} color="#2ecc71" />
+                                        <Text style={[styles.coachActionBtnText, { color: '#2ecc71' }]}>NOTIFICAR AL SOCIO (EN APP) 📲</Text>
+                                    </TouchableOpacity>
+                                )}
+
+                                {/* Enviar al Aliado (AI) */}
+                                {stats.stagnantProducts && stats.stagnantProducts.length > 0 && (
+                                    <TouchableOpacity
+                                        style={[styles.coachActionBtn, { backgroundColor: '#1a1a2e', borderWidth: 1, borderColor: '#9b59b6', marginBottom: 10 }]}
+                                        onPress={() => {
+                                            setAiModalVisible(false);
+                                            const stagnantContext = stats.stagnantProducts
+                                                .map(p => `${p.name} (Stock: ${p.current_stock} un., Precio $${p.sale_price})`)
+                                                .join(', ');
+                                            navigation.navigate('Inventario', {
+                                                allyPrompt: `Tengo los siguientes productos con stock alto que no están rotando bien: ${stagnantContext}. Necesito ideas de contenido creativo (reels, stories, copies para WhatsApp) para activar las ventas de estos productos sin bajar el precio.`
+                                            });
+                                        }}
+                                    >
+                                        <MaterialCommunityIcons name="robot-excited" size={20} color="#9b59b6" />
+                                        <Text style={[styles.coachActionBtnText, { color: '#9b59b6' }]}>CREAR CONTENIDO (Aliado AI) 🤖</Text>
+                                    </TouchableOpacity>
+                                )}
+
+                                {/* Main Action */}
+                                <TouchableOpacity
                                     style={styles.coachActionBtn}
                                     onPress={() => {
                                         setAiModalVisible(false);
                                         if (aiAdvice.actionId === 'create_promo') navigation.navigate('Catalog');
-                                        else if (aiAdvice.actionId === 'restock') navigation.navigate('Stock');
-                                        else if (aiAdvice.actionId === 'close_budgets') navigation.navigate('Orders');
+                                        else if (aiAdvice.actionId === 'restock') navigation.navigate('Inventario');
+                                        else if (aiAdvice.actionId === 'close_budgets') navigation.navigate('Orders', { initialViewType: 'presupuestos' });
                                         else navigation.navigate('Catalog');
                                     }}
                                 >
@@ -658,6 +732,7 @@ export default function HomeScreen({ navigation }) {
             </View>
         </Modal>
     );
+};
 
     if (isScanning) {
         return (
@@ -665,10 +740,18 @@ export default function HomeScreen({ navigation }) {
                 <CameraView
                     style={StyleSheet.absoluteFillObject}
                     onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
-                    barcodeScannerSettings={{
-                        barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
-                    }}
                 />
+                
+                <View style={styles.scannerOverlay}>
+                    <View style={styles.scannerOutline} />
+                    <Text style={styles.scannerText}>APUNTA AL QR DE PRUEBA</Text>
+                    {scanned && (
+                        <TouchableOpacity style={styles.resetBtn} onPress={() => setScanned(false)}>
+                            <Text style={styles.resetText}>REINTENTAR LECTURA</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+
                 <TouchableOpacity style={styles.closeBtn} onPress={() => setIsScanning(false)}>
                     <MaterialCommunityIcons name="close-circle" size={50} color="#fff" />
                 </TouchableOpacity>
@@ -684,10 +767,10 @@ export default function HomeScreen({ navigation }) {
 
             <SafeAreaView style={styles.safe} edges={['top']}>
                 <View style={styles.header}>
-                    <View>
+                    <TouchableOpacity onPress={() => navigation.navigate('Branding')} activeOpacity={0.7}>
                         <Text style={styles.brandName}>EMPIRE 👑</Text>
-                        <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'Aliado (Power User)'}</Text>
-                    </View>
+                        <Text style={styles.headerRole}>{userRole === 'admin' ? 'Líder Supremo' : 'SOCIO ESTRATÉGICO'}</Text>
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={async () => { await AsyncStorage.removeItem('user_role'); navigation.replace('Login', { fromLogout: true }); }}>
                         <MaterialCommunityIcons name="logout-variant" size={24} color="#d4af37" />
                     </TouchableOpacity>
@@ -710,9 +793,9 @@ export default function HomeScreen({ navigation }) {
                             <Text style={styles.statVal}>${stats.todaySales.toFixed(0)}</Text>
                         </View>
                         <View style={styles.statBrick}>
-                            <Text style={styles.statLab}>{userRole === 'admin' ? 'Balance Neto' : 'Mi Comisión'}</Text>
-                            <Text style={[styles.statVal, { color: (userRole === 'admin' ? (stats.todayNetProfit >= 0 ? '#00ff88' : '#ff4444') : '#00ff88') }]}>
-                                ${userRole === 'admin' ? stats.todayNetProfit.toFixed(0) : stats.monthCommissions.toFixed(0)}
+                            <Text style={styles.statLab}>Balance Neto Hoy</Text>
+                            <Text style={[styles.statVal, { color: stats.todayNetProfit >= 0 ? '#00ff88' : '#ff4444' }]}>
+                                ${stats.todayNetProfit.toFixed(0)}
                             </Text>
                         </View>
                     </View>
@@ -741,40 +824,12 @@ export default function HomeScreen({ navigation }) {
                         </View>
                     )}
 
-                    {/* DAILY MISSIONS - SELLER ONLY */}
-                    {
-                        userRole === 'seller' && missions.length > 0 && (
-                            <View style={styles.missionsSection}>
-                                <Text style={styles.sectionLabel}>MISIONES DEL DÍA ⚔️</Text>
-                                {missions.map(m => (
-                                    <TouchableOpacity
-                                        key={m.id}
-                                        style={styles.missionCard}
-                                        onPress={() => handleMissionAction(m)}
-                                    >
-                                        <View style={[styles.missionIcon, { backgroundColor: m.color + '20' }]}>
-                                            <MaterialCommunityIcons name={m.icon} size={22} color={m.color} />
-                                        </View>
-                                        <View style={styles.missionInfo}>
-                                            <Text style={styles.missionTitle}>{m.title}</Text>
-                                            <Text style={styles.missionDesc}>{m.desc}</Text>
-                                        </View>
-                                        {generatingMission === m.id ? (
-                                            <ActivityIndicator color={m.color} />
-                                        ) : (
-                                            m.type !== 'info' && <MaterialCommunityIcons name="chevron-right" size={20} color="#333" />
-                                        )}
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        )
-                    }
 
                     {/* Minimalist Grid of Actions */}
                     <Text style={styles.sectionLabel}>MÓDULOS DEL IMPERIO</Text>
                     <View style={styles.actionGrid}>
                         <MinimalModule title="Coach personalizado" icon="robot-happy" color="#d4af37" isNew fullWidth onPress={() => setAiModalVisible(true)} />
-                        
+
                         <View style={styles.actionSubGrid}>
                             <MinimalModule title="Catálogo" icon="cellphone-link" color="#00ff88" onPress={() => navigation.navigate('Catalog')} />
                             <MinimalModule title="Clientes" icon="account-group" color="#9b59b6" onPress={() => navigation.navigate('Clients')} />
@@ -792,7 +847,7 @@ export default function HomeScreen({ navigation }) {
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.manualEntryBtn}
-                            onPress={() => navigation.navigate('NewSale', { autoSearch: true })}
+                            onPress={() => navigation.navigate('NewSale', { selectClientFirst: true })}
                         >
                             <MaterialCommunityIcons name="cursor-default-click-outline" size={18} color="#555" />
                             <Text style={styles.manualEntryText}>O CARGAR MANUALMENTE</Text>
@@ -851,28 +906,28 @@ const styles = StyleSheet.create({
     miniBadge: { position: 'absolute', top: 15, right: 15, width: 8, height: 8, borderRadius: 4, backgroundColor: '#d4af37', shadowColor: '#d4af37', shadowRadius: 5, shadowOpacity: 1 },
 
     scannerCenter: { alignItems: 'center', marginTop: 40 },
-    scannerTap: { 
-        width: 180, 
-        height: 180, 
-        borderRadius: 90, 
+    scannerTap: {
+        width: 180,
+        height: 180,
+        borderRadius: 90,
         backgroundColor: '#000', // Essential for shadows to render properly on some devices
-        shadowColor: '#d4af37', 
-        shadowOpacity: 0.7, 
+        shadowColor: '#d4af37',
+        shadowOpacity: 0.7,
         shadowRadius: 30,
         // Remove high elevation which causes square artifacts on many Android versions
-        elevation: 10, 
+        elevation: 10,
         justifyContent: 'center',
         alignItems: 'center'
     },
-    scannerCircle: { 
-        width: 176, 
-        height: 176, 
-        borderRadius: 88, 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        padding: 20, 
-        borderWidth: 1, 
-        borderColor: '#d4af3750' 
+    scannerCircle: {
+        width: 176,
+        height: 176,
+        borderRadius: 88,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+        borderWidth: 1,
+        borderColor: '#d4af3750'
     },
     scannerLabel: { color: '#000', fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 10, letterSpacing: 1 },
     manualEntryBtn: { marginTop: 25, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 15 },
@@ -883,12 +938,12 @@ const styles = StyleSheet.create({
 
     // Modal Styles
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: '#080808', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '85%', borderTopWidth: 1, borderTopColor: '#1a1a1a' },
-    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-    modalTitle: { color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
-    empireLevelText: { color: '#aaa', fontSize: 11, fontWeight: '600', marginTop: 3 },
+    aiModalContent: { backgroundColor: '#080808', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '85%', borderTopWidth: 1, borderTopColor: '#1a1a1a' },
+    aiModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+    aiModalTitle: { color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
+    aiModalSubtitle: { color: '#aaa', fontSize: 11, fontWeight: '600', marginTop: 3 },
     modalBody: { marginBottom: 20 },
-    
+
     urgencyBanner: { padding: 15, borderRadius: 12, borderWidth: 1, marginBottom: 15 },
     urgencyDot: { width: 10, height: 10, borderRadius: 5 },
     urgencyLabel: { fontSize: 12, fontWeight: '900', letterSpacing: 1 },
@@ -897,18 +952,18 @@ const styles = StyleSheet.create({
     coachCard: { backgroundColor: '#111', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#222' },
     coachCardRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
     coachCardText: { color: '#bbb', fontSize: 13, flex: 1, lineHeight: 20 },
-    
+
     planTitle: { color: '#888', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 10 },
     planStep: { color: '#ddd', fontSize: 14, fontWeight: '700', marginBottom: 8, lineHeight: 20 },
 
     predictionBox: { flexDirection: 'row', backgroundColor: '#9b59b615', padding: 15, borderRadius: 12, gap: 12, alignItems: 'center', borderColor: '#9b59b640', borderWidth: 1, marginBottom: 20 },
 
     predictionText: { color: '#e0bbf3', fontSize: 13, fontWeight: '800', flex: 1, lineHeight: 20 },
-    coachActionBtn: { backgroundColor: '#d4af37', padding: 18, borderRadius: 15, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
-    coachActionBtnText: { color: '#000', fontSize: 13, fontWeight: '900', letterSpacing: 1.5 },
+    coachActionBtn: { backgroundColor: '#d4af37', padding: 18, borderRadius: 15, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, minHeight: 60 },
+    coachActionBtnText: { fontSize: 13, fontWeight: '900', letterSpacing: 1 },
     aiAdviceBox: { backgroundColor: '#111', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#d4af3740' },
     aiAdviceText: { color: '#ccc', fontSize: 14, lineHeight: 22 },
-    
+
     simulatorContainer: { backgroundColor: '#181818', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
     simulatorHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
     simulatorTitle: { color: '#9b59b6', fontSize: 11, fontWeight: '900', letterSpacing: 1.2 },
@@ -923,14 +978,14 @@ const styles = StyleSheet.create({
     tableColTitle: { flex: 1, color: '#666', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
     tableRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'center' },
     tableCell: { flex: 1, color: '#bbb', fontSize: 11, fontWeight: '500' },
-    
+
     closeModalBtn: { backgroundColor: '#1a1a1a', padding: 15, borderRadius: 12, alignItems: 'center' },
     closeModalBtnText: { color: '#aaa', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
 
-    trendRadarBox: { flexDirection: 'row', backgroundColor: '#00ff8815', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#00ff8840', marginBottom: 15, gap: 10, alignItems: 'center' },
-    trendRadarText: { color: '#00ff88', fontSize: 13, fontWeight: '800', flex: 1, lineHeight: 20, letterSpacing: 0.5 },
-    tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#333', paddingBottom: 8, marginBottom: 8 },
-    tableColTitle: { flex: 1, color: '#666', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
-    tableRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'center' },
-    tableCell: { flex: 1, color: '#bbb', fontSize: 11, fontWeight: '500' }
+    // Scanner Overlay Styles
+    scannerOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' },
+    scannerOutline: { width: 250, height: 250, borderWidth: 2, borderColor: '#d4af37', borderRadius: 30, borderStyle: 'dashed' },
+    scannerText: { color: '#fff', marginTop: 25, fontWeight: '900', letterSpacing: 2, fontSize: 11, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 10 },
+    resetBtn: { marginTop: 30, backgroundColor: '#d4af37', paddingHorizontal: 25, paddingVertical: 15, borderRadius: 12 },
+    resetText: { color: '#000', fontWeight: '900', fontSize: 12, letterSpacing: 1 }
 });

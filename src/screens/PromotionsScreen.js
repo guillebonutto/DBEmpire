@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Modal, ActivityIndicator, StatusBar, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Modal, ActivityIndicator, StatusBar, ScrollView, Alert, Platform } from 'react-native';
 import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -25,6 +25,8 @@ export default function PromotionsScreen({ navigation }) {
     const [type, setType] = useState('global_percent'); // global_percent, buy_x_get_y, fixed_discount
     const [value, setValue] = useState('');
     const [selectedProducts, setSelectedProducts] = useState([]);
+    const [minQty, setMinQty] = useState('1');
+    const [productSearchQuery, setProductSearchQuery] = useState('');
 
     useEffect(() => {
         fetchPromos();
@@ -72,6 +74,7 @@ export default function PromotionsScreen({ navigation }) {
             description,
             type,
             value: numericValue,
+            min_qty: parseInt(minQty) || 1,
             active: true
         };
 
@@ -122,22 +125,32 @@ export default function PromotionsScreen({ navigation }) {
     };
 
     const handleDeletePromo = async (id) => {
-        Alert.alert(
-            'Eliminar Promoción',
-            '¿Estás seguro?',
-            [
-                { text: 'No', style: 'cancel' },
-                {
-                    text: 'SÍ, BORRAR',
-                    style: 'destructive',
-                    onPress: async () => {
-                        setLoading(true);
-                        await supabase.from('promotions').delete().eq('id', id);
-                        fetchPromos();
+        if (Platform.OS === 'web') {
+            if (confirm('¿Estás seguro de que deseas eliminar esta promoción?')) {
+                setLoading(true);
+                await supabase.from('promotions').delete().eq('id', id);
+                fetchPromos();
+                setLoading(false);
+            }
+        } else {
+            Alert.alert(
+                'Eliminar Promoción',
+                '¿Estás seguro?',
+                [
+                    { text: 'No', style: 'cancel' },
+                    {
+                        text: 'SÍ, BORRAR',
+                        style: 'destructive',
+                        onPress: async () => {
+                            setLoading(true);
+                            await supabase.from('promotions').delete().eq('id', id);
+                            fetchPromos();
+                            setLoading(false);
+                        }
                     }
-                }
-            ]
-        );
+                ]
+            );
+        }
     };
 
     const resetForm = () => {
@@ -146,6 +159,8 @@ export default function PromotionsScreen({ navigation }) {
         setType('global_percent');
         setValue('');
         setSelectedProducts([]);
+        setMinQty('1');
+        setProductSearchQuery('');
         setEditingPromoId(null);
     };
 
@@ -154,6 +169,7 @@ export default function PromotionsScreen({ navigation }) {
         setDescription(promo.description || '');
         setType(promo.type);
         setValue(promo.value?.toString() || '');
+        setMinQty(promo.min_qty?.toString() || '1');
         setSelectedProducts(promo.promotion_products?.map(pp => pp.product_id) || []);
         setEditingPromoId(promo.id);
         setModalVisible(true);
@@ -181,7 +197,8 @@ export default function PromotionsScreen({ navigation }) {
             const result = await GeminiService.generateMarketingCopy(promo.title, promo.description, productsInPromo);
             setGeneratedCopy(result);
         } catch (error) {
-            Alert.alert('Error IA', error.message);
+            if (Platform.OS === 'web') alert(`Error IA: ${error.message}`);
+            else Alert.alert('Error IA', error.message);
             setAiModalVisible(false);
         } finally {
             setAiLoading(false);
@@ -190,7 +207,8 @@ export default function PromotionsScreen({ navigation }) {
 
     const copyToClipboard = async () => {
         await Clipboard.setStringAsync(generatedCopy);
-        Alert.alert('¡Copiado!', 'El texto está listo para pegar en WhatsApp.');
+        if (Platform.OS === 'web') alert('¡Copiado! El texto está listo para pegar en WhatsApp.');
+        else Alert.alert('¡Copiado!', 'El texto está listo para pegar en WhatsApp.');
     };
 
     const renderHeader = () => (
@@ -233,7 +251,7 @@ export default function PromotionsScreen({ navigation }) {
                             {item.description ? <Text style={styles.cardDesc}>{item.description}</Text> : null}
 
                             {/* Linked Products Tags */}
-                            {item.promotion_products && item.promotion_products.length > 0 && (
+                            {item.promotion_products && item.promotion_products.length > 0 ? (
                                 <View style={styles.tagsContainer}>
                                     {item.promotion_products.map((pp, idx) => (
                                         <View key={idx} style={styles.tag}>
@@ -241,6 +259,8 @@ export default function PromotionsScreen({ navigation }) {
                                         </View>
                                     ))}
                                 </View>
+                            ) : (
+                                <Text style={[styles.cardDesc, { fontStyle: 'italic', marginBottom: 10 }]}>✓ Todo el inventario</Text>
                             )}
 
                             <Text style={[styles.statusText, { color: item.active ? '#2ecc71' : '#666' }]}>
@@ -322,6 +342,15 @@ export default function PromotionsScreen({ navigation }) {
                                     keyboardType="numeric"
                                     placeholderTextColor="#666"
                                 />
+                                <Text style={styles.label}>MÍNIMO DE UNIDADES (PACK / X UNIDADES):</Text>
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="Ej. 3 para que se active"
+                                    value={minQty}
+                                    onChangeText={setMinQty}
+                                    keyboardType="numeric"
+                                    placeholderTextColor="#666"
+                                />
                             </>
                         )}
 
@@ -335,32 +364,52 @@ export default function PromotionsScreen({ navigation }) {
                             placeholderTextColor="#666"
                         />
 
-                        {type !== 'global_percent' && (
-                            <>
-                                <Text style={styles.label}>VINCULAR PRODUCTOS:</Text>
-                                <View style={styles.productSelectionList}>
-                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
-                                        {products.map(product => (
-                                            <TouchableOpacity
-                                                key={product.id}
-                                                style={[
-                                                    styles.productChip,
-                                                    selectedProducts.includes(product.id) && styles.productChipSelected
-                                                ]}
-                                                onPress={() => toggleProductSelection(product.id)}
-                                            >
-                                                <Text style={[
-                                                    styles.productChipText,
-                                                    selectedProducts.includes(product.id) && styles.productChipTextSelected
-                                                ]}>
-                                                    {product.name}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        ))}
-                                    </ScrollView>
-                                </View>
-                            </>
-                        )}
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                            <Text style={styles.label}>VINCULAR PRODUCTOS {selectedProducts.length > 0 ? `(${selectedProducts.length})` : '(GLOBAL)'}:</Text>
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                                <TouchableOpacity onPress={() => setSelectedProducts(products.map(p => p.id))}>
+                                    <Text style={{ color: '#d4af37', fontSize: 10, fontWeight: 'bold' }}>TODO</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => setSelectedProducts([])}>
+                                    <Text style={{ color: '#666', fontSize: 10, fontWeight: 'bold' }}>NADA</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        <View style={styles.searchWrapper}>
+                            <MaterialCommunityIcons name="magnify" size={20} color="#666" />
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder="Filtrar productos..."
+                                placeholderTextColor="#444"
+                                value={productSearchQuery}
+                                onChangeText={setProductSearchQuery}
+                            />
+                        </View>
+
+                        <View style={styles.productSelectionList}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+                                {products
+                                    .filter(p => !productSearchQuery || p.name.toLowerCase().includes(productSearchQuery.toLowerCase()))
+                                    .map(product => (
+                                        <TouchableOpacity
+                                            key={product.id}
+                                            style={[
+                                                styles.productChip,
+                                                selectedProducts.includes(product.id) && styles.productChipSelected
+                                            ]}
+                                            onPress={() => toggleProductSelection(product.id)}
+                                        >
+                                            <Text style={[
+                                                styles.productChipText,
+                                                selectedProducts.includes(product.id) && styles.productChipTextSelected
+                                            ]}>
+                                                {product.name}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ))}
+                            </ScrollView>
+                        </View>
 
                         <TouchableOpacity style={styles.saveBtn} onPress={handleSavePromo}>
                             {loading ? <ActivityIndicator color="black" /> : <Text style={styles.saveText}>{editingPromoId ? 'Actualizar Promo' : 'Publicar Promo'}</Text>}
@@ -454,6 +503,26 @@ const styles = StyleSheet.create({
     productChipText: { color: '#888', fontSize: 12, fontWeight: 'bold' },
     productChipTextSelected: { color: '#000' },
 
+    // Search Styles
+    searchWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#1a1a1a',
+        paddingHorizontal: 15,
+        borderRadius: 12,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    searchInput: {
+        flex: 1,
+        color: 'white',
+        paddingVertical: 12,
+        marginLeft: 10,
+        fontSize: 14
+    },
+
+    saveBtn: { backgroundColor: '#d4af37', padding: 20, borderRadius: 15, alignItems: 'center', marginTop: 10 },
     saveText: { color: 'black', fontWeight: '900', fontSize: 18, letterSpacing: 1 },
     cancelBtn: { marginTop: 20, marginBottom: 30, alignItems: 'center' },
     cancelText: { color: '#666', fontSize: 16, fontWeight: 'bold' },

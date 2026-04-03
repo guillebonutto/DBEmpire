@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput, Modal, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput, Modal, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -306,56 +306,78 @@ export default function ShippingPackagesScreen({ navigation }) {
     };
 
     const updatePackageStatus = async (packageId, newStatus) => {
-        try {
-            const updateData = { status: newStatus };
-            if (newStatus === 'delivered') {
-                updateData.delivered_at = new Date().toISOString();
+        const performUpdate = async () => {
+            try {
+                const updateData = { status: newStatus };
+                if (newStatus === 'delivered') {
+                    updateData.delivered_at = new Date().toISOString();
 
-                // 📦 STOCK ARRIVAL LOGIC
-                // 1. Get products in this package
-                const { data: items, error: fetchError } = await supabase
-                    .from('supplier_order_items')
-                    .select('id, quantity, product_id')
-                    .eq('shipping_package_id', packageId);
+                    // 📦 STOCK ARRIVAL LOGIC
+                    // 1. Get products in this package
+                    const { data: items, error: fetchError } = await supabase
+                        .from('supplier_order_items')
+                        .select('id, quantity, product_id')
+                        .eq('shipping_package_id', packageId);
 
-                if (fetchError) throw fetchError;
+                    if (fetchError) throw fetchError;
 
-                // 2. Add to Córdoba stock
-                for (const item of items) {
-                    if (item.product_id) {
-                        const { data: product } = await supabase
-                            .from('products')
-                            .select('stock_cordoba, current_stock')
-                            .eq('id', item.product_id)
-                            .single();
-
-                        if (product) {
-                            const newCba = (product.stock_cordoba || 0) + item.quantity;
-                            // Adding to Cordoba makes it available again in total current_stock
-                            const newTotal = (product.current_stock || 0) + item.quantity;
-
-                            await supabase
+                    // 2. Add to Córdoba stock
+                    for (const item of items) {
+                        if (item.product_id) {
+                            const { data: product } = await supabase
                                 .from('products')
-                                .update({
-                                    stock_cordoba: newCba,
-                                    current_stock: newTotal
-                                })
-                                .eq('id', item.product_id);
+                                .select('stock_cordoba, current_stock')
+                                .eq('id', item.product_id)
+                                .single();
+
+                            if (product) {
+                                const newCba = (product.stock_cordoba || 0) + item.quantity;
+                                // Adding to Cordoba makes it available again in total current_stock
+                                const newTotal = (product.current_stock || 0) + item.quantity;
+
+                                await supabase
+                                    .from('products')
+                                    .update({
+                                        stock_cordoba: newCba,
+                                        current_stock: newTotal
+                                    })
+                                    .eq('id', item.product_id);
+                            }
                         }
                     }
                 }
+
+                const { error } = await supabase
+                    .from('shipping_packages')
+                    .update(updateData)
+                    .eq('id', packageId);
+
+                if (error) throw error;
+                fetchPackages();
+            } catch (err) {
+                console.error('Status update error:', err);
+                if (Platform.OS === 'web') alert('Error: No se pudo actualizar el estado: ' + err.message);
+                else Alert.alert('Error', 'No se pudo actualizar el estado: ' + err.message);
             }
+        };
 
-            const { error } = await supabase
-                .from('shipping_packages')
-                .update(updateData)
-                .eq('id', packageId);
-
-            if (error) throw error;
-            fetchPackages();
-        } catch (err) {
-            console.error('Status update error:', err);
-            Alert.alert('Error', 'No se pudo actualizar el estado: ' + err.message);
+        if (newStatus === 'delivered') {
+            if (Platform.OS === 'web') {
+                if (window.confirm('¿Confirmar recepción del paquete? Se sumará al inventario de Córdoba.')) {
+                    performUpdate();
+                }
+            } else {
+                Alert.alert(
+                    'Confirmar Recepción',
+                    '¿Confirmas que llegó el paquete? Se sumará el stock automáticamente.',
+                    [
+                        { text: 'Cancelar', style: 'cancel' },
+                        { text: 'Confirmar', onPress: performUpdate }
+                    ]
+                );
+            }
+        } else {
+            performUpdate();
         }
     };
 

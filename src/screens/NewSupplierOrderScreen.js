@@ -5,10 +5,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFinanceStore } from '../store/useFinanceStore';
 
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 export default function NewSupplierOrderScreen({ navigation, route }) {
+    const { addSupplierOrderLocal, updateSupplierOrderLocal, setFinanceState, supplierOrders: orders, fetchAllData } = useFinanceStore();
+
     const [purchaseDate, setPurchaseDate] = useState(new Date());
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [provider, setProvider] = useState('');
@@ -21,6 +24,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
     const [courier, setCourier] = useState(''); // Andreani, OCA, Via Cargo
     const [loading, setLoading] = useState(false);
     const [isInitialLoad, setIsInitialLoad] = useState(true);
+    const [isConsignment, setIsConsignment] = useState(false);
 
     // Supplier State
     const [suppliersList, setSuppliersList] = useState([]);
@@ -78,6 +82,10 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     if (match) setSelectedSupplierId(match.id);
                 }
 
+                if (order.status === 'consigned') {
+                    setIsConsignment(true);
+                }
+
                 loadLinkedItems(order.id);
             }
         });
@@ -131,14 +139,16 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
         } catch (err) {
             console.error('Error loading items:', err);
-            Alert.alert('Error', 'No pudimos cargar los items: ' + err.message);
+            if (Platform.OS === 'web') alert('Error: No pudimos cargar los items: ' + err.message);
+            else Alert.alert('Error', 'No pudimos cargar los items: ' + err.message);
             setIsInitialLoad(false);
         }
     };
 
     const parseItemsFromDescription = () => {
         if (!itemsDesc) {
-            Alert.alert('Aviso', 'No hay descripción detallada para procesar.');
+            if (Platform.OS === 'web') alert('Aviso: No hay descripción detallada para procesar.');
+            else Alert.alert('Aviso', 'No hay descripción detallada para procesar.');
             return;
         }
 
@@ -171,12 +181,15 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
             if (newItems.length > 0) {
                 setSelectedProducts(prev => [...prev, ...newItems]);
-                Alert.alert('✨ Magia', `He recuperado ${newItems.length} productos detectados en las notas.`);
+                if (Platform.OS === 'web') alert(`✨ Magia: He recuperado ${newItems.length} productos detectados en las notas.`);
+                else Alert.alert('✨ Magia', `He recuperado ${newItems.length} productos detectados en las notas.`);
             } else {
-                Alert.alert('Aviso', 'No pude detectar el formato "Producto (xCantidad)" en las notas.');
+                if (Platform.OS === 'web') alert('Aviso: No pude detectar el formato "Producto (xCantidad)" en las notas.');
+                else Alert.alert('Aviso', 'No pude detectar el formato "Producto (xCantidad)" en las notas.');
             }
         } catch (e) {
-            Alert.alert('Error', 'No se pudo procesar la descripción.');
+            if (Platform.OS === 'web') alert('Error: No se pudo procesar la descripción.');
+            else Alert.alert('Error', 'No se pudo procesar la descripción.');
         }
     };
 
@@ -328,7 +341,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
 
     const handleSave = async () => {
         if (!provider) {
-            Alert.alert('Error', 'El nombre del proveedor es obligatorio.');
+            if (Platform.OS === 'web') alert('Error: El nombre del proveedor es obligatorio.');
+            else Alert.alert('Error', 'El nombre del proveedor es obligatorio.');
             return;
         }
 
@@ -339,35 +353,116 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 tracking_number: tracking || null,
                 items_description: itemsDesc,
                 total_cost: parseFloat(cost) || 0,
-                discount: parseFloat(discount) || 0,
+                discount: isConsignment ? (parseFloat(discount) || 0) : (parseFloat(discount) || 0),
                 installments_total: parseInt(installmentsTotal) || 1,
                 installments_paid: parseInt(installmentsPaid) || 0,
                 notes: courier,
                 created_at: purchaseDate.toISOString(),
-                supplier_id: selectedSupplierId
+                supplier_id: selectedSupplierId,
+                status: isConsignment ? 'consigned' : (route.params?.orderToEdit?.status || 'pending')
             };
 
             let orderId;
 
+            const prevOrders = [...orders];
+
             if (route.params?.orderToEdit) {
-                // UPDATE
+                // OPTIMISTIC UPDATE
                 orderId = route.params.orderToEdit.id;
+                updateSupplierOrderLocal({ id: orderId, ...payload });
+
+                const oldPaid = route.params.orderToEdit.installments_paid || 0;
+                const newPaid = payload.installments_paid;
+
                 const { error } = await supabase
                     .from('supplier_orders')
                     .update(payload)
                     .eq('id', orderId);
 
                 if (error) throw error;
+
+                // --- TIMESTAMP-BASED SYNC (NO IDs) ---
+                if (selectedProducts.length > 0) {
+                    const syncKey = payload.created_at; // The unique timestamp of the order
+                    
+                    // 1. Delete previous expenses that match this specific timestamp and category
+                    const oldTimestamp = route.params.orderToEdit.created_at;
+                    await supabase
+                        .from('expenses')
+                        .delete()
+                        .eq('category', 'Inventario')
+                        .eq('created_at', oldTimestamp);
+
+                    // 2. Prepare new clean expenses (Plain array, No IDs)
+                    const newExpenses = [];
+                    for (const item of selectedProducts) {
+                        const name = item.product.name || item.tempName || 'Producto Desconocido';
+                        const unitCost = parseFloat(item.cost) || 0;
+                        const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
+                        
+                        if (unitCost > 0 && totalQty > 0) {
+                            newExpenses.push({
+                                description: `Inventario: ${name}`,
+                                amount: unitCost * totalQty,
+                                category: 'Inventario',
+                                product_id: item.isNew ? null : item.product.id,
+                                quantity: totalQty,
+                                details: item.variants.map(v => ({ 
+                                    color: v.color || 'General', 
+                                    qty: parseInt(v.quantity)
+                                })),
+                                created_at: syncKey // Link by sharing the exact timestamp
+                            });
+                        }
+                    }
+
+                    if (newExpenses.length > 0) {
+                        await supabase.from('expenses').insert(newExpenses);
+                    }
+                }
             } else {
-                // INSERT
+                // INSERT - OPTIMISTIC
+                const optimisticId = `local-${Date.now()}`;
+                addSupplierOrderLocal({ id: optimisticId, ...payload, status: 'pending' });
+
                 const { data: newOrder, error: insertError } = await supabase
                     .from('supplier_orders')
-                    .insert({ ...payload, status: 'pending' })
+                    .insert({ ...payload })
                     .select()
                     .single();
 
                 if (insertError) throw insertError;
                 orderId = newOrder.id;
+
+                // --- TIMESTAMP-BASED SYNC (NEW) ---
+                if (selectedProducts.length > 0) {
+                    const syncKey = payload.created_at;
+                    const newExpenses = [];
+                    for (const item of selectedProducts) {
+                        const name = item.product.name || item.tempName || 'Producto Desconocido';
+                        const unitCost = parseFloat(item.cost) || 0;
+                        const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
+                        
+                        if (unitCost > 0 && totalQty > 0) {
+                            newExpenses.push({
+                                description: `Inventario: ${name}`,
+                                amount: unitCost * totalQty,
+                                category: 'Inventario',
+                                product_id: item.isNew ? null : item.product.id,
+                                quantity: totalQty,
+                                details: item.variants.map(v => ({ 
+                                    color: v.color || 'General', 
+                                    qty: parseInt(v.quantity)
+                                })),
+                                created_at: syncKey
+                            });
+                        }
+                    }
+
+                    if (newExpenses.length > 0) {
+                        await supabase.from('expenses').insert(newExpenses);
+                    }
+                }
             }
 
             // Handle Linked Items (Delete all and re-insert for simplicity on edit)
@@ -418,11 +513,21 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 if (itemsError) throw itemsError;
             }
 
-            Alert.alert('✅ Éxito', `Orden ${route.params?.orderToEdit ? 'actualizada' : 'creada'} correctamente.`, [
-                { text: 'OK', onPress: () => navigation.goBack() }
-            ]);
+            // Trigger silent fetch for deep sync
+            fetchAllData(true);
+
+            if (Platform.OS === 'web') {
+                alert(`✅ Éxito: Orden ${route.params?.orderToEdit ? 'actualizada' : 'creada'} correctamente.`);
+                navigation.goBack();
+            } else {
+                Alert.alert('✅ Éxito', `Orden ${route.params?.orderToEdit ? 'actualizada' : 'creada'} correctamente.`, [
+                    { text: 'OK', onPress: () => navigation.goBack() }
+                ]);
+            }
         } catch (err) {
-            Alert.alert('Error', 'No se pudo guardar: ' + err.message);
+            setFinanceState({ supplierOrders: prevOrders }); // ROLLBACK
+            if (Platform.OS === 'web') alert('Error: No se pudo guardar: ' + err.message);
+            else Alert.alert('Error', 'No se pudo guardar: ' + err.message);
         } finally {
             setLoading(false);
         }
@@ -479,6 +584,23 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 </View>
 
                 <Text style={styles.label}>Número de Seguimiento (Tracking)</Text>
+                
+                <View style={styles.consignmentToggleContainer}>
+                    <TouchableOpacity 
+                        style={[styles.consignmentToggle, isConsignment && styles.consignmentToggleActive]}
+                        onPress={() => setIsConsignment(!isConsignment)}
+                    >
+                        <MaterialCommunityIcons 
+                            name={isConsignment ? "handshake" : "handshake-outline"} 
+                            size={20} 
+                            color={isConsignment ? "#000" : "#d4af37"} 
+                        />
+                        <Text style={[styles.consignmentToggleText, isConsignment && styles.consignmentToggleTextActive]}>
+                            ES CONSIGNACIÓN (SIN DEUDA)
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+
                 <View style={styles.trackingRow}>
                     <MaterialCommunityIcons name="barcode-scan" size={24} color="#666" style={{ marginRight: 10 }} />
                     <TextInput
@@ -553,16 +675,6 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     keyboardType="numeric"
                     value={cost}
                     onChangeText={setCost}
-                />
-
-                <Text style={styles.label}>Descuento (Monto Fijo $)</Text>
-                <TextInput
-                    style={[styles.input, { color: '#2ecc71', borderColor: discount > 0 ? '#2ecc71' : '#222' }]}
-                    placeholder="0.00"
-                    placeholderTextColor="#666"
-                    keyboardType="numeric"
-                    value={discount}
-                    onChangeText={setDiscount}
                 />
 
                 {parseFloat(discount) > 0 && (
@@ -684,7 +796,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                                                     fetchSuppliers();
                                                 }
                                             } catch (err) {
-                                                Alert.alert('Error', 'No se pudo crear el proveedor. Verificá si ya existe.');
+                                                if (Platform.OS === 'web') alert('Error: No se pudo crear el proveedor. Verificá si ya existe.');
+                                                else Alert.alert('Error', 'No se pudo crear el proveedor. Verificá si ya existe.');
                                             }
                                         }}
                                     >
@@ -959,4 +1072,29 @@ const styles = StyleSheet.create({
     courierTextActive: { color: '#000', fontWeight: '900' },
     qtyBadgeMini: { backgroundColor: '#d4af37', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, marginLeft: 8 },
     qtyBadgeText: { color: '#000', fontSize: 10, fontWeight: 'bold' },
+
+    // Consignment Toggle
+    consignmentToggleContainer: { marginBottom: 20 },
+    consignmentToggle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 15,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#d4af37',
+        backgroundColor: 'rgba(212, 175, 55, 0.05)',
+        gap: 10
+    },
+    consignmentToggleActive: {
+        backgroundColor: '#d4af37',
+    },
+    consignmentToggleText: {
+        color: '#d4af37',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1
+    },
+    consignmentToggleTextActive: {
+        color: '#000',
+    }
 });

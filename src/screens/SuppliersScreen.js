@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ActivityIndicator, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ActivityIndicator, ScrollView, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -112,38 +112,45 @@ export default function SuppliersScreen({ navigation }) {
             setEditingSupplier(null);
             setFormData({ name: '', category: '', phone: '', email: '', notes: '' });
             fetchSuppliers();
-            Alert.alert('✅ Éxito', editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado');
-        } catch (err) {
-            Alert.alert('Error', 'No se pudo guardar el proveedor.');
+            if (Platform.OS === 'web') alert(`✅ Éxito: ${editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado'}`);
+            else Alert.alert('✅ Éxito', editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado');
+        } catch (error) {
+            if (Platform.OS === 'web') alert(`Falla: ${error.message}`);
+            else Alert.alert('Falla', error.message);
         } finally {
             setLoading(false);
         }
     };
 
     const handleDelete = (supplier) => {
-        Alert.alert(
-            'Eliminar Proveedor',
-            `¿Estás seguro de que quieres eliminar a "${supplier.name}"?`,
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Eliminar',
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            const { error } = await supabase
-                                .from('suppliers')
-                                .delete()
-                                .eq('id', supplier.id);
-                            if (error) throw error;
-                            fetchSuppliers();
-                        } catch (err) {
-                            Alert.alert('Error', 'No se puede eliminar (es posible que tenga órdenes asociadas).');
-                        }
-                    }
-                }
-            ]
-        );
+        const performDelete = async () => {
+            try {
+                const { error } = await supabase
+                    .from('suppliers')
+                    .delete()
+                    .eq('id', supplier.id);
+                if (error) throw error;
+                fetchSuppliers();
+            } catch (err) {
+                if (Platform.OS === 'web') alert('Error: No se puede eliminar (es posible que tenga órdenes asociadas).');
+                else Alert.alert('Error', 'No se puede eliminar (es posible que tenga órdenes asociadas).');
+            }
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm(`¿Estás seguro de que quieres eliminar a "${supplier.name}"?`)) {
+                performDelete();
+            }
+        } else {
+            Alert.alert(
+                'Eliminar Proveedor',
+                `¿Estás seguro de que quieres eliminar a "${supplier.name}"?`,
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Eliminar', style: 'destructive', onPress: performDelete }
+                ]
+            );
+        }
     };
 
     const openModal = (supplier = null) => {
@@ -228,7 +235,7 @@ export default function SuppliersScreen({ navigation }) {
                                             <TouchableOpacity
                                                 key={p.id}
                                                 style={styles.miniProductCard}
-                                                onPress={() => navigation.navigate('ProductDetail', { product: p })}
+                                                onPress={() => navigation.navigate('Inventario', { marketingProductId: p.id })}
                                             >
                                                 {p.image_url ? (
                                                     <Image source={{ uri: p.image_url }} style={styles.miniImage} />
@@ -237,8 +244,15 @@ export default function SuppliersScreen({ navigation }) {
                                                         <MaterialCommunityIcons name="image-off" size={20} color="#333" />
                                                     </View>
                                                 )}
-                                                <Text style={styles.miniProductName} numberOfLines={1}>{p.name}</Text>
+                                                <Text style={styles.miniProductName} numberOfLines={2}>{p.name}</Text>
                                                 <Text style={styles.miniProductStock}>Stock: {p.current_stock}</Text>
+                                                <TouchableOpacity 
+                                                    style={styles.aiGenerateBtn}
+                                                    onPress={() => navigation.navigate('Inventario', { marketingProductId: p.id })}
+                                                >
+                                                    <MaterialCommunityIcons name="robot-excited-outline" size={16} color="#d4af37" />
+                                                    <Text style={styles.aiGenerateText}>IDEAS</Text>
+                                                </TouchableOpacity>
                                             </TouchableOpacity>
                                         ))
                                     ) : (
@@ -397,11 +411,13 @@ const styles = StyleSheet.create({
     productGalleryContainer: { marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#1a1a1a' },
     galleryLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 12 },
     productScroll: { flexDirection: 'row' },
-    miniProductCard: { width: 90, marginRight: 15, alignItems: 'center' },
+    miniProductCard: { width: 95, marginRight: 15, alignItems: 'center', backgroundColor: '#0a0a0a', padding: 8, borderRadius: 12, borderWidth: 1, borderColor: '#1a1a1a' },
     miniImage: { width: 80, height: 80, borderRadius: 10, backgroundColor: '#111', marginBottom: 8 },
     miniImagePlaceholder: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#222', borderStyle: 'dashed' },
-    miniProductName: { color: '#eee', fontSize: 10, fontWeight: 'bold', textAlign: 'center' },
-    miniProductStock: { color: '#666', fontSize: 9, marginTop: 2 },
+    miniProductName: { color: '#eee', fontSize: 10, fontWeight: 'bold', textAlign: 'center', height: 28 },
+    miniProductStock: { color: '#666', fontSize: 9, marginTop: 2, marginBottom: 8 },
+    aiGenerateBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#333', paddingVertical: 4, paddingHorizontal: 6, borderRadius: 6, gap: 3 },
+    aiGenerateText: { color: '#d4af37', fontSize: 8, fontWeight: '900' },
     noProductsText: { color: '#333', fontSize: 11, fontStyle: 'italic', paddingVertical: 10 },
 
     cardHeaderArea: { paddingBottom: 10 },

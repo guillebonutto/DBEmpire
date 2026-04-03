@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView } from 'react-native'; // Added ScrollView
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView, Platform } from 'react-native'; // Added ScrollView
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
@@ -15,6 +15,10 @@ import NetInfo from '@react-native-community/netinfo';
 
 import { GlobalDataService } from '../services/GlobalDataService';
 
+import { useProductStore } from '../store/useProductStore';
+import { useClientStore } from '../store/useClientStore';
+import { useAuthStore } from '../store/useAuthStore';
+
 // New Components
 import CartItem from '../components/CartItem';
 import ClientSelector from '../components/ClientSelector';
@@ -24,13 +28,36 @@ import SaleTypeSelector from '../components/SaleTypeSelector';
 import ProductModal from '../components/ProductModal';
 import ClientModal from '../components/ClientModal';
 
+import { useFinanceStore } from '../store/useFinanceStore';
+
 export default function NewSaleScreen({ navigation, route }) {
-    const [cart, setCart] = useState([]);
-    const [products, setProducts] = useState(GlobalDataService.getProducts());
-    const [clients, setClients] = useState(GlobalDataService.getClients());
-    const [promos, setPromos] = useState(GlobalDataService.getPromotions());
-    const [commissionRate, setCommissionRate] = useState(GlobalDataService.getSetting('commission_rate') || 0.10);
-    const [currentUserRole, setCurrentUserRole] = useState('seller');
+    const { products, updateProductStock, fetchProducts, setProducts } = useProductStore();
+    const { clients, addClientLocally, fetchClients } = useClientStore();
+    const { userRole: currentUserRole } = useAuthStore();
+    const { sales, saleItems, addSaleLocal, setFinanceState } = useFinanceStore();
+    
+    // We still need promos and commission manually or via a settings store, for now we keep them local using GlobalDataService initially.
+    const { 
+        cartItems: cart, 
+        addToCart, 
+        removeFromCart, 
+        updateCartQty, 
+        splitCartItem, 
+        manualOverrides, 
+        setManualOverride,
+        resetCart: clearCart 
+    } = useFinanceStore();
+
+    // Helper to get regional price
+    const getRegionalPrice = (product, location) => {
+        if (!product) return 0;
+        if (location === 'cordoba') {
+            return parseFloat(product.sale_price_cordoba) || parseFloat(product.sale_price) || 0;
+        }
+        return parseFloat(product.sale_price) || 0;
+    };
+    const [promos, setPromos] = useState([]);
+    const [commissionRate, setCommissionRate] = useState(0.10);
 
     // Modals
     const [productModalVisible, setProductModalVisible] = useState(false);
@@ -64,20 +91,10 @@ export default function NewSaleScreen({ navigation, route }) {
     const [scanned, setScanned] = useState(false);
 
     useEffect(() => {
-        AsyncStorage.getItem('user_role').then(role => {
-            if (role) setCurrentUserRole(role);
-        });
-
         requestAnimationFrame(() => {
             if (route.params?.preselectedProduct) {
                 const product = route.params.preselectedProduct;
-                setCart(prev => {
-                    const existing = prev.find(item => item.id === product.id);
-                    if (existing) {
-                        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
-                    }
-                    return [...prev, { ...product, qty: 1 }];
-                });
+                addToCart(product, 1, selectedClient?.id);
                 navigation.setParams({ preselectedProduct: null });
             }
 
@@ -86,26 +103,32 @@ export default function NewSaleScreen({ navigation, route }) {
                 navigation.setParams({ mode: null });
             }
 
-            if (route.params?.autoSearch) {
+            if (route.params?.selectClientFirst) {
+                // Open client modal first, then product selection afterwards
+                setSelectClientFirstMode(true);
+                setClientModalVisible(true);
+                navigation.setParams({ selectClientFirst: null });
+            } else if (route.params?.autoSearch) {
+                // Legacy: Open product modal directly
                 setProductModalVisible(true);
                 navigation.setParams({ autoSearch: null });
             }
         });
-    }, [route.params?.preselectedProduct, route.params?.mode, route.params?.autoSearch]);
+    }, [route.params?.preselectedProduct, route.params?.mode, route.params?.autoSearch, route.params?.selectClientFirst]);
 
     const fetchInitialData = async () => {
-        // If we already have data, don't show loading spinner (fluidity)
         const hasData = products.length > 0;
         if (!hasData) setLoading(true);
 
         try {
-            // Fresh download in background
-            await GlobalDataService.preloadAll();
-            setProducts(GlobalDataService.getProducts());
-            setClients(GlobalDataService.getClients());
+            // Trigger parallel fetch without blocking UI if data exists
+            await Promise.all([
+                fetchProducts(),
+                fetchClients()
+            ]);
+
             setPromos(GlobalDataService.getPromotions());
             setCommissionRate(parseFloat(GlobalDataService.getSetting('commission_rate')) || 0.10);
-
         } catch (error) {
             console.log('Error fetching initial data:', error);
         } finally {
@@ -119,6 +142,16 @@ export default function NewSaleScreen({ navigation, route }) {
             requestPermission();
         }, [])
     );
+
+    // Auto-deselect promo if it no longer applies
+    useEffect(() => {
+        if (selectedPromo) {
+            const isStillAvailable = availablePromos.some(p => p.id === selectedPromo.id);
+            if (!isStillAvailable) {
+                setSelectedPromo(null);
+            }
+        }
+    }, [availablePromos, selectedPromo]);
 
     const handleAddProductPress = () => {
         if (!selectedClient) {
@@ -140,7 +173,8 @@ export default function NewSaleScreen({ navigation, route }) {
         const available = getAvailableStock(item);
 
         if (available <= 0) {
-            Alert.alert('Sin Stock', 'No queda stock disponible para este producto (revisa tu carrito).');
+            if (Platform.OS === 'web') alert('Sin Stock: No queda stock disponible para este producto (revisa tu carrito).');
+            else Alert.alert('Sin Stock', 'No queda stock disponible para este producto (revisa tu carrito).');
             return;
         }
 
@@ -185,49 +219,33 @@ export default function NewSaleScreen({ navigation, route }) {
             const available = getAvailableStock(product);
             if (available > 0) {
                 // Add to cart directly (1 unit, no color)
-                setCart(prev => {
-                    const existing = prev.find(item => item.id === product.id && !item.color);
-                    if (existing) {
-                        return prev.map(item => (item.id === product.id && !item.color) ? { ...item, qty: item.qty + 1 } : item);
-                    }
-                    return [...prev, { ...product, qty: 1, color: null }];
-                });
-                Alert.alert('✅ Agregado', `${product.name} (+1)`);
+                addToCart(product, 1, selectedClient?.id);
+                if (Platform.OS === 'web') alert(`✅ Agregado: ${product.name} (+1)`);
+                else Alert.alert('✅ Agregado', `${product.name} (+1)`);
             } else {
-                Alert.alert('Sin Stock', `No hay stock disponible de ${product.name}`);
+                if (Platform.OS === 'web') alert(`Sin Stock: No hay stock disponible de ${product.name}`);
+                else Alert.alert('Sin Stock', `No hay stock disponible de ${product.name}`);
             }
         } else {
-            Alert.alert('No encontrado', `No existe producto con código: ${data}`);
+            if (Platform.OS === 'web') alert(`No encontrado: No existe producto con código: ${barcodeData}`);
+            else Alert.alert('No encontrado', `No existe producto con código: ${barcodeData}`);
         }
     };
 
     const confirmAddToCart = (product) => {
         // If product has variants but no color selected, alert user
         if (product.variants && product.variants.length > 0 && !selectedColor) {
-            Alert.alert('Color Requerido', 'Por favor selecciona un color para este producto.');
+            if (Platform.OS === 'web') alert('Color Requerido: Por favor selecciona un color para este producto.');
+            else Alert.alert('Color Requerido', 'Por favor selecciona un color para este producto.');
             return;
         }
 
-        setCart(prev => {
-            const existing = prev.find(item => item.id === product.id && item.color === selectedColor);
-            if (existing) {
-                return prev.map(item => (item.id === product.id && item.color === selectedColor) ? { ...item, qty: item.qty + tempQty } : item);
-            }
-            return [...prev, { ...product, qty: tempQty, color: selectedColor }];
-        });
+        addToCart(product, tempQty, selectedClient?.id, selectedColor);
+        
         setExpandedProductId(null);
         setTempQty(1);
         setSelectedColor(null);
         // Do NOT close modal, allow multiple adds
-    };
-
-    // Keep legacy for safety if referenced elsewhere, but unused now
-    const addToCart = (product) => {
-        confirmAddToCart({ ...product, qty: 1 }); // Fallback
-    };
-
-    const removeFromCart = (id, color) => {
-        setCart(prev => prev.filter(item => !(item.id === id && item.color === color)));
     };
 
     const calculateTotals = () => {
@@ -237,27 +255,75 @@ export default function NewSaleScreen({ navigation, route }) {
         let promoDetail = '';
 
         cart.forEach(item => {
-            const itemTotal = item.sale_price * item.qty;
-            const itemCost = item.cost_price * item.qty;
+            // Skip invalid items or bundles without proper pricing
+            if (!item || item.qty === undefined || item.qty === null) {
+                console.log('Invalid item in cart:', item);
+                return;
+            }
+
+            const regionalPrice = getRegionalPrice(item, saleLocation);
+            // Validate price is a number
+            if (typeof regionalPrice !== 'number' || isNaN(regionalPrice)) {
+                console.log('Invalid price for item:', item.name, 'price:', regionalPrice);
+                return; // Skip this item if price is invalid
+            }
+
+            const itemTotal = regionalPrice * item.qty;
+            const itemCost = (item.cost_price || 0) * item.qty;
             subtotal += itemTotal;
             totalProfit += (itemTotal - itemCost);
         });
 
         // Apply Promotion Logic
-        if (selectedPromo) {
+        if (selectedPromo && selectedPromo.value !== undefined && selectedPromo.value !== null) {
+            const promoProductIds = (selectedPromo.promotion_products || []).map(pp => pp.product_id);
+            const hasProductLinks = promoProductIds.length > 0;
+            const minRequired = selectedPromo.min_qty || 1;
+
             if (selectedPromo.type === 'global_percent') {
-                discount = subtotal * (selectedPromo.value / 100);
-                promoDetail = `Desc. ${Math.round(selectedPromo.value)}% Global`;
+                if (hasProductLinks) {
+                    let selectionMet = false;
+                    cart.forEach(item => {
+                        if (promoProductIds.includes(item.id)) {
+                            if (item.qty >= minRequired) {
+                                const price = getRegionalPrice(item, saleLocation);
+                                discount += (price * item.qty) * (selectedPromo.value / 100);
+                                selectionMet = true;
+                            }
+                        }
+                    });
+                    promoDetail = selectionMet ? `Desc. ${Math.round(selectedPromo.value)}% (Min: ${minRequired})` : `Faltan unidades (Min: ${minRequired})`;
+                } else {
+                    discount = subtotal * (selectedPromo.value / 100);
+                    promoDetail = `Desc. ${Math.round(selectedPromo.value)}% Global`;
+                }
             } else if (selectedPromo.type === 'fixed_discount') {
-                discount = selectedPromo.value;
-                promoDetail = `Desc. Fijo -$${selectedPromo.value}`;
+                if (hasProductLinks) {
+                    let totalFixedDiscount = 0;
+                    let hasQualifying = false;
+                    cart.forEach(item => {
+                        if (promoProductIds.includes(item.id) && item.qty >= minRequired) {
+                            totalFixedDiscount += (selectedPromo.value * item.qty);
+                            hasQualifying = true;
+                        }
+                    });
+                    if (hasQualifying) {
+                        discount = totalFixedDiscount;
+                        promoDetail = `Desc. Pack -$${selectedPromo.value} c/u (Min: ${minRequired})`;
+                    } else {
+                        discount = 0;
+                        promoDetail = `Faltan unidades (Min: ${minRequired})`;
+                    }
+                } else {
+                    discount = selectedPromo.value;
+                    promoDetail = `Desc. Fijo -$${selectedPromo.value}`;
+                }
             } else if (selectedPromo.type === 'buy_x_get_y') {
-                const promoProductIds = (selectedPromo.promotion_products || []).map(pp => pp.product_id);
                 let affected = [];
                 cart.forEach(item => {
                     if (promoProductIds.includes(item.id) && item.qty >= 2) {
                         const freeUnits = Math.floor(item.qty / 2);
-                        discount += (freeUnits * item.sale_price);
+                        discount += (freeUnits * getRegionalPrice(item, saleLocation));
                         affected.push(`${item.name} (x${freeUnits})`);
                     }
                 });
@@ -283,24 +349,68 @@ export default function NewSaleScreen({ navigation, route }) {
         const totalDiscount = discount + manualDiscountAmt;
         const total = subtotal - totalDiscount;
         const finalProfit = totalProfit - totalDiscount;
+        
+        // --- LÓGICA DE COMISIÓN DE SOCIO CÓRDOBA ---
+        const isSeller = currentUserRole === 'seller';
+        let currentRate = 0;
+        
+        if (isSeller) {
+            if (saleLocation === 'cordoba') {
+                // Socio Córdoba: 40% Venta Directa o 10% por Cierre
+                currentRate = (commissionType === 'direct') ? 0.40 : 0.10;
+            } else {
+                // Vendedor Estándar (BA): 5% si el líder cerró o 10% normal
+                currentRate = isLeaderSale ? 0.05 : commissionRate;
+            }
+        }
 
-        const currentRate = isLeaderSale ? 0.05 : commissionRate;
         const commission = finalProfit * currentRate;
 
-        return { subtotal, total, totalProfit: finalProfit, commission, discount, promoDetail, manualDiscountAmt };
+        // Ensure all values are valid numbers, never undefined or NaN
+        const safeCommission = typeof commission === 'number' && !isNaN(commission) ? commission : 0;
+        const safeSubtotal = typeof subtotal === 'number' && !isNaN(subtotal) ? subtotal : 0;
+        const safeTotal = typeof total === 'number' && !isNaN(total) ? total : 0;
+        const safeTotalProfit = typeof finalProfit === 'number' && !isNaN(finalProfit) ? finalProfit : 0;
+        const safeDiscount = typeof discount === 'number' && !isNaN(discount) ? discount : 0;
+        const safeManualDiscount = typeof manualDiscountAmt === 'number' && !isNaN(manualDiscountAmt) ? manualDiscountAmt : 0;
+
+        return {
+            subtotal: safeSubtotal,
+            total: safeTotal,
+            totalProfit: safeTotalProfit,
+            commission: safeCommission,
+            discount: safeDiscount,
+            promoDetail: promoDetail || '',
+            manualDiscountAmt: safeManualDiscount
+        };
     };
 
-    const { subtotal, total, totalProfit, commission, discount, promoDetail, manualDiscountAmt } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate, manualDiscount, manualDiscountType]);
+    const { subtotal, total, totalProfit, commission, discount, promoDetail, manualDiscountAmt } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate, manualDiscount, manualDiscountType, commissionType, saleLocation, currentUserRole]);
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
+    const [pendingCheckoutType, setPendingCheckoutType] = useState('completed'); // Track the checkout type being processed
+    const [commissionType, setCommissionType] = useState('direct'); // 'direct' or 'closer'
+    const [selectClientFirstMode, setSelectClientFirstMode] = useState(false); // Track if we're selecting client before product
+    
+    // Ref to avoid setState async timing issues with modals
+    const checkoutTypeRef = useRef('completed');
 
     // Triggered when clicking "COBRAR"
-    const handleCheckout = () => {
+    const handleCheckout = (checkoutType = 'completed') => {
         if (cart.length === 0) return;
 
+        // Update ref IMMEDIATELY (synchronous) - don't wait for setState
+        checkoutTypeRef.current = checkoutType;
+        
+        // Also update state for UI purposes
+        setPendingCheckoutType(checkoutType);
+        // Set sale type based on checkout type
+        setSaleType(checkoutType);
+
         // Final sanity check for client
-        if (!selectedClient && saleType !== 'completed') {
-            Alert.alert('Falta Cliente', 'Las deudas y presupuestos requieren seleccionar un cliente.');
+        if (!selectedClient && checkoutType !== 'completed') {
+            if (Platform.OS === 'web') alert('Falta Cliente: Las deudas y presupuestos requieren seleccionar un cliente.');
+            else Alert.alert('Falta Cliente', 'Las deudas y presupuestos requieren seleccionar un cliente.');
             setClientModalVisible(true);
             return;
         }
@@ -309,12 +419,13 @@ export default function NewSaleScreen({ navigation, route }) {
             setClientModalVisible(true);
             return;
         }
-        processCheckout(selectedClient);
+        processCheckout(selectedClient, checkoutType);
     };
 
     const handleCreateClient = async () => {
         if (!newClientName.trim()) {
-            Alert.alert('Error', 'El nombre del cliente es obligatorio');
+            if (Platform.OS === 'web') alert('Error: El nombre del cliente es obligatorio');
+            else Alert.alert('Error', 'El nombre del cliente es obligatorio');
             return;
         }
 
@@ -332,8 +443,8 @@ export default function NewSaleScreen({ navigation, route }) {
 
             if (error) throw error;
 
-            // Update local list
-            setClients(prev => [data, ...prev]);
+            // Update local list (Optimistic UI)
+            addClientLocally(data);
 
             // UX: Select automatically, clear form, and proceed to checkout
             setSelectedClient(data);
@@ -370,13 +481,14 @@ export default function NewSaleScreen({ navigation, route }) {
 
             if (error) throw error;
 
-            setClients(prev => [data, ...prev]);
+            addClientLocally(data);
             setSelectedClient(data);
             setSearchQuery('');
 
         } catch (error) {
             console.log('Error creating client inline:', error);
-            Alert.alert('Error', 'No se pudo crear el cliente rápido.');
+            if (Platform.OS === 'web') alert('Error: No se pudo crear el cliente rápido.');
+            else Alert.alert('Error', 'No se pudo crear el cliente rápido.');
         } finally {
             setCreatingClient(false);
         }
@@ -389,85 +501,84 @@ export default function NewSaleScreen({ navigation, route }) {
         return clients.filter(c => c.name.toLowerCase().includes(lowQuery));
     }, [searchQuery, clients]);
 
+    const availablePromos = React.useMemo(() => {
+        return promos.filter(p => {
+            // Global promos (no links) are always available
+            if (!p.promotion_products || p.promotion_products.length === 0) return true;
+
+            // Linked promos only if cart contains relevant items with at least min_qty?
+            // Let's show it as available if they have at least 1, so they can see they need more to activate.
+            const linkedIds = p.promotion_products.map(pp => pp.product_id);
+            return cart.some(item => linkedIds.includes(item.id));
+        });
+    }, [promos, cart]);
+
     const generateReceiptPDF = async (saleData, client, cart) => {
         try {
             const date = new Date().toLocaleString();
             const htmlContent = `
             <html>
-                <body style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                    <div style="text-align: center; border-bottom: 2px solid #d4af37; padding-bottom: 20px; margin-bottom: 20px;">
-                        <h1 style="color: #d4af37; margin: 0;">DIGITAL BOOST EMPIRE</h1>
-                        <p style="margin: 5px 0;">Recibo de Venta Oficial</p>
+                <body style="font-family: 'Helvetica', 'Arial', sans-serif; padding: 40px; color: #333;">
+                    <div style="text-align: center; margin-bottom: 30px;">
+                        <h1 style="color: #d4af37; margin: 0; font-size: 28px; letter-spacing: 2px;">DIGITAL BOOST EMPIRE</h1>
+                        <p style="margin: 5px 0; color: #888; font-size: 14px;">Recibo de Venta Oficial</p>
+                        <div style="width: 100%; height: 1px; background-color: #d4af37; margin-top: 15px;"></div>
                     </div>
                     
-                    <div style="margin-bottom: 20px;">
-                        <p><strong>Fecha:</strong> ${date}</p>
-                        <p><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
-                        <p><strong>Cliente:</strong> ${client ? client.name : 'Venta de Mostrador'}</p>
+                    <div style="margin-bottom: 30px; font-size: 14px; line-height: 1.6;">
+                        <p style="margin: 2px 0;"><strong>Fecha:</strong> ${date}</p>
+                        <p style="margin: 2px 0;"><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
+                        <p style="margin: 2px 0;"><strong>Cliente:</strong> ${client ? client.name : 'Venta de Mostrador'}</p>
                     </div>
 
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
                         <thead>
-                            <tr style="background-color: #f8f8f8; border-bottom: 1px solid #eee;">
-                                <th style="text-align: left; padding: 10px;">Producto</th>
-                                <th style="text-align: center; padding: 10px;">Cant</th>
-                                <th style="text-align: right; padding: 10px;">Precio</th>
-                                <th style="text-align: right; padding: 10px;">Total</th>
+                            <tr style="border-bottom: 1px solid #333;">
+                                <th style="text-align: left; padding: 10px; font-size: 14px; color: #000;">Producto</th>
+                                <th style="text-align: center; padding: 10px; font-size: 14px; color: #000;">Cant</th>
+                                <th style="text-align: right; padding: 10px; font-size: 14px; color: #000;">Precio</th>
+                                <th style="text-align: right; padding: 10px; font-size: 14px; color: #000;">Total</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${cart.map(item => {
-                let rows = `
+                const itemPrice = getRegionalPrice(item, saleLocation);
+                return `
                                 <tr style="border-bottom: 1px solid #eee;">
-                                    <td style="padding: 10px;">${item.name}</td>
-                                    <td style="text-align: center; padding: 10px;">${item.qty}</td>
-                                    <td style="text-align: right; padding: 10px;">$${item.sale_price}</td>
-                                    <td style="text-align: right; padding: 10px;">$${(item.sale_price * item.qty).toFixed(2)}</td>
+                                    <td style="padding: 10px; font-size: 13px;">${item.name} ${item.color ? `(${item.color})` : ''}</td>
+                                    <td style="text-align: center; padding: 10px; font-size: 13px;">${item.qty}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">$${itemPrice.toFixed(0)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">$${(itemPrice * item.qty).toFixed(2)}</td>
                                 </tr>
                                 `;
-
-                // If 2x1 applies to this item
-                if (selectedPromo?.type === 'buy_x_get_y') {
-                    const promoProdIds = (selectedPromo.promotion_products || []).map(pp => pp.product_id);
-                    if (promoProdIds.includes(item.id) && item.qty >= 2) {
-                        const free = Math.floor(item.qty / 2);
-                        rows += `
-                                        <tr style="border-bottom: 1px solid #eee;">
-                                            <td style="padding: 10px;"><strong>Promo: ${selectedPromo.title} (${item.name})</strong></td>
-                                            <td style="text-align: center; padding: 10px;"><strong>-${free}</strong></td>
-                                            <td style="text-align: right; padding: 10px;"><strong>-$${item.sale_price}</strong></td>
-                                            <td style="text-align: right; padding: 10px;"><strong>-$${(free * item.sale_price).toFixed(2)}</strong></td>
-                                        </tr>
-                                        `;
-                    }
-                }
-                return rows;
             }).join('')}
+
                             ${(selectedPromo?.type === 'global_percent' || selectedPromo?.type === 'fixed_discount') && discount > 0 ? `
-                                <tr style="border-bottom: 2px solid #d4af37;">
-                                    <td style="padding: 10px;"><strong>Promo: ${selectedPromo.title}</strong></td>
-                                    <td style="text-align: center; padding: 10px;"><strong>1</strong></td>
-                                    <td style="text-align: right; padding: 10px;"><strong>-$${discount.toFixed(2)}</strong></td>
-                                    <td style="text-align: right; padding: 10px;"><strong>-$${discount.toFixed(2)}</strong></td>
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 10px; font-size: 13px;">${selectedPromo.title} ${selectedPromo.type === 'global_percent' ? `(${selectedPromo.value}%)` : ''}</td>
+                                    <td style="text-align: center; padding: 10px; font-size: 13px;">1</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${discount.toFixed(2)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${discount.toFixed(2)}</td>
                                 </tr>
                             ` : ''}
+
                             ${manualDiscountAmt > 0 ? `
-                                <tr style="border-bottom: 2px solid #e74c3c;">
-                                    <td style="padding: 10px;"><strong>Descuento Especial ${manualDiscountType === 'percent' ? `(${Math.round(parseFloat(manualDiscount)) || 0}%)` : ''}</strong></td>
-                                    <td style="text-align: center; padding: 10px;"><strong>1</strong></td>
-                                    <td style="text-align: right; padding: 10px;"><strong>-$${manualDiscountAmt.toFixed(2)}</strong></td>
-                                    <td style="text-align: right; padding: 10px;"><strong>-$${manualDiscountAmt.toFixed(2)}</strong></td>
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 10px; font-size: 13px;">Descuento Especial ${manualDiscountType === 'percent' ? `(${Math.round(parseFloat(manualDiscount)) || 0}%)` : ''}</td>
+                                    <td style="text-align: center; padding: 10px; font-size: 13px;">1</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscountAmt.toFixed(2)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscountAmt.toFixed(2)}</td>
                                 </tr>
                             ` : ''}
                         </tbody>
                     </table>
 
-                    <div style="text-align: right; border-top: 2px solid #d4af37; padding-top: 20px;">
-                        <p style="margin: 0; color: #888;">Subtotal: $${subtotal.toFixed(2)}</p>
-                        <h2 style="margin: 5px 0 0 0; color: #000;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
+                    <div style="text-align: right; margin-top: 10px; padding-top: 10px; border-top: 1px solid #d4af37;">
+                        <p style="margin: 0; color: #888; font-size: 14px;">Subtotal: $${subtotal.toFixed(2)}</p>
+                        <h2 style="margin: 10px 0 0 0; color: #000; font-size: 22px;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
                     </div>
 
-                    <div style="margin-top: 50px; text-align: center; color: #888; font-size: 12px;">
+                    <div style="margin-top: 60px; text-align: center; color: #bbb; font-size: 11px;">
                         <p>¡Gracias por elegir al Imperio!</p>
                         <p>Digital Boost Empire - Resultados Reales</p>
                     </div>
@@ -479,102 +590,236 @@ export default function NewSaleScreen({ navigation, route }) {
             await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: 'Enviar Recibo' });
         } catch (error) {
             console.log('Error generating PDF:', error);
-            Alert.alert('Error', 'No se pudo generar el recibo digital.');
+            if (Platform.OS === 'web') alert('Error: No se pudo generar el recibo digital.');
+            else Alert.alert('Error', 'No se pudo generar el recibo digital.');
         }
     };
 
-    const processCheckout = async (client) => {
+    const processCheckout = async (client, checkoutSaleType = saleType) => {
+        if (loading) return; // ANTI-DOUBLE SALE LOCK
         setLoading(true);
+
+        // Ensure products is an array
+        const previousProducts = Array.isArray(products) ? [...products] : [];
+
         try {
+            console.log('processCheckout started with:', { client, checkoutSaleType, cartLength: cart.length });
+
+            // Validate that we have calculated values
+            if (total === undefined || total === null || typeof total !== 'number') {
+                console.error('Invalid total amount:', total);
+                if (Platform.OS === 'web') alert('Error: No se pudo calcular el total. Por favor revisa que los productos tengan precios válidos.');
+                else Alert.alert('Error de Cálculo', 'No se pudo calcular el total. Por favor revisa que los productos tengan precios válidos.');
+                setLoading(false);
+                return;
+            }
+
+            if (totalProfit === undefined || totalProfit === null || typeof totalProfit !== 'number') {
+                console.error('Invalid profit:', totalProfit);
+                if (Platform.OS === 'web') alert('Error: No se pudo calcular la ganancia.');
+                else Alert.alert('Error', 'No se pudo calcular la ganancia.');
+                setLoading(false);
+                return;
+            }
+
+            if (commission === undefined || commission === null || typeof commission !== 'number') {
+                console.error('Invalid commission:', commission);
+                if (Platform.OS === 'web') alert('Error: No se pudo calcular la comisión.');
+                else Alert.alert('Error', 'No se pudo calcular la comisión.');
+                setLoading(false);
+                return;
+            }
+
+            console.log('Validations passed, fetching network state...');
             const netState = await NetInfo.fetch();
+            console.log('Network state:', netState);
 
             // Logic for Seller ID and Device Signature
+            console.log('Fetching profiles...');
             const { data: profiles } = await supabase.from('profiles').select('id').eq('role', currentUserRole).limit(1);
             let sellerId = profiles && profiles.length > 0 ? profiles[0].id : null;
+            console.log('Seller ID:', sellerId);
+
+            console.log('Getting device signature...');
             const deviceSig = await require('../services/deviceAuth').DeviceAuthService.getDeviceSignature();
+            console.log('Device signature obtained');
 
             let salePayload = {
-                seller_id: sellerId,
+                seller_id: sellerId || null,
                 client_id: client ? client.id : null,
-                total_amount: total,
-                profit_generated: totalProfit,
-                commission_amount: commission,
-                status: saleType,
-                device_sig: deviceSig,
-                is_leader_sale: isLeaderSale,
+                total_amount: typeof total === 'number' ? total : 0,
+                profit_generated: typeof totalProfit === 'number' ? totalProfit : 0,
+                commission_amount: typeof commission === 'number' ? commission : 0,
+                status: checkoutSaleType || 'completed',
+                device_sig: deviceSig || null,
+                is_leader_sale: isLeaderSale || false,
                 promotion_id: selectedPromo ? selectedPromo.id : null,
-                manual_discount_amount: manualDiscountAmt || 0,
-                manual_discount_type: manualDiscountType,
+                manual_discount_amount: typeof manualDiscountAmt === 'number' ? manualDiscountAmt : 0,
+                manual_discount_type: manualDiscountType || 'fixed',
                 manual_discount_value: parseFloat(manualDiscount) || 0,
-                sale_location: saleLocation
+                sale_location: saleLocation || 'local'
             };
+
+            console.log('Sale payload created:', salePayload);
+
+            // Validate salePayload before using it
+            if (!salePayload || typeof salePayload !== 'object') {
+                console.error('salePayload is invalid:', salePayload);
+                throw new Error('Error al preparar los datos de la venta.');
+            }
 
             if (!netState.isConnected) {
                 // OFFLINE MODE
                 const offlineId = await SyncService.queueSale(salePayload, cart);
-                Alert.alert(
-                    '📴 Modo Offline Activo',
-                    'No tienes internet. La venta se ha guardado localmente y se sincronizará automáticamente cuando recuperes la señal.',
-                    [{
-                        text: 'ENTENDIDO', onPress: () => {
-                            setCart([]);
-                            setSelectedClient(null);
-                            setSelectedPromo(null);
-                            setManualDiscount('');
-                            setManualDiscountType('fixed');
-                            setClientModalVisible(false);
-                            navigation.navigate('Main');
-                        }
-                    }]
-                );
+                if (Platform.OS === 'web') {
+                    alert('📴 Modo Offline Activo: No tienes internet. La venta se ha guardado localmente y se sincronizará automáticamente cuando recuperes la señal.');
+                    clearCart();
+                    setSelectedClient(null);
+                    setSelectedPromo(null);
+                    setManualDiscount('');
+                    setManualDiscountType('fixed');
+                    setClientModalVisible(false);
+                    navigation.navigate('Main');
+                } else {
+                    Alert.alert(
+                        '📴 Modo Offline Activo',
+                        'No tienes internet. La venta se ha guardado localmente y se sincronizará automáticamente cuando recuperes la señal.',
+                        [{
+                            text: 'ENTENDIDO', onPress: () => {
+                                clearCart();
+                                setSelectedClient(null);
+                                setSelectedPromo(null);
+                                setManualDiscount('');
+                                setManualDiscountType('fixed');
+                                setClientModalVisible(false);
+                                navigation.navigate('Main');
+                            }
+                        }]
+                    );
+                }
                 return;
             }
 
-            // 1. Create Sale Record
-            let { data: saleData, error: saleError } = await supabase
-                .from('sales')
-                .insert(salePayload)
-                .select()
-                .single();
+            // OPTIMISTIC UPDATE: Deduct stock instantly in UI so it feels lightning fast
+            if (checkoutSaleType !== 'budget') {
+                cart.forEach(item => {
+                    const localDeduct = saleLocation === 'local' ? item.qty : 0;
+                    updateProductStock(item.id, localDeduct, item.qty);
+                });
+            }
 
-            // Fallback: If device_sig column doesn't exist yet, retry without it
-            if (saleError && saleError.message.includes('device_sig')) {
-                console.log('Retry: device_sig column missing. Inserting without it.');
-                delete salePayload.device_sig;
-                const retry = await supabase
+            // OPTIMISTIC FINANCES UPDATE
+            const prevFinanceState = { 
+                sales: Array.isArray(sales) ? [...sales] : [], 
+                saleItems: Array.isArray(saleItems) ? [...saleItems] : [] 
+            };
+            if (checkoutSaleType !== 'budget') {
+                const localId = `local-${Date.now()}`;
+                const optSale = {
+                    ...salePayload,
+                    id: localId,
+                    created_at: new Date().toISOString()
+                };
+                
+                // Validate cart before mapping for optimistic items
+                const validCart = Array.isArray(cart) ? cart : [];
+                const optItems = validCart.map(item => ({
+                    sale_id: localId,
+                    product_id: item.id,
+                    quantity: item.qty,
+                    products: { name: item.name }
+                }));
+                addSaleLocal(optSale, optItems);
+            }
+
+            // 1. Create Sale Record - BUT SKIP IF BUDGET (only generate PDF, don't save to DB)
+            let saleData = null;
+            let saleError = null;
+
+            if (checkoutSaleType === 'budget') {
+                // PRESUPUESTO: Only generate PDF, don't insert into database
+                console.log('Budget mode: Skipping database insertion, will generate PDF only');
+                
+                // Create a temporary ID for the PDF generation
+                saleData = {
+                    id: `budget-${Date.now()}`,
+                    ...salePayload,
+                    created_at: new Date().toISOString()
+                };
+            } else {
+                // VENTAS REALES (completed, pending): Insert into database
+                const result = await supabase
                     .from('sales')
                     .insert(salePayload)
                     .select()
                     .single();
-                saleData = retry.data;
-                saleError = retry.error;
-            }
 
-            if (saleError) {
-                console.error('Sale Insert Error:', saleError);
-                throw new Error('No se pudo crear el registro de venta.');
+                saleData = result.data;
+                saleError = result.error;
+
+                // Fallback: If device_sig column doesn't exist yet, retry without it
+                if (saleError && saleError.message.includes('device_sig')) {
+                    console.log('Retry: device_sig column missing. Inserting without it.');
+                    delete salePayload.device_sig;
+                    const retry = await supabase
+                        .from('sales')
+                        .insert(salePayload)
+                        .select()
+                        .single();
+                    saleData = retry.data;
+                    saleError = retry.error;
+                }
+
+                if (saleError) {
+                    console.error('Sale Insert Error:', saleError);
+                    throw new Error('No se pudo crear el registro de venta.');
+                }
+
+                // Validate saleData exists
+                if (!saleData || !saleData.id) {
+                    console.error('Sale data is missing or has no ID:', saleData);
+                    throw new Error('La respuesta de venta no contiene un ID válido.');
+                }
             }
 
             // 2. Insert Items
-            const saleItems = cart.map(item => ({
-                sale_id: saleData.id,
-                product_id: item.id,
-                quantity: item.qty,
-                unit_price_at_sale: item.sale_price,
-                subtotal: item.sale_price * item.qty,
-                color: item.color || null
-            }));
+            // Validate cart is an array before mapping
+            if (!Array.isArray(cart) || cart.length === 0) {
+                console.error('Cart is not a valid array or is empty:', cart);
+                throw new Error('El carrito no contiene artículos válidos.');
+            }
 
-            const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
-            if (itemsError) {
-                console.error('Items Insert Error:', itemsError);
-                // Critical error: Sale exists but no items. We should probably inform the user.
-                Alert.alert('Error Parcial', 'La venta se registró pero hubo un problema guardando los productos. Por favor revisa el historial.');
-                throw new Error('Error al guardar los productos de la venta.');
+            // 2. Insert Items - BUT SKIP IF BUDGET
+            if (checkoutSaleType !== 'budget') {
+                const saleItems = cart.map(item => {
+                    const unitPrice = getRegionalPrice(item, saleLocation);
+                    return {
+                        sale_id: saleData.id,
+                        product_id: item.id,
+                        quantity: item.qty,
+                        unit_price_at_sale: unitPrice,
+                        subtotal: unitPrice * item.qty,
+                        color: item.color || item.selectedColor || null
+                    };
+                });
+
+                const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
+                if (itemsError) {
+                    console.error('Items Insert Error:', itemsError);
+                    // Critical error: Sale exists but no items. We should probably inform the user.
+                    if (Platform.OS === 'web') alert('Error Parcial: La venta se registró pero hubo un problema guardando los productos. Por favor revisa el historial.');
+                    else Alert.alert('Error Parcial', 'La venta se registró pero hubo un problema guardando los productos. Por favor revisa el historial.');
+                    throw new Error('Error al guardar los productos de la venta.');
+                }
+
+                console.log('Sale items created successfully. Checking for bundle deductions...');
+            } else {
+                // BUDGET: Just log that we're skipping items insertion
+                console.log('Budget mode: Skipping sale_items insertion');
             }
 
             // 3. Update Stock (Skip if it's just a budget/quote)
-            if (saleType !== 'budget') {
+            if (checkoutSaleType !== 'budget') {
                 try {
                     const lowStockProducts = [];
                     for (const item of cart) {
@@ -582,8 +827,21 @@ export default function NewSaleScreen({ navigation, route }) {
                         if (item.description?.startsWith('[[BUNDLE:')) {
                             try {
                                 const parts = item.description.split(']]');
-                                const jsonStr = parts[0].replace('[[BUNDLE:', '');
+                                const jsonStr = parts[0].replace('[[BUNDLE:', '').trim();
+                                
+                                // Validate jsonStr before parsing
+                                if (!jsonStr || jsonStr.length === 0) {
+                                    console.log('Invalid bundle format: empty jsonStr');
+                                    continue;
+                                }
+                                
                                 const bundleData = JSON.parse(jsonStr);
+                                
+                                // Validate bundleData structure
+                                if (!bundleData || !bundleData.items || !Array.isArray(bundleData.items)) {
+                                    console.log('Invalid bundle data structure:', bundleData);
+                                    continue;
+                                }
 
                                 // Deduct each item in the bundle
                                 for (const bundleItem of bundleData.items) {
@@ -627,15 +885,25 @@ export default function NewSaleScreen({ navigation, route }) {
                             }).eq('id', item.id)
                         );
 
-                        // Variant specific update
-                        if (item.color) {
+                        // Variant specific update - Directly update the variants JSON array
+                        if (item.color && item.variants && Array.isArray(item.variants)) {
+                            const updatedVariants = item.variants.map(variant => {
+                                if (variant.color === item.color) {
+                                    return {
+                                        ...variant,
+                                        stock: Math.max(0, (variant.stock || 0) - item.qty)
+                                    };
+                                }
+                                return variant;
+                            });
+                            
                             updatePromises.push(
-                                supabase.rpc('decrement_variant_stock', {
-                                    p_id: item.id,
-                                    p_color: item.color,
-                                    p_qty: item.qty
-                                })
+                                supabase.from('products').update({ 
+                                    variants: updatedVariants 
+                                }).eq('id', item.id)
                             );
+                            
+                            console.log(`Variant stock updated for ${item.name} (${item.color}): -${item.qty}`);
                         }
 
                         await Promise.all(updatePromises);
@@ -653,45 +921,97 @@ export default function NewSaleScreen({ navigation, route }) {
                 } catch (stockError) {
                     console.error('Stock Update Error:', stockError);
                     // Non-critical for the sale itself, but important for inventory
-                    Alert.alert('Aviso', 'Venta registrada, pero hubo un error actualizando el stock de algunos productos.');
+                    if (Platform.OS === 'web') alert('Aviso: Venta registrada, pero hubo un error actualizando el stock de algunos productos.');
+                    else Alert.alert('Aviso', 'Venta registrada, pero hubo un error actualizando el stock de algunos productos.');
                 }
             }
 
-            Alert.alert(
-                '✅ Venta Exitosa',
-                `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¿Deseas enviar el recibo digital?`,
-                [
-                    {
-                        text: 'No, solo cerrar',
-                        style: 'cancel',
-                        onPress: () => {
-                            setCart([]);
-                            setSelectedClient(null);
-                            setSelectedPromo(null);
-                            setManualDiscount('');
-                            setManualDiscountType('fixed');
-                            setClientModalVisible(false);
-                            navigation.navigate('Sales');
+            if (Platform.OS === 'web') {
+                // Different messages for different sale types
+                let successTitle = '✅ Venta Exitosa';
+                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¿Deseas enviar el recibo digital?`;
+                let confirmText = 'Sí, enviar';
+                
+                if (checkoutSaleType === 'budget') {
+                    successTitle = '📋 Presupuesto Generado';
+                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas descargar el presupuesto en PDF?`;
+                    confirmText = 'Sí, descargar';
+                } else if (checkoutSaleType === 'pending') {
+                    successTitle = '💳 Deuda Registrada';
+                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas enviar el comprobante de deuda?`;
+                    confirmText = 'Sí, enviar';
+                }
+                
+                if (window.confirm(`${successTitle}\n${successMessage}`)) {
+                    await generateReceiptPDF(saleData, client, cart);
+                }
+                clearCart();
+                setSelectedClient(null);
+                setSelectedPromo(null);
+                setManualDiscount('');
+                setManualDiscountType('fixed');
+                setClientModalVisible(false);
+                navigation.navigate('Sales');
+            } else {
+                // Different messages for mobile
+                let successTitle = '✅ Venta Exitosa';
+                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¿Deseas enviar el recibo digital?`;
+                let confirmText = 'Sí, enviar';
+                
+                if (checkoutSaleType === 'budget') {
+                    successTitle = '📋 Presupuesto Generado';
+                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas descargar el presupuesto en PDF?`;
+                    confirmText = 'Sí, descargar';
+                } else if (checkoutSaleType === 'pending') {
+                    successTitle = '💳 Deuda Registrada';
+                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas enviar el comprobante de deuda?`;
+                    confirmText = 'Sí, enviar';
+                }
+                
+                Alert.alert(
+                    successTitle,
+                    successMessage,
+                    [
+                        {
+                            text: 'No, solo cerrar',
+                            style: 'cancel',
+                            onPress: () => {
+                                clearCart();
+                                setSelectedClient(null);
+                                setSelectedPromo(null);
+                                setManualDiscount('');
+                                setManualDiscountType('fixed');
+                                setClientModalVisible(false);
+                                navigation.navigate('Sales');
+                            }
+                        },
+                        {
+                            text: 'SÍ, ENVIAR RECIBO',
+                            onPress: async () => {
+                                await generateReceiptPDF(saleData, client, cart);
+                                clearCart();
+                                setSelectedClient(null);
+                                setSelectedPromo(null);
+                                setManualDiscount('');
+                                setManualDiscountType('fixed');
+                                setClientModalVisible(false);
+                                navigation.navigate('Sales');
+                            }
                         }
-                    },
-                    {
-                        text: 'SÍ, ENVIAR RECIBO',
-                        onPress: async () => {
-                            await generateReceiptPDF(saleData, client, cart);
-                            setCart([]);
-                            setSelectedClient(null);
-                            setSelectedPromo(null);
-                            setManualDiscount('');
-                            setManualDiscountType('fixed');
-                            setClientModalVisible(false);
-                            navigation.navigate('Sales');
-                        }
-                    }
-                ]
-            );
+                    ]
+                );
+            }
 
         } catch (error) {
             console.log('Checkout Error:', error);
+            
+            // ROLLBACK OPTIMISTIC UPDATE
+            if (checkoutSaleType !== 'budget') {
+                console.log('Rolling back optimistic stock update due to failure...');
+                setProducts(previousProducts);
+                setFinanceState(prevFinanceState);
+            }
+
             Alert.alert('Error', error.message || 'No se pudo procesar la venta.');
         } finally {
             setLoading(false);
@@ -699,21 +1019,47 @@ export default function NewSaleScreen({ navigation, route }) {
     };
 
     const renderHeader = () => (
-        <View style={styles.header}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15 }}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-                    <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
+        <View style={styles.compactHeader}>
+            <View style={styles.headerTopRow}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtnSmall}>
+                    <MaterialCommunityIcons name="arrow-left" size={20} color="#d4af37" />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>NUEVA VENTA</Text>
-                <View style={{ width: 24 }} />
+                <View style={styles.locationSmallToggle}>
+                    <TouchableOpacity 
+                        style={[styles.locOptionSmall, saleLocation === 'local' && styles.locOptionActive]} 
+                        onPress={() => setSaleLocation('local')}
+                    >
+                        <Text style={[styles.locOptionText, saleLocation === 'local' && styles.locOptionTextActive]}>JUJUY</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                        style={[styles.locOptionSmall, saleLocation === 'cordoba' && styles.locOptionActive]} 
+                        onPress={() => {
+                            setSaleLocation('cordoba');
+                            setCommissionType('direct');
+                        }}
+                    >
+                        <Text style={[styles.locOptionText, saleLocation === 'cordoba' && styles.locOptionTextActive]}>CÓRDOBA</Text>
+                    </TouchableOpacity>
+                </View>
+                <View style={{ width: 30 }} />
             </View>
 
-            <View style={styles.totalBadge}>
-                <Text style={styles.totalLabel}>TOTAL A COBRAR</Text>
-                <Text style={styles.totalAmount}>${total.toFixed(2)}</Text>
-                {selectedClient && (
-                    <Text style={styles.clientLabel}>CLIENTE: {selectedClient.name}</Text>
-                )}
+            <View style={styles.summaryCompact}>
+                <View>
+                    <Text style={styles.summaryLabel}>TOTAL PRODUCTOS</Text>
+                    <Text style={styles.summaryAmount}>${total.toLocaleString('es-AR', { minimumFractionDigits: 0 })}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={styles.summaryLabel}>CLIENTE</Text>
+                    <TouchableOpacity 
+                        onPress={() => setClientModalVisible(true)}
+                        style={styles.clientInlineBtn}
+                    >
+                        <Text style={styles.clientInlineText} numberOfLines={1}>
+                            {selectedClient ? selectedClient.name.toUpperCase() : 'SELECCIONAR ▼'}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
             </View>
         </View>
     );
@@ -744,182 +1090,124 @@ export default function NewSaleScreen({ navigation, route }) {
             <StatusBar barStyle="light-content" />
             {renderHeader()}
 
-            {/* Client Search / Selection Area */}
-            <ClientSelector
-                selectedClient={selectedClient}
-                clientError={clientError}
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                setClientError={setClientError}
-                filteredClients={filteredClients}
-                onSelectClient={(client) => {
-                    setSelectedClient(client);
-                    setSearchQuery('');
-                    setClientError(false);
-                }}
-                onCreateClient={createClientInline}
-                onRemoveClient={() => setSelectedClient(null)}
-                creatingClient={creatingClient}
-            />
-
             <FlatList
                 data={cart}
                 keyExtractor={(item, index) => `${item.id}-${item.color || 'no-color'}-${index}`}
                 style={{ flex: 1 }}
-                initialNumToRender={10}
-                maxToRenderPerBatch={10}
-                windowSize={5}
-                removeClippedSubviews={true}
-                contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
-                renderItem={({ item }) => (
-                    <CartItem item={item} onRemove={removeFromCart} />
+                contentContainerStyle={{ padding: 15, paddingBottom: 250 }}
+                renderItem={({ item, index }) => (
+                    <CartItem
+                        key={item.cartId || `${item.id}-${index}`}
+                        item={item}
+                        onRemove={removeFromCart}
+                        onSplit={splitCartItem}
+                        onOverride={setManualOverride}
+                        manualOverride={manualOverrides[item.id]}
+                        regionalPrice={getRegionalPrice(item, saleLocation)}
+                    />
                 )}
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
-                        <MaterialCommunityIcons name="cart-off" size={60} color="#333" />
-                        <Text style={styles.emptyText}>Bolsa Vacía</Text>
-                        <Text style={styles.emptySubtext}>Añade productos del inventario</Text>
+                        <MaterialCommunityIcons name="cart-plus" size={50} color="#1a1a1a" />
+                        <Text style={styles.emptyText}>Lista vacía</Text>
+                        <TouchableOpacity style={styles.addInitialBtn} onPress={handleAddProductPress}>
+                            <Text style={styles.addInitialText}>AGREGAR PRODUCTO</Text>
+                        </TouchableOpacity>
+                    </View>
+                }
+                ListFooterComponent={
+                    <View style={styles.formFooter}>
+                        <PromotionSelector
+                            promos={availablePromos}
+                            selectedPromo={selectedPromo}
+                            onSelectPromo={setSelectedPromo}
+                        />
+
+                        {/* 📦 ORIGEN (SOLO CÓRDOBA) */}
+                        {saleLocation === 'cordoba' && (
+                            <View style={styles.originPickerSimple}>
+                                <Text style={styles.sectionLabel}>ORIGEN DE MERCADERÍA:</Text>
+                                <View style={styles.originRow}>
+                                    <TouchableOpacity 
+                                        style={[styles.originOption, commissionType === 'direct' && styles.originOptionActive]} 
+                                        onPress={() => setCommissionType('direct')}
+                                    >
+                                        <Text style={[styles.originText, commissionType === 'direct' && styles.originTextActive]}>STOCK CBA</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[styles.originOption, commissionType === 'closer' && styles.originOptionActive]} 
+                                        onPress={() => setCommissionType('closer')}
+                                    >
+                                        <Text style={[styles.originText, commissionType === 'closer' && styles.originTextActive]}>ENVÍO JUJUY</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        )}
+                        
+                        {/* LIDER SPLIT (SIEMPRE VISIBLE PARA LIDER/ADMIN) */}
+                        {(currentUserRole === 'admin' || currentUserRole === 'leader') && (
+                            <TouchableOpacity
+                                style={[styles.leaderToggleSmall, isLeaderSale && styles.leaderToggleActive]}
+                                onPress={() => setIsLeaderSale(!isLeaderSale)}
+                            >
+                                <MaterialCommunityIcons name="star-circle" size={18} color={isLeaderSale ? "#00ff88" : "#444"} />
+                                <Text style={[styles.leaderToggleText, isLeaderSale && { color: '#00ff88' }]}>
+                                    VENDE GUILLE (Comisión 5%)
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+
+                        <View style={{ height: 100 }} />
                     </View>
                 }
             />
 
-            {/* Promotion Selector */}
-            <PromotionSelector
-                promos={promos}
-                selectedPromo={selectedPromo}
-                onSelectPromo={setSelectedPromo}
-            />
-
-            {/* Manual Discount Section */}
-            <View style={styles.manualDiscountContainer}>
-                <Text style={styles.promoLabel}>DESCUENTO MANUAL (EXTRA):</Text>
-                <View style={styles.manualDiscountRow}>
-                    <View style={styles.manualInputWrapper}>
-                        <MaterialCommunityIcons name="tag-outline" size={16} color="#d4af37" style={{ marginRight: 8 }} />
-                        <TextInput
-                            style={styles.manualDiscountInput}
-                            placeholder="0.00"
-                            placeholderTextColor="#444"
-                            keyboardType="numeric"
-                            value={manualDiscount}
-                            onChangeText={setManualDiscount}
-                        />
-                    </View>
-                    <View style={styles.manualTypeGroup}>
-                        <TouchableOpacity
-                            style={[styles.manualTypeBtn, manualDiscountType === 'fixed' && styles.manualTypeBtnActive]}
-                            onPress={() => setManualDiscountType('fixed')}
-                        >
-                            <Text style={[styles.manualTypeBtnText, manualDiscountType === 'fixed' && styles.manualTypeBtnTextActive]}>$</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.manualTypeBtn, manualDiscountType === 'percent' && styles.manualTypeBtnActive]}
-                            onPress={() => setManualDiscountType('percent')}
-                        >
-                            <Text style={[styles.manualTypeBtnText, manualDiscountType === 'percent' && styles.manualTypeBtnTextActive]}>%</Text>
-                        </TouchableOpacity>
-                    </View>
+            {/* 🔥 ACCIÓN FINAL (ESTILO STICKY FOOTER) */}
+            <View style={styles.actionFooter}>
+                <View style={styles.subtotalRow}>
+                    <Text style={styles.subtotalLabel}>Subtotal: ${subtotal.toFixed(0)}</Text>
+                    {discount > 0 && <Text style={styles.discountLabel}>Desc: -${discount.toFixed(0)}</Text>}
                 </View>
-            </View>
 
-            {/* Cost Breakdown */}
-            {cart.length > 0 && (
-                <CostBreakdown
-                    subtotal={subtotal}
-                    total={total}
-                    discount={discount}
-                    manualDiscount={manualDiscountAmt}
-                    selectedPromo={selectedPromo}
-                    promoDetail={promoDetail}
-                />
-            )}
-
-            {/* Transaction Type Selector */}
-            <SaleTypeSelector saleType={saleType} setSaleType={setSaleType} />
-
-            {/* LOCATION SELECTOR */}
-            <View style={styles.locationContainer}>
-                <Text style={styles.locationTitle}>VENDER DESDE:</Text>
-                <View style={styles.locationToggleRow}>
-                    <TouchableOpacity
-                        style={[styles.locationToggle, saleLocation === 'local' && styles.locationToggleActive]}
-                        onPress={() => setSaleLocation('local')}
-                    >
-                        <MaterialCommunityIcons name="home-map-marker" size={18} color={saleLocation === 'local' ? '#000' : '#666'} />
-                        <Text style={[styles.locationToggleText, saleLocation === 'local' && styles.locationToggleTextActive]}>JUJUY</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.locationToggle, saleLocation === 'cordoba' && styles.locationToggleActive]}
-                        onPress={() => setSaleLocation('cordoba')}
-                    >
-                        <MaterialCommunityIcons name="map-marker-distance" size={18} color={saleLocation === 'cordoba' ? '#000' : '#666'} />
-                        <Text style={[styles.locationToggleText, saleLocation === 'cordoba' && styles.locationToggleTextActive]}>CÓRDOBA</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-
-            {/* COMMISSION SPLIT TOGGLE - Outside footer for better layout */}
-            <View style={styles.commissionSplitCard}>
+                {/* BOTÓN PRINCIPAL */}
                 <TouchableOpacity
-                    style={[styles.splitToggle, isLeaderSale && styles.splitToggleActive]}
-                    onPress={() => setIsLeaderSale(!isLeaderSale)}
-                >
-                    <MaterialCommunityIcons
-                        name={isLeaderSale ? "shield-check" : "shield-outline"}
-                        size={20}
-                        color={isLeaderSale ? "#00ff88" : "#666"}
-                    />
-                    <View style={{ marginLeft: 10, flex: 1 }}>
-                        <Text style={[styles.splitTitle, isLeaderSale && { color: '#00ff88' }]}>
-                            Venta cerrada por el Líder (César)
-                        </Text>
-                        <Text style={styles.splitDesc}>
-                            {isLeaderSale ? 'Comisión reducida al 5%' : 'Comisión completa del 10%'}
-                        </Text>
-                    </View>
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.footer}>
-                <TouchableOpacity
-                    style={[styles.addProductBtn, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37' }]}
-                    onPress={async () => {
-                        if (permission && !permission.granted) {
-                            const result = await requestPermission();
-                            if (!result.granted) return;
-                        }
-                        setScanned(false);
-                        setIsScanning(true);
-                    }}
-                >
-                    <MaterialCommunityIcons name="barcode-scan" size={20} color="#d4af37" />
-                    <Text style={[styles.addProductText, { color: '#d4af37' }]}>ESCANEAR</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.addProductBtn} onPress={handleAddProductPress}>
-                    <MaterialCommunityIcons name="magnify" size={20} color="#000" />
-                    <Text style={styles.addProductText}>BUSCAR</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[
-                        styles.checkoutBtn,
-                        cart.length === 0 && styles.disabled,
-                        saleType === 'pending' && { backgroundColor: '#e74c3c' },
-                        saleType === 'budget' && { backgroundColor: '#3498db' }
-                    ]}
-                    onPress={handleCheckout}
+                    style={[styles.primaryCTA, (cart.length === 0 || loading) && styles.ctaDisabled]}
+                    onPress={() => handleCheckout('completed')}
                     disabled={cart.length === 0 || loading}
                 >
-                    {loading ? (
-                        <ActivityIndicator color="black" />
-                    ) : (
-                        <Text style={styles.checkoutText}>
-                            {saleType === 'completed' ? `COBRAR ($${total.toFixed(0)})` :
-                                saleType === 'pending' ? `GUARDAR DEUDA` : `CREAR PRESUPUESO`}
-                        </Text>
+                    {loading ? <ActivityIndicator color="black" /> : (
+                        <Text style={styles.ctaText}>COBRAR ${total.toFixed(0)}</Text>
                     )}
                 </TouchableOpacity>
+
+                {/* BOTONES SECUNDARIOS */}
+                <View style={styles.secondaryActions}>
+                    <TouchableOpacity 
+                        style={styles.secBtn} 
+                        onPress={() => handleCheckout('pending')}
+                        disabled={cart.length === 0 || loading}
+                    >
+                        <Text style={styles.secBtnText}>MARCAR DEUDA</Text>
+                    </TouchableOpacity>
+                    <View style={{ width: 10 }} />
+                    <TouchableOpacity 
+                        style={styles.secBtn} 
+                        onPress={() => handleCheckout('budget')}
+                        disabled={cart.length === 0 || loading}
+                    >
+                        <Text style={styles.secBtnText}>PRESUPUESTO</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* BOTÓN ACCESO RÁPIDO AGREGAR */}
+                <View style={styles.floatingActionRow}>
+                    <TouchableOpacity style={styles.fabBtn} onPress={() => setIsScanning(true)}>
+                        <MaterialCommunityIcons name="barcode-scan" size={24} color="#000" />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.fabBtn, { backgroundColor: '#111', borderWidth: 1, borderColor: '#333' }]} onPress={handleAddProductPress}>
+                        <MaterialCommunityIcons name="plus" size={24} color="#d4af37" />
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* PRODUCT MODAL */}
@@ -944,8 +1232,20 @@ export default function NewSaleScreen({ navigation, route }) {
                 onClose={() => setClientModalVisible(false)}
                 clients={clients}
                 onSelectClient={(client) => {
+                    setSelectedClient(client); // Save client to state
                     setClientModalVisible(false);
-                    setTimeout(() => processCheckout(client), 500);
+                    
+                    // If we're in selectClientFirst mode, open product modal instead of checkout
+                    if (selectClientFirstMode) {
+                        setTimeout(() => {
+                            setSelectClientFirstMode(false); // Reset the mode
+                            setProductModalVisible(true);
+                        }, 300);
+                    } else {
+                        // Normal flow: process checkout
+                        // Use ref instead of state to avoid async timing issues
+                        setTimeout(() => processCheckout(client, checkoutTypeRef.current), 500);
+                    }
                 }}
                 showNewClientForm={showNewClientForm}
                 setShowNewClientForm={setShowNewClientForm}
@@ -985,48 +1285,47 @@ export default function NewSaleScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
-    container: { flex: 1, backgroundColor: '#000' },
-    header: { paddingHorizontal: 20, paddingVertical: 15, backgroundColor: '#000' },
-    backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#111' },
-    headerTitle: { color: '#d4af37', fontSize: 13, fontWeight: '900', letterSpacing: 2 },
-    totalBadge: { backgroundColor: '#050505', padding: 25, borderRadius: 25, alignItems: 'center', marginTop: 10, borderWidth: 1, borderColor: '#111' },
-    totalLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 5 },
-    totalAmount: { color: '#fff', fontSize: 38, fontWeight: '900', textShadowColor: 'rgba(212, 175, 55, 0.4)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 15 },
-    clientLabel: { color: '#d4af37', fontSize: 11, fontWeight: '900', marginTop: 10, textTransform: 'uppercase' },
+    compactHeader: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 15, backgroundColor: '#000', borderBottomWidth: 1, borderBottomColor: '#111' },
+    headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 15 },
+    backBtnSmall: { padding: 8, borderRadius: 10, backgroundColor: '#0a0a0a' },
+    locationSmallToggle: { flexDirection: 'row', backgroundColor: '#0a0a0a', borderRadius: 8, padding: 3, borderWidth: 1, borderColor: '#111' },
+    locOptionSmall: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
+    locOptionActive: { backgroundColor: '#d4af37' },
+    locOptionText: { color: '#444', fontSize: 10, fontWeight: '900' },
+    locOptionTextActive: { color: '#000' },
+    summaryCompact: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+    summaryLabel: { color: '#444', fontSize: 9, fontWeight: '900', letterSpacing: 1, marginBottom: 2 },
+    summaryAmount: { color: '#fff', fontSize: 28, fontWeight: '900' },
+    clientInlineBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a0a0a', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: '#1a1a1a' },
+    clientInlineText: { color: '#d4af37', fontSize: 11, fontWeight: 'bold' },
 
-    emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 100 },
-    emptyText: { color: '#222', fontSize: 18, fontWeight: '900', marginTop: 15 },
-    emptySubtext: { color: '#111', fontSize: 12, fontWeight: '700', marginTop: 5 },
+    emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 80 },
+    emptyText: { color: '#333', fontSize: 16, fontWeight: '900', marginTop: 10 },
+    addInitialBtn: { marginTop: 20, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#d4af3720', borderRadius: 10, borderWidth: 1, borderColor: '#d4af3740' },
+    addInitialText: { color: '#d4af37', fontSize: 12, fontWeight: 'bold' },
 
-    footer: { padding: 20, paddingBottom: 30, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderTopColor: '#333', flexDirection: 'row' },
-    addProductBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#ccc', borderRadius: 10, padding: 15, marginRight: 10 },
-    addProductText: { marginLeft: 5, color: '#000', fontWeight: '900', letterSpacing: 0.5 },
-    checkoutBtn: { flex: 2, backgroundColor: '#d4af37', borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.3, elevation: 10 },
-    disabled: { backgroundColor: '#333' },
-    checkoutText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
+    formFooter: { marginTop: 20 },
+    sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', marginLeft: 15, marginBottom: 8, marginTop: 20 },
+    originPickerSimple: { paddingHorizontal: 15 },
+    originRow: { flexDirection: 'row', gap: 10 },
+    originOption: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 10, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#111' },
+    originOptionActive: { borderColor: '#d4af37', backgroundColor: '#d4af3710' },
+    originText: { color: '#444', fontSize: 11, fontWeight: '900' },
+    originTextActive: { color: '#d4af37' },
+    leaderToggleSmall: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 15, marginTop: 20, backgroundColor: '#0a0a0a', padding: 12, borderRadius: 10, gap: 10 },
+    leaderToggleActive: { backgroundColor: '#00ff8808', borderWidth: 1, borderColor: '#00ff8820' },
+    leaderToggleText: { color: '#444', fontSize: 11, fontWeight: 'bold' },
 
-    commissionSplitCard: { marginHorizontal: 25, marginBottom: 10 },
-    splitToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a0a0a', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#1a1a1a' },
-    splitToggleActive: { borderColor: '#00ff8840', backgroundColor: '#00ff8805' },
-    splitTitle: { color: '#888', fontSize: 13, fontWeight: '700' },
-    splitDesc: { color: '#444', fontSize: 11, fontWeight: '600', marginTop: 2 },
-
-    locationContainer: { marginHorizontal: 25, marginBottom: 15 },
-    locationTitle: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 8 },
-    locationToggleRow: { flexDirection: 'row', gap: 10 },
-    locationToggle: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0a0a0a', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#1a1a1a', gap: 8 },
-    locationToggleActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
-    locationToggleText: { color: '#666', fontSize: 11, fontWeight: 'bold' },
-    locationToggleTextActive: { color: '#000' },
-
-    // Manual Discount Styles
-    manualDiscountContainer: { backgroundColor: '#111', padding: 15, borderTopWidth: 1, borderTopColor: '#222', paddingBottom: 25 },
-    manualDiscountRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 5 },
-    manualInputWrapper: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 15, height: 45, borderWidth: 1, borderColor: '#1a1a1a', marginRight: 15 },
-    manualDiscountInput: { flex: 1, color: '#fff', fontSize: 16, fontWeight: 'bold' },
-    manualTypeGroup: { flexDirection: 'row', backgroundColor: '#000', borderRadius: 10, padding: 3, borderWidth: 1, borderColor: '#1a1a1a' },
-    manualTypeBtn: { width: 40, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-    manualTypeBtnActive: { backgroundColor: '#d4af37' },
-    manualTypeBtnText: { color: '#444', fontWeight: 'bold', fontSize: 16 },
-    manualTypeBtnTextActive: { color: '#000' }
+    actionFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#000', padding: 20, paddingBottom: 40, borderTopWidth: 1, borderTopColor: '#111' },
+    subtotalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, paddingHorizontal: 5 },
+    subtotalLabel: { color: '#888', fontSize: 13, fontWeight: '700' },
+    discountLabel: { color: '#ff3b3b', fontSize: 13, fontWeight: '900' },
+    primaryCTA: { backgroundColor: '#d4af37', paddingVertical: 16, borderRadius: 15, alignItems: 'center', shadowColor: '#d4af37', shadowOpacity: 0.4, shadowRadius: 10, elevation: 8 },
+    ctaDisabled: { backgroundColor: '#222' },
+    ctaText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+    secondaryActions: { flexDirection: 'row', marginTop: 15 },
+    secBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', backgroundColor: '#0a0a0a', borderRadius: 10, borderWidth: 1, borderColor: '#111' },
+    secBtnText: { color: '#666', fontSize: 10, fontWeight: '900' },
+    floatingActionRow: { flexDirection: 'row', position: 'absolute', top: -70, right: 20, gap: 10 },
+    fabBtn: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center', elevation: 10, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10 },
 });

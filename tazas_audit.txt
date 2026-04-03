@@ -1,0 +1,736 @@
+[
+  {
+    "quantity": 2,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "1c10017c-b567-4a49-8606-e9a1e4e23e4d",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-01-10T19:39:59.43483-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "e1de5c0d-048f-401c-9747-f6e927f1adec",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-01-09T18:31:10.735-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "e1de5c0d-048f-401c-9747-f6e927f1adec",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-01-09T18:31:10.735-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "1c10017c-b567-4a49-8606-e9a1e4e23e4d",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-01-10T19:39:59.43483-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "1c10017c-b567-4a49-8606-e9a1e4e23e4d",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-01-10T19:39:59.43483-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": null,
+    "products": null,
+    "sales": {
+      "id": "a266c23a-e184-4e47-941c-f460ee65c1eb",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Gabriela Castelli"
+      },
+      "created_at": "2026-02-03T16:00:43.343284-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "360685ec-e413-4d0e-be53-3ebb33a23154",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Pablo Bonutto"
+      },
+      "created_at": "2026-02-03T16:00:16.71088-03:00"
+    }
+  },
+  {
+    "quantity": 3,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "370e4f41-a4cd-4211-ada3-38c973fd7fbd",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-02-03T20:56:49.902403-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "7dff87de-4cbc-434f-b396-322ac9b10c96",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Maxi Bonutto"
+      },
+      "created_at": "2026-02-04T02:57:18.717493-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "18388dab-1235-41a1-b3a0-083625b86a9a",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Carina gym"
+      },
+      "created_at": "2026-02-04T02:58:22.780378-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "61b0fc17-a879-41a4-8b22-0798fc7bcbe3",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Marcos Ezequiel"
+      },
+      "created_at": "2026-02-04T02:59:49.804551-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "a797695b-5de0-469e-b090-45c7e725dfe7",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Gabriela Castelli"
+      },
+      "created_at": "2026-02-20T23:26:31.091025-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Blanco",
+    "products": null,
+    "sales": {
+      "id": "a797695b-5de0-469e-b090-45c7e725dfe7",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Gabriela Castelli"
+      },
+      "created_at": "2026-02-20T23:26:31.091025-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "76f76eb2-dde3-4c4e-af26-21175913d260",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Margarita camacho"
+      },
+      "created_at": "2026-02-21T18:08:18.760426-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Rosa",
+    "products": null,
+    "sales": {
+      "id": "dfd197bf-0315-45f2-8277-26fc10996bf6",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Gabriela Castelli"
+      },
+      "created_at": "2026-02-22T04:07:40.915268-03:00"
+    }
+  },
+  {
+    "quantity": 4,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "3a82c12c-4b3b-412f-bbcd-81d2d6651315",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Pablo Bonutto"
+      },
+      "created_at": "2026-02-22T20:58:22.222438-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "004bdead-34b9-4b15-96c9-bde03ed6f6d8",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Carolina Saldaño"
+      },
+      "created_at": "2026-02-23T13:32:35.84376-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "ff5cd372-4f4c-4268-8b63-d8924d30c233",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Melina compañera Gabriela"
+      },
+      "created_at": "2026-02-23T13:32:35.84376-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "f81d7366-7240-41cd-998e-321059293e54",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Graciela Ortiz"
+      },
+      "created_at": "2026-02-23T13:32:35.84376-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Blanco",
+    "products": null,
+    "sales": {
+      "id": "f81d7366-7240-41cd-998e-321059293e54",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Graciela Ortiz"
+      },
+      "created_at": "2026-02-23T13:32:35.84376-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "10470a04-d354-4678-bba5-4ad44d70d21d",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Graciela Ortiz"
+      },
+      "created_at": "2026-03-05T20:34:51.067186-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "b958c62c-e91f-4aeb-bd3d-ba0584753516",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Adriana Bonutto"
+      },
+      "created_at": "2026-03-21T23:28:02.113537-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "9fe446f0-106d-46b5-96db-6917f7372647",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Adriana Bonutto"
+      },
+      "created_at": "2026-03-22T03:12:53.58639-03:00"
+    }
+  },
+  {
+    "quantity": 20,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "76994603-afd3-4b50-931b-1cdb44e3ff48",
+      "notes": null,
+      "status": "processing",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-03-24T17:48:55.220475-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "e1de5c0d-048f-401c-9747-f6e927f1adec",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-01-09T18:31:10.735-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "3059b7f8-037b-4b15-9802-a54bc6417885",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Maxi Bonutto"
+      },
+      "created_at": "2026-01-08T11:50:15.197-03:00"
+    }
+  },
+  {
+    "quantity": 4,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "e1de5c0d-048f-401c-9747-f6e927f1adec",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-01-09T18:31:10.735-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Blanco, luz fría",
+    "products": null,
+    "sales": {
+      "id": "1c10017c-b567-4a49-8606-e9a1e4e23e4d",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-01-10T19:39:59.43483-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Blanco, luz fría",
+    "products": null,
+    "sales": {
+      "id": "e1de5c0d-048f-401c-9747-f6e927f1adec",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariela Castelli"
+      },
+      "created_at": "2026-01-09T18:31:10.735-03:00"
+    }
+  },
+  {
+    "quantity": 8,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 4,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Rojo",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Celeste",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 3,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Blanco",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Plateado ",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Azul",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Rosa",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Gris",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Verde",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 2,
+    "color": "Blanco",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Rosa",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Blanco",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 5,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Blanco ",
+    "products": {
+      "name": "Taza calentadora eléctrica "
+    },
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Rosa  claro",
+    "products": {
+      "name": "Taza calentadora eléctrica "
+    },
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": {
+      "name": "Taza calentadora eléctrica "
+    },
+    "sales": {
+      "id": "5ec66d81-2c7f-45b6-abb8-de51e1bf008e",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Alejandro Castelli"
+      },
+      "created_at": "2026-03-26T16:43:14.222766-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "9e33621a-25e7-4b48-b39f-7fe5e3edc876",
+      "notes": null,
+      "status": "completed",
+      "clients": {
+        "name": "Mariana Sabatini"
+      },
+      "created_at": "2026-03-27T22:29:03.48943-03:00"
+    }
+  },
+  {
+    "quantity": 1,
+    "color": "Negro",
+    "products": null,
+    "sales": {
+      "id": "70ef9e8c-0820-411d-9310-2a4c5e238d04",
+      "notes": null,
+      "status": "pending",
+      "clients": {
+        "name": "Gabriel la Madrid"
+      },
+      "created_at": "2026-03-28T13:21:52.918507-03:00"
+    }
+  }
+]

@@ -10,7 +10,7 @@ async function checkColumns() {
     if (error) {
         // Fallback to a direct query via a sneaky trick if RPC doesn't exist
         console.log('Fetching via select limit 1');
-        const { data: sample } = await supabase.from('expenses').select('*').limit(1);
+    const { data: sample } = await supabase.from('products').select('*').limit(1);
         if (sample && sample.length > 0) {
             console.log('Columns:', Object.keys(sample[0]));
         } else {

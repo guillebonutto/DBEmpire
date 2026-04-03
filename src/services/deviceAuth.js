@@ -75,13 +75,16 @@ export const DeviceAuthService = {
                 .from('authorized_devices')
                 .select('role')
                 .eq('device_signature', signature)
-                .single();
+                .limit(1);
 
-            if (error || !data) return null;
+            if (error) throw error;
+            
+            const device = data && data.length > 0 ? data[0] : null;
+            if (!device) return null;
 
             // Save role locally as well for offline/fast access
-            await AsyncStorage.setItem('user_role', data.role);
-            return data.role;
+            await AsyncStorage.setItem('user_role', device.role);
+            return device.role;
         } catch (e) {
             console.error('Error checking device authorization:', e);
             return null;

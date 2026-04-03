@@ -39,27 +39,42 @@ const handleGeminiRequest = async (prompt, imageBase64 = null) => {
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                // Adding Accept for better browser compatibility
+                'Accept': 'application/json'
             },
             body: JSON.stringify({ contents })
         });
 
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error('Gemini HTTP Error:', response.status, errText);
+            throw new Error(`Error de red Gemini (${response.status}): ${errText.substring(0, 100)}...`);
+        }
+
         const data = await response.json();
 
         if (data.error) {
-            console.error('Gemini Error:', data.error);
-            throw new Error(data.error.message || 'Error desconocido de Google Gemini');
+            console.error('Gemini API Error:', data.error);
+            const msg = data.error.message || 'Error desconocido de Google Gemini';
+            if (msg.includes('API key')) throw new Error('API Key inválida o expirada. Revisa la configuración del admin.');
+            throw new Error(msg);
         }
 
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) {
-            throw new Error('Respuesta vacía de Gemini.');
+            console.log('Gemini empty data:', data);
+            throw new Error('Respuesta vacía: El AI no generó contenido para esta solicitud.');
         }
 
         return text;
 
     } catch (error) {
         console.error('Error Gemini Service:', error);
+        // On Web, some errors are CORS related and show as "Network Error"
+        if (error.message === 'Network request failed') {
+            throw new Error('Error de red: La conexión con Gemini falló (posible bloqueo de CORS o falta de internet).');
+        }
         throw error;
     }
 };

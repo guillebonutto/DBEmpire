@@ -35,6 +35,10 @@ import ShippingPackagesScreen from '../screens/ShippingPackagesScreen';
 import ShippingRatesScreen from '../screens/ShippingRatesScreen';
 import ManualStockAdjustmentScreen from '../screens/ManualStockAdjustmentScreen';
 import SuppliersScreen from '../screens/SuppliersScreen';
+import BrandingScreen from '../screens/BrandingScreen';
+import TransfersScreen from '../screens/TransfersScreen';
+import NewTransferScreen from '../screens/NewTransferScreen';
+import AIDashboardScreen from '../screens/AIDashboardScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -101,13 +105,21 @@ function MainTabs() {
         >
             <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Dashboard' }} />
             <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
-            <Tab.Screen name="Presupuestos" component={OrdersScreen} options={{ title: 'Presupuestos' }} />
-            {userRole === 'admin' ? (
-                <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
-            ) : null}
-            {userRole === 'admin' ? (
-                <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
-            ) : null}
+            <Tab.Screen 
+                name="Presupuestos" 
+                component={OrdersScreen} 
+                options={{ title: 'Presupuestos' }} 
+                listeners={({ navigation }) => ({
+                    tabPress: (e) => {
+                        // Forzar que siempre abra en la pestaña de presupuestos al tocar el menú inferior
+                        e.preventDefault();
+                        navigation.navigate('Presupuestos', { initialViewType: 'presupuestos' });
+                    },
+                })}
+            />
+            {/* ACCESO TOTALPARA ADMIN Y SOCIO (SELLER) */}
+            <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
+            <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
         </Tab.Navigator>
     );
 }
@@ -117,10 +129,13 @@ export default function AppNavigator() {
 
     useEffect(() => {
         const checkSession = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            // If we have a role, go straight to Main (Inventory). 
-            // The hardware check will still happen in the background or during sensitive ops.
-            setInitialRoute(role ? 'Main' : 'Login');
+            try {
+                const role = await AsyncStorage.getItem('user_role');
+                setInitialRoute(role ? 'Main' : 'Login');
+            } catch (error) {
+                console.error('Session check failed:', error);
+                setInitialRoute('Login');
+            }
         };
         checkSession();
     }, []);
@@ -257,6 +272,26 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="Suppliers"
                 component={SuppliersScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Branding"
+                component={BrandingScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Transfers"
+                component={TransfersScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="NewTransfer"
+                component={NewTransferScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="AIDashboard"
+                component={AIDashboardScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

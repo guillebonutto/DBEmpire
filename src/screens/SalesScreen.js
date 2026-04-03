@@ -4,14 +4,115 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function SalesScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
     const [stats, setStats] = useState({ today: 0, month: 0, countToday: 0, commissions: 0 });
     const [recentSales, setRecentSales] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [viewType, setViewType] = useState('ventas'); // 'ventas' o 'presupuestos'
 
     const [expandedSale, setExpandedSale] = useState(null);
+    const generateReceiptPDF = async (saleData) => {
+        try {
+            const subtotalBeforeDiscounts = saleData.sale_items.reduce((acc, item) => 
+                acc + (Number(item.unit_price_at_sale) * item.quantity), 0);
+            
+            const manualDiscount = Number(saleData.manual_discount_amount || 0);
+            const total = Number(saleData.total_amount || 0);
+            const promoInfo = saleData.promotions ? `${saleData.promotions.title}` : null;
+            
+            // Calculate percentage if manual discount was percent-based (approximate from values if not stored separately)
+            // But usually we have manual_discount_type. If it's percentage, we should show it.
+            let discountLabel = "Descuento";
+            if (manualDiscount > 0) {
+                if (saleData.manual_discount_type === 'percent') {
+                    // Calculate original subtotal if needed, but we have manual_discount_value or we can infer it
+                    const pct = Math.round((manualDiscount / (subtotalBeforeDiscounts)) * 100);
+                    discountLabel = `Descuento Especial (${pct}%)`;
+                } else {
+                    discountLabel = "Descuento Especial";
+                }
+            }
+
+            const html = `
+                <html>
+                <body style="font-family: 'Helvetica', 'Arial', sans-serif; padding: 40px; color: #333;">
+                    <div style="text-align: center; margin-bottom: 30px;">
+                        <h1 style="color: #d4af37; margin: 0; font-size: 28px; letter-spacing: 2px;">DIGITAL BOOST EMPIRE</h1>
+                        <p style="margin: 5px 0; color: #888; font-size: 14px;">Recibo de Venta Oficial</p>
+                        <div style="width: 100%; height: 1px; background-color: #d4af37; margin-top: 15px;"></div>
+                    </div>
+                    
+                    <div style="margin-bottom: 30px; font-size: 14px; line-height: 1.6;">
+                        <p style="margin: 2px 0;"><strong>Fecha:</strong> ${new Date(saleData.created_at).toLocaleString()}</p>
+                        <p style="margin: 2px 0;"><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
+                        <p style="margin: 2px 0;"><strong>Cliente:</strong> ${saleData.clients?.name || 'Anónimo'}</p>
+                    </div>
+
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid #333;">
+                                <th style="text-align: left; padding: 10px; font-size: 14px; color: #000;">Producto</th>
+                                <th style="text-align: center; padding: 10px; font-size: 14px; color: #000;">Cant</th>
+                                <th style="text-align: right; padding: 10px; font-size: 14px; color: #000;">Precio</th>
+                                <th style="text-align: right; padding: 10px; font-size: 14px; color: #000;">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${saleData.sale_items.map(item => `
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 10px; font-size: 13px;">
+                                        ${item.products?.name || 'Item'} ${item.color ? `<span style="color: #666; font-size: 12px;">(${item.color})</span>` : ''}
+                                    </td>
+                                    <td style="text-align: center; padding: 10px; font-size: 13px;">${item.quantity}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">$${Number(item.unit_price_at_sale).toFixed(0)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">$${(Number(item.unit_price_at_sale) * item.quantity).toFixed(2)}</td>
+                                </tr>
+                            `).join('')}
+
+                            ${promoInfo ? `
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 10px; font-size: 13px;">Promo: ${promoInfo}</td>
+                                    <td style="text-align: center; padding: 10px; font-size: 13px;">1</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px; color: #d4af37;">Descontado</td>
+                                </tr>
+                            ` : ''}
+
+                            ${manualDiscount > 0 ? `
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 10px; font-size: 13px;">${discountLabel}</td>
+                                    <td style="text-align: center; padding: 10px; font-size: 13px;">1</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscount.toFixed(0)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscount.toFixed(2)}</td>
+                                </tr>
+                            ` : ''}
+                        </tbody>
+                    </table>
+
+                    <div style="text-align: right; margin-top: 10px; padding-top: 10px; border-top: 1px solid #d4af37;">
+                        <p style="margin: 0; color: #888; font-size: 14px;">Subtotal: $${subtotalBeforeDiscounts.toFixed(2)}</p>
+                        <h2 style="margin: 10px 0 0 0; color: #000; font-size: 22px;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
+                    </div>
+                    
+                    <div style="margin-top: 60px; text-align: center; color: #bbb; font-size: 11px;">
+                        <p>¡Gracias por elegir al Imperio!</p>
+                        <p>Digital Boost Empire - Resultados Reales</p>
+                    </div>
+                </body>
+                </html>
+            `;
+            const { uri } = await Print.printToFileAsync({ html });
+            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: 'Enviar Recibo' });
+        } catch (err) {
+            console.error('PDF Error:', err);
+            Alert.alert('Error', 'No se pudo generar el PDF.');
+        }
+    };
 
     const fetchSalesData = async () => {
         setLoading(true);
@@ -24,7 +125,7 @@ export default function SalesScreen({ navigation }) {
             // 2. Fetch 'completed/exitosa' ONLY for the current month
             const { data, error } = await supabase
                 .from('sales')
-                .select('*, profiles(full_name), clients(name), sale_items(*, products(name))')
+                .select('*, profiles(full_name), clients(name), promotions(title), sale_items(*, products(name))')
                 .or(`status.in.(budget,pending),and(status.in.(completed,exitosa,"",vended),created_at.gte.${startOfMonth})`)
                 .order('created_at', { ascending: false });
 
@@ -41,16 +142,32 @@ export default function SalesScreen({ navigation }) {
         }
     };
 
-    // Filtered sales based on search query
+    // Filtered sales based on search query and view type
     const filteredRecentSales = useMemo(() => {
-        if (!searchQuery.trim()) return recentSales;
+        let list = [...recentSales];
+        
+        // Tab Filtering
+        if (viewType === 'ventas') {
+            list = list.filter(sale => {
+                const status = (sale.status || '').toLowerCase();
+                return status === 'completed' || status === 'exitosa' || status === '' || status === 'vended' || !status;
+            });
+        } else {
+            list = list.filter(sale => {
+                const status = (sale.status || '').toLowerCase();
+                return status === 'budget' || status === 'pending';
+            });
+        }
+
+        // Search Filtering
+        if (!searchQuery.trim()) return list;
         const lowQuery = searchQuery.toLowerCase();
-        return recentSales.filter(sale => {
+        return list.filter(sale => {
             const clientName = (sale.clients?.name || 'anónimo').toLowerCase();
             const saleIdShort = sale.id.slice(0, 4).toLowerCase();
             return clientName.includes(lowQuery) || saleIdShort.includes(lowQuery);
         });
-    }, [searchQuery, recentSales]);
+    }, [searchQuery, recentSales, viewType]);
 
     const processStats = (sales) => {
         const now = new Date();
@@ -221,6 +338,14 @@ export default function SalesScreen({ navigation }) {
                     <View style={{ alignItems: 'flex-end' }}>
                         <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${item.total_amount}</Text>
                         {!isBudget && <Text style={styles.saleProfit}>(G: ${item.profit_generated})</Text>}
+                        
+                        <TouchableOpacity 
+                            onPress={() => generateReceiptPDF(item)}
+                            style={{ marginTop: 8, padding: 8, backgroundColor: '#000', borderRadius: 8, borderWidth: 1, borderColor: '#d4af37' }}
+                        >
+                            <MaterialCommunityIcons name="file-pdf-box" size={24} color="#d4af37" />
+                        </TouchableOpacity>
+
                         <MaterialCommunityIcons name={isExpanded ? "chevron-up" : "chevron-down"} size={18} color="#555" style={{ marginTop: 5 }} />
                     </View>
                 </View>
@@ -229,12 +354,28 @@ export default function SalesScreen({ navigation }) {
                     <View style={styles.itemsDetail}>
                         {item.sale_items?.map((detail, idx) => (
                             <View key={idx} style={styles.detailRow}>
-                                <Text style={styles.detailText} numberOfLines={1}>{detail.products?.name || 'Item'}</Text>
+                                <Text style={styles.detailText} numberOfLines={1}>{detail.products?.name || 'Item'} {detail.color ? `(${detail.color})` : ''}</Text>
                                 <Text style={styles.detailQty}>x{detail.quantity}</Text>
                                 <Text style={styles.detailPrice}>${detail.unit_price_at_sale}</Text>
                             </View>
                         ))}
-                        <View style={{ flexDirection: 'row', gap: 10, marginTop: 15 }}>
+                        
+                        {/* Breakdown in UI */}
+                        <View style={{ borderTopWidth: 1, borderTopColor: '#333', marginTop: 10, paddingTop: 10 }}>
+                            {item.promotions && (
+                                <View style={styles.detailRow}>
+                                    <Text style={[styles.detailText, { color: '#d4af37' }]}>Promo: {item.promotions.title}</Text>
+                                    <Text style={styles.detailPrice}>Aplicada</Text>
+                                </View>
+                            )}
+                            {item.manual_discount_amount > 0 && (
+                                <View style={styles.detailRow}>
+                                    <Text style={[styles.detailText, { color: '#e74c3c' }]}>Descuento Manual</Text>
+                                    <Text style={styles.detailPrice}>-${item.manual_discount_amount}</Text>
+                                </View>
+                            )}
+                        </View>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 15 }}>
                             {isBudget && (
                                 <TouchableOpacity
                                     style={styles.convertBtn}
@@ -245,6 +386,15 @@ export default function SalesScreen({ navigation }) {
                                     <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
                                 </TouchableOpacity>
                             )}
+
+                            <TouchableOpacity
+                                style={[styles.convertBtn, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37' }]}
+                                onPress={() => generateReceiptPDF(item)}
+                                disabled={loading}
+                            >
+                                <MaterialCommunityIcons name="file-pdf-box" size={14} color="#d4af37" />
+                                <Text style={[styles.convertBtnText, { color: '#d4af37' }]}>DESCARGAR PDF</Text>
+                            </TouchableOpacity>
 
                             <TouchableOpacity
                                 style={[styles.convertBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#ff4444' }]}
@@ -319,8 +469,28 @@ export default function SalesScreen({ navigation }) {
                 )}
             </View>
 
+            <View style={styles.tabContainer}>
+                <TouchableOpacity 
+                    style={[styles.tabBtn, viewType === 'ventas' && styles.tabBtnActive]}
+                    onPress={() => setViewType('ventas')}
+                >
+                    <Text style={[styles.tabText, viewType === 'ventas' && styles.tabTextActive]}>💰 VENTAS FINALIZADAS</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                    style={[styles.tabBtn, viewType === 'presupuestos' && styles.tabBtnActive]}
+                    onPress={() => setViewType('presupuestos')}
+                >
+                    <Text style={[styles.tabText, viewType === 'presupuestos' && styles.tabTextActive]}>📝 PRESUPUESTOS</Text>
+                    {recentSales.filter(s => s.status === 'budget' || s.status === 'pending').length > 0 && (
+                        <View style={styles.badgeCount}>
+                            <Text style={styles.badgeText}>{recentSales.filter(s => s.status === 'budget' || s.status === 'pending').length}</Text>
+                        </View>
+                    )}
+                </TouchableOpacity>
+            </View>
+
             <Text style={styles.sectionTitle}>
-                OPERACIONES ({filteredRecentSales.length})
+                {viewType === 'ventas' ? 'HISTORIAL DE VENTAS' : 'PENDIENTES DE CIERRE'} ({filteredRecentSales.length})
             </Text>
 
             <FlatList
@@ -339,7 +509,6 @@ export default function SalesScreen({ navigation }) {
     );
 }
 
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000000' },
@@ -430,5 +599,14 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         paddingHorizontal: 10,
         fontSize: 14
-    }
+    },
+
+    // Tab Styles
+    tabContainer: { flexDirection: 'row', paddingHorizontal: 0, paddingVertical: 10, backgroundColor: 'transparent', marginBottom: 10, gap: 10 },
+    tabBtn: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 12, borderWidth: 1, borderColor: '#333', position: 'relative' },
+    tabBtnActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    tabText: { color: '#666', fontWeight: 'bold', fontSize: 11 },
+    tabTextActive: { color: '#000' },
+    badgeCount: { position: 'absolute', top: -5, right: -5, backgroundColor: '#ff4444', height: 18, minWidth: 18, borderRadius: 9, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+    badgeText: { color: '#fff', fontSize: 10, fontWeight: '900' }
 });

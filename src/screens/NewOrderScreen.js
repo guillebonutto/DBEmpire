@@ -29,6 +29,7 @@ export default function NewOrderScreen({ navigation }) {
     const [selectedClient, setSelectedClient] = useState(null);
     const [loading, setLoading] = useState(false);
     const [trackingNumber, setTrackingNumber] = useState('');
+    const [selectedColor, setSelectedColor] = useState(null);
 
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
@@ -42,6 +43,7 @@ export default function NewOrderScreen({ navigation }) {
     }, []);
 
     const fetchData = async () => {
+        setLoading(true);
         try {
             const productsReq = supabase.from('products').select('*').eq('active', true).order('name');
             const clientsReq = supabase.from('clients').select('*').order('created_at', { ascending: false });
@@ -50,7 +52,11 @@ export default function NewOrderScreen({ navigation }) {
 
             if (productsRes.data) setProducts(productsRes.data);
             if (clientsRes.data) setClients(clientsRes.data || []);
-        } catch (e) { console.log(e); }
+        } catch (e) { 
+            console.log(e); 
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleAddProductPress = () => {
@@ -63,8 +69,8 @@ export default function NewOrderScreen({ navigation }) {
 
     // Calculate dynamic availability
     const getAvailableStock = (item) => {
-        const inCartItem = cart.find(c => c.id === item.id);
-        const inCartQty = inCartItem ? inCartItem.qty : 0;
+        const inCartItems = cart.filter(c => c.id === item.id);
+        const inCartQty = inCartItems.reduce((acc, curr) => acc + curr.qty, 0);
         return (item.current_stock || 0) - inCartQty;
     };
 
@@ -77,6 +83,7 @@ export default function NewOrderScreen({ navigation }) {
         }
 
         setExpandedProductId(item.id);
+        setSelectedColor(null);
         setTempQty(1);
     };
 
@@ -90,19 +97,28 @@ export default function NewOrderScreen({ navigation }) {
     };
 
     const confirmAddToCart = (product) => {
+        // Validation for variants
+        if (product.variants && product.variants.length > 0 && !selectedColor) {
+            Alert.alert('Color Requerido', 'Por favor seleccione un color para este producto.');
+            return;
+        }
+
+        const uniqueCartId = `${product.id}-${selectedColor || 'none'}`;
+        
         setCart(prev => {
-            const existing = prev.find(item => item.id === product.id);
+            const existing = prev.find(item => item.cartId === uniqueCartId);
             if (existing) {
-                return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + tempQty } : item);
+                return prev.map(item => item.cartId === uniqueCartId ? { ...item, qty: item.qty + tempQty } : item);
             }
-            return [...prev, { ...product, qty: tempQty }];
+            return [...prev, { ...product, qty: tempQty, selectedColor, cartId: uniqueCartId }];
         });
         setExpandedProductId(null);
+        setSelectedColor(null);
         setTempQty(1);
     };
 
-    const removeFromCart = (id) => {
-        setCart(prev => prev.filter(item => item.id !== id));
+    const removeFromCart = (cartId) => {
+        setCart(prev => prev.filter(item => item.cartId !== cartId));
     };
 
     const calculateTotals = () => {
@@ -199,7 +215,8 @@ export default function NewOrderScreen({ navigation }) {
                 product_id: item.id,
                 quantity: item.qty,
                 unit_price_at_sale: item.sale_price,
-                subtotal: item.sale_price * item.qty
+                subtotal: item.sale_price * item.qty,
+                color: item.selectedColor // Agregamos el color aquí
             }));
 
             const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
@@ -299,7 +316,14 @@ export default function NewOrderScreen({ navigation }) {
                     <View style={styles.cartItem}>
                         <View style={styles.itemInfo}>
                             <Text style={styles.itemName}>{item.name}</Text>
-                            <Text style={styles.itemMeta}>Cant: {item.qty} x ${item.sale_price}</Text>
+                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                                <Text style={styles.itemMeta}>Cant: {item.qty} x ${item.sale_price}</Text>
+                                {item.selectedColor && (
+                                    <View style={styles.cartColorBadge}>
+                                        <Text style={styles.cartColorText}>{item.selectedColor}</Text>
+                                    </View>
+                                )}
+                            </View>
                         </View>
                         <Text style={styles.itemTotal}>${(item.sale_price * item.qty).toFixed(2)}</Text>
                         <TouchableOpacity onPress={() => removeFromCart(item.id)} style={styles.removeBtn}>
@@ -362,10 +386,35 @@ export default function NewOrderScreen({ navigation }) {
                                         </TouchableOpacity>
                                     ) : (
                                         <View style={{ flex: 1 }}>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
                                                 <Text style={styles.rowTitle}>{item.name}</Text>
                                                 <Text style={styles.rowPrice}>${item.sale_price}</Text>
                                             </View>
+
+                                            {/* SELECTOR DE COLORES */}
+                                            {item.variants && item.variants.length > 0 && (
+                                                <View style={styles.variantSection}>
+                                                    <Text style={styles.variantLabel}>Seleccione Color:</Text>
+                                                    <View style={styles.variantGrid}>
+                                                        {item.variants.map((v, i) => (
+                                                            <TouchableOpacity
+                                                                key={i}
+                                                                onPress={() => setSelectedColor(v.color)}
+                                                                style={[
+                                                                    styles.variantChip,
+                                                                    selectedColor === v.color && styles.variantChipSelected
+                                                                ]}
+                                                            >
+                                                                <Text style={[
+                                                                    styles.variantChipText,
+                                                                    selectedColor === v.color && styles.variantChipTextSelected
+                                                                ]}>{v.color}</Text>
+                                                            </TouchableOpacity>
+                                                        ))}
+                                                    </View>
+                                                </View>
+                                            )}
+
                                             <View style={styles.qtyContainer}>
                                                 <TouchableOpacity onPress={() => adjustTempQty(-1, available)} style={styles.qtyBtn}>
                                                     <MaterialCommunityIcons name="minus" size={24} color="#fff" />
@@ -475,10 +524,21 @@ const styles = StyleSheet.create({
 
     modalContent: { flex: 1, backgroundColor: '#121212', padding: 20, paddingTop: 50 },
     modalTitle: { fontSize: 24, fontWeight: '900', color: '#d4af37', marginBottom: 20, textAlign: 'center' },
-    productRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1e1e1e', padding: 20, borderRadius: 12, marginBottom: 10 },
+    productRow: { backgroundColor: '#1e1e1e', padding: 20, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#333' },
     rowTitle: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
     rowSubtitle: { color: '#888', fontSize: 12 },
     rowPrice: { color: '#d4af37', fontSize: 16, fontWeight: 'bold' },
+
+    variantSection: { marginVertical: 15, borderTopWidth: 1, borderTopColor: '#333', paddingTop: 15 },
+    variantLabel: { color: '#888', fontSize: 11, fontWeight: '900', letterSpacing: 1, marginBottom: 10 },
+    variantGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    variantChip: { backgroundColor: '#222', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#444' },
+    variantChipSelected: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    variantChipText: { color: '#888', fontSize: 12, fontWeight: 'bold' },
+    variantChipTextSelected: { color: '#000' },
+
+    cartColorBadge: { backgroundColor: '#222', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, marginLeft: 10, borderWidth: 1, borderColor: '#d4af3730' },
+    cartColorText: { color: '#d4af37', fontSize: 10, fontWeight: '900' },
 
     qtyContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#111', padding: 10, borderRadius: 8 },
     qtyBtn: { backgroundColor: '#333', width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },

@@ -5,12 +5,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import { supabase } from '../services/supabase';
 
 const { width } = Dimensions.get('window');
 import { DeviceAuthService } from '../services/deviceAuth';
+import { useAuthStore } from '../store/useAuthStore';
 
 export default function LoginScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
+    const { setUserRole } = useAuthStore();
 
     // Hardware & Session Recognition Logic
     React.useEffect(() => {
@@ -57,26 +60,48 @@ export default function LoginScreen({ navigation, route }) {
     const handleSelectUser = async (role) => {
         setLoading(true);
         try {
-            // SECURITY CHECK: If trying to enter as Admin, verify hardware recognition
+            // SECURITY CHECK 1: Admin hardware verification (already exists)
             if (role === 'admin') {
                 const hardwareRole = await DeviceAuthService.checkAuthorization();
                 if (hardwareRole !== 'admin') {
                     setLoading(false);
                     Alert.alert(
                         '🛑 ACCESO DENEGADO',
-                        'Este dispositivo no está autorizado para el rol de LÍDER SUPREMO.\n\nSi eres el dueño, autoriza esta firma en Supabase.',
+                        'Este dispositivo no está autorizado para el rol de LÍDER.\n\nSi eres el dueño, autoriza esta firma en Supabase.',
                         [{ text: 'Ver Firma', onPress: showSecretSignature }, { text: 'Entendido' }]
                     );
                     return;
                 }
             }
 
+            // SECURITY CHECK 2: Remote role verification for all roles (block global access)
+            if (role === 'seller') {
+                const { data: seller, error: sErr } = await supabase
+                    .from('profiles')
+                    .select('role')
+                    .eq('full_name', 'Vendedor (Primo)')
+                    .single();
+
+                if (seller?.role === 'blocked') {
+                    setLoading(false);
+                    Alert.alert(
+                        '🔒 ACCESO SUSPENDIDO',
+                        'Tu acceso temporal ha sido revocado por el Líder.\n\nIntenta más tarde.',
+                        [{ text: 'Entendido' }]
+                    );
+                    return;
+                }
+            }
+
+
             await AsyncStorage.setItem('user_role', role);
+            setUserRole(role); // Sync with store
             setLoading(false);
             navigation.replace('Main');
         } catch (error) {
+            console.log('Auth check error:', error);
             setLoading(false);
-            Alert.alert('Error', 'No se pudo verificar el acceso.');
+            Alert.alert('Error', 'No se pudo verificar el acceso en este momento.');
         }
     };
 

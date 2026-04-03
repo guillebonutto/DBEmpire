@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView, InteractionManager } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView, InteractionManager, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -13,19 +13,25 @@ import { logoBase64 } from '../assets/logoBase64';
 import { GeminiService } from '../services/geminiService';
 import { CRMService } from '../services/crmService';
 import { SecurityService } from '../services/securityService';
-import { GlobalDataService } from '../services/GlobalDataService';
+import { useProductStore } from '../store/useProductStore';
+import { useAuthStore } from '../store/useAuthStore';
 
 // 1. Move Item Renderer OUTSIDE and Memoize it to prevent re-setup during navigation
 const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing, stockColor, totalStock }) => {
     return (
         <TouchableOpacity
             style={styles.productCard}
-            onPress={() => {
-                if (userRole === 'admin') {
+            onPress={async () => {
+                const currentRole = userRole || await AsyncStorage.getItem('user_role');
+                if (currentRole === 'admin' || currentRole === 'leader') {
                     navigation.navigate('AddProduct', { product: item });
+                } else {
+                    Platform.OS === 'web' 
+                        ? alert('No tienes permisos de LÍDER para editar este activo.')
+                        : Alert.alert('Sin Permisos', 'Solo los Líderes pueden editar productos del inventario.');
                 }
             }}
-            activeOpacity={userRole === 'admin' ? 0.7 : 1}
+            activeOpacity={0.7}
         >
             <View style={styles.cardInner}>
                 <View style={styles.imageWrapper}>
@@ -36,7 +42,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                             <MaterialCommunityIcons name="image-off-outline" size={24} color="#333" />
                         </View>
                     )}
-                    {userRole === 'admin' && (
+                    {(userRole === 'admin' || userRole === 'leader') && (
                         <TouchableOpacity
                             style={styles.deleteBadge}
                             onPress={() => handleDelete(item)}
@@ -51,8 +57,17 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
 
                 <View style={styles.productInfo}>
                     <View style={styles.infoTop}>
-                        <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
-                        <Text style={styles.salePrice}>${item.sale_price}</Text>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Text style={styles.salePrice}>${item.sale_price}</Text>
+                                {item.sale_price_cordoba && parseFloat(item.sale_price_cordoba) !== parseFloat(item.sale_price) && (
+                                    <View style={{ backgroundColor: '#d4af3720', paddingHorizontal: 4, borderRadius: 4 }}>
+                                        <Text style={{ color: '#d4af37', fontSize: 10, fontWeight: 'bold' }}>CBA: ${item.sale_price_cordoba}</Text>
+                                    </View>
+                                )}
+                            </View>
+                        </View>
                     </View>
 
                     <View style={styles.locationStockRow}>
@@ -83,12 +98,8 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
 
                 <View style={styles.actionButtonsContainer}>
                     <TouchableOpacity style={styles.neonIconBtn} onPress={() => handleFindBuyers(item)}>
-                        <MaterialCommunityIcons name="target-account" size={18} color="#d4af37" />
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.neonIconBtn} onPress={() => handleGenerateMarketing(item)}>
-                        <MaterialCommunityIcons name="whatsapp" size={18} color="#00ff88" />
-                    </TouchableOpacity>
+                        <MaterialCommunityIcons name="tools" size={24} color="#d4af37" />
+                </TouchableOpacity>
                 </View>
             </View>
         </TouchableOpacity>
@@ -96,14 +107,42 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
 });
 
 export default function StockScreen({ navigation, route }) {
-    const cachedItems = GlobalDataService.getProducts();
-    const [userRole, setUserRole] = useState('seller');
-    const [products, setProducts] = useState([]); // Start empty to avoid blocking mount
-    const [loading, setLoading] = useState(false);
-    const [screenReady, setScreenReady] = useState(false); // Gate heavy UI
+    const { products: storeProducts, loadingProducts: loading, fetchProducts } = useProductStore();
+    const { userRole, setUserRole } = useAuthStore();
+    const [refreshing, setRefreshing] = useState(false);
+    const [screenReady, setScreenReady] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
     const [isFastMode, setIsFastMode] = useState(false);
+    
+    // Filters
+    const [showFilters, setShowFilters] = useState(false);
+    const [filterCategory, setFilterCategory] = useState('');
+    const [filterLowStock, setFilterLowStock] = useState(false);
+    const [filterProvider, setFilterProvider] = useState('');
+    const [providersList, setProvidersList] = useState([]);
+
+    const [isScanning, setIsScanning] = useState(false);
+    const [scanned, setScanned] = useState(false);
+    const [permission, requestPermission] = useCameraPermissions();
+
+    const doFetchProducts = async (forceDb = false) => {
+        if (forceDb) {
+            setRefreshing(true);
+            await fetchProducts(true);
+            setRefreshing(false);
+        } else {
+            fetchProducts();
+        }
+    };
+
+    useFocusEffect(
+        useCallback(() => {
+            requestPermission();
+            setScreenReady(true);
+            doFetchProducts(true); // SILENT RECONCILIATION
+        }, [])
+    );
 
     // Marketing Assistant State
     const [marketingModalVisible, setMarketingModalVisible] = useState(false);
@@ -120,29 +159,39 @@ export default function StockScreen({ navigation, route }) {
     // Tools Modal State
     const [toolsModalVisible, setToolsModalVisible] = useState(false);
 
-    useEffect(() => {
-        const getRole = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            if (role) setUserRole(role);
-        };
-        
-        // 2. Ultra-fast mount: render shell first, then data in next frame
-        requestAnimationFrame(() => {
-            setTimeout(() => {
-                setScreenReady(true);
-                const cached = GlobalDataService.getProducts();
-                if (cached && cached.length > 0) setProducts(cached);
-                getRole();
-                requestPermission();
-                fetchProducts(true);
-            }, 0);
-        });
-    }, []);
+    // Ally Mode (from Coach redirect)
+    const [allyModalVisible, setAllyModalVisible] = useState(false);
+    const [allyAnalysis, setAllyAnalysis] = useState('');
+    const [allyContent, setAllyContent] = useState('');
+    const [loadingAlly, setLoadingAlly] = useState(false);
 
-    // Scanner
-    const [permission, requestPermission] = useCameraPermissions();
-    const [isScanning, setIsScanning] = useState(false);
-    const [scanned, setScanned] = useState(false);
+    // Handle navigation params
+    useFocusEffect(
+        useCallback(() => {
+            // 1. Ally Prompt (from Coach)
+            const prompt = route?.params?.allyPrompt;
+            if (prompt) {
+                setAllyAnalysis(prompt);
+                setAllyContent('');
+                setAllyModalVisible(true);
+                // Clear param
+                navigation.setParams({ allyPrompt: undefined });
+            }
+
+            // 2. Direct Marketing Request (from Suppliers or other screens)
+            const marketingId = route?.params?.marketingProductId;
+            if (marketingId) {
+                // Ensure products are loaded
+                if (storeProducts && storeProducts.length > 0) {
+                    const product = storeProducts.find(p => p.id === marketingId);
+                    if (product) {
+                        handleGenerateMarketing(product);
+                    }
+                    navigation.setParams({ marketingProductId: undefined });
+                }
+            }
+        }, [route?.params?.allyPrompt, route?.params?.marketingProductId, storeProducts])
+    );
 
     const handleBarcodeScanned = async ({ data }) => {
         if (scanned && !isFastMode) return;
@@ -155,7 +204,7 @@ export default function StockScreen({ navigation, route }) {
 
         setScanned(true);
 
-        const product = products.find(p => p.barcode === barcodeData);
+        const product = storeProducts.find(p => p.barcode === barcodeData);
 
         if (product) {
             if (isFastMode) {
@@ -167,8 +216,8 @@ export default function StockScreen({ navigation, route }) {
                         .eq('id', product.id);
 
                     if (error) throw error;
-
-                    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, current_stock: newStock } : p));
+                    
+                    fetchProducts(true);
                     Alert.alert("✅ Stock +1", `${product.name}: ${newStock}`, [{ text: "Seguir", onPress: () => setScanned(false) }], { cancelable: true });
                 } catch (err) {
                     Alert.alert("Error", "No se pudo actualizar el stock");
@@ -193,7 +242,10 @@ export default function StockScreen({ navigation, route }) {
             const copy = await GeminiService.generateProductMarketing(product.name, product.sale_price);
             setMarketingCopy(copy);
         } catch (error) {
-            Alert.alert('Error IA', 'No se pudo generar el texto publicitario.');
+            console.error(error);
+            const msg = error.message || 'No se pudo generar el texto publicitario.';
+            if (Platform.OS === 'web') alert(`Error IA: ${msg}`);
+            else Alert.alert('Error IA', msg);
             setMarketingModalVisible(false);
         } finally {
             setLoadingMarketing(false);
@@ -255,34 +307,6 @@ export default function StockScreen({ navigation, route }) {
         }
     };
 
-    const fetchProducts = useCallback(async (isBackground = false) => {
-        if (products.length === 0 && !isBackground) setLoading(true);
-        
-        try {
-            const { data, error } = await supabase
-                .from('products')
-                .select('*')
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-
-            if (data) {
-                const validProducts = data.filter(p => {
-                    if (p.active === false) return false;
-                    if (showHiddenStock) return true;
-                    return (p.stock_local > 0 || p.stock_cordoba > 0 || (p.current_stock || 0) > 0);
-                });
-
-                setProducts(validProducts);
-                GlobalDataService.refreshTable('products');
-            }
-        } catch (error) {
-            console.log('Error fetching products:', error.message);
-        } finally {
-            setLoading(false);
-        }
-    }, [products.length, showHiddenStock]);
-
     const handleDelete = useCallback(async (product) => {
         Alert.alert(
             'Eliminar Producto',
@@ -329,14 +353,14 @@ export default function StockScreen({ navigation, route }) {
     }, [fetchProducts]);
 
     const filteredProductsList = React.useMemo(() => {
-        if (!searchQuery) return products;
+        if (!searchQuery) return storeProducts;
         const lowQuery = searchQuery.toLowerCase();
-        return products.filter(p =>
+        return storeProducts.filter(p =>
             p.name.toLowerCase().includes(lowQuery) ||
             (p.provider && p.provider.toLowerCase().includes(lowQuery)) ||
             (p.barcode && String(p.barcode).includes(searchQuery))
         );
-    }, [searchQuery, products]);
+    }, [searchQuery, storeProducts]);
 
     useFocusEffect(
         useCallback(() => {
@@ -405,7 +429,7 @@ export default function StockScreen({ navigation, route }) {
                     <div class="cover-logo">DIGITAL BOOST<br>EMPIRE</div>
                     <div class="exclusive-badge">CATÁLOGO EXCLUSIVO</div>
                 </div>
-                ${products.map(p => `
+                ${storeProducts.map(p => `
                     <div class="product-page">
                         <div class="product-card">
                             <div class="img-box">
@@ -436,7 +460,7 @@ export default function StockScreen({ navigation, route }) {
             const linktree = "https://linktr.ee/digital_boost_empire";
             const whatsapp = "+54 9 3884 19-7137";
 
-            const labelItems = products.map(p => {
+            const labelItems = storeProducts.map(p => {
                 if (!p.barcode) return '';
                 const smartUrl = `${linktree}?barcode=${p.barcode}`;
                 const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(smartUrl)}&ecc=H`;
@@ -621,7 +645,7 @@ export default function StockScreen({ navigation, route }) {
 
             {!screenReady ? (
                 renderSkeleton()
-            ) : products.length === 0 && loading ? (
+            ) : storeProducts.length === 0 && loading ? (
                 <View style={styles.emptyContainer}>
                     <ActivityIndicator color="#d4af37" size="large" />
                 </View>
@@ -636,8 +660,9 @@ export default function StockScreen({ navigation, route }) {
                     removeClippedSubviews={true}
                     contentContainerStyle={styles.listContent}
                     alwaysBounceVertical={false}
-                    refreshControl={<RefreshControl refreshing={loading} onRefresh={() => fetchProducts(false)} tintColor="#d4af37" />}
-                    ListEmptyComponent={
+                    refreshControl={
+                    <RefreshControl refreshing={refreshing} onRefresh={() => doFetchProducts(true)} tintColor="#d4af37" />
+                }    ListEmptyComponent={
                         <View style={styles.emptyContainer}>
                             <Text style={styles.emptyText}>{searchQuery ? 'No encontrado.' : 'Bóveda vacía.'}</Text>
                             {!searchQuery && <Text style={styles.emptySubtext}>Añade activos para comenzar.</Text>}
@@ -926,6 +951,94 @@ export default function StockScreen({ navigation, route }) {
                     </View>
                 </View>
             </Modal>
+
+            {/* 🤖 Ally Modal — Content ideas for stagnant stock */}
+            <Modal
+                visible={allyModalVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setAllyModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.marketingModalContent, { borderColor: '#9b59b620' }]}>
+                        <View style={styles.marketingHeader}>
+                            <MaterialCommunityIcons name="robot-excited" size={32} color="#9b59b6" />
+                            <View style={{ marginLeft: 15, flex: 1 }}>
+                                <Text style={[styles.marketingTitle, { color: '#9b59b6' }]}>ALIADO DE CONTENIDO</Text>
+                                <Text style={styles.marketingSubtitle}>Stock dormido detectado por el Coach</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setAllyModalVisible(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.marketingBody}>
+                            {/* Analysis summary */}
+                            <View style={{ backgroundColor: '#9b59b610', borderRadius: 10, padding: 12, marginBottom: 15, borderWidth: 1, borderColor: '#9b59b630' }}>
+                                <Text style={{ color: '#9b59b6', fontSize: 10, fontWeight: '900', marginBottom: 6, letterSpacing: 1 }}>ANÁLISIS DEL COACH</Text>
+                                <Text style={{ color: '#ccc', fontSize: 12, lineHeight: 18 }}>{allyAnalysis}</Text>
+                            </View>
+
+                            {loadingAlly ? (
+                                <View style={styles.loadingBox}>
+                                    <ActivityIndicator size="large" color="#9b59b6" />
+                                    <Text style={[styles.loadingText, { color: '#9b59b6' }]}>Generando ideas de contenido...</Text>
+                                </View>
+                            ) : allyContent ? (
+                                <ScrollView style={{ maxHeight: 300 }}>
+                                    <Text style={{ color: '#fff', fontSize: 13, lineHeight: 22 }}>{allyContent}</Text>
+                                </ScrollView>
+                            ) : (
+                                <TouchableOpacity
+                                    style={[styles.shareBtn, { backgroundColor: '#9b59b6', flex: 0, width: '100%', minHeight: 55 }]}
+                                    onPress={async () => {
+                                        setLoadingAlly(true);
+                                        setAllyContent('');
+                                        try {
+                                            if (!allyAnalysis) throw new Error('No hay contexto para generar ideas. Regresa al Dashboard y usa el Coach.');
+                                            const content = await GeminiService.handleGeneralRequest(allyAnalysis);
+                                            setAllyContent(content);
+                                        } catch (error) {
+                                            console.error(error);
+                                            setAllyContent(`Error de generación: ${error.message || 'Intenta nuevamente.'}`);
+                                        } finally {
+                                            setLoadingAlly(false);
+                                        }
+                                    }}
+                                >
+                                    <MaterialCommunityIcons name="creation" size={20} color="#fff" />
+                                    <Text style={[styles.actionBtnText, { color: '#fff' }]}>GENERAR IDEAS DE CONTENIDO</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {allyContent && (
+                                <View style={{ gap: 10, marginTop: 15 }}>
+                                    <TouchableOpacity
+                                        style={[styles.shareBtn, { backgroundColor: '#25D366', flex: 0, width: '100%', minHeight: 55 }]}
+                                        onPress={async () => {
+                                            await Share.share({ title: 'Plan de Contenido', message: allyContent });
+                                        }}
+                                    >
+                                        <MaterialCommunityIcons name="share-variant" size={20} color="#000" />
+                                        <Text style={[styles.actionBtnText, { color: '#000' }]}>ENVIAR PLAN COMPLETO</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={[styles.shareBtn, { backgroundColor: '#111', borderWidth: 1, borderColor: '#333', flex: 0, width: '100%', minHeight: 55 }]}
+                                        onPress={() => {
+                                            Clipboard.setString(allyContent);
+                                            Alert.alert('✅ ¡Copiado!', 'El contenido se copió al portapapeles. Ya puedes pegarlo donde quieras.');
+                                        }}
+                                    >
+                                        <MaterialCommunityIcons name="content-copy" size={20} color="#fff" />
+                                        <Text style={[styles.actionBtnText, { color: '#fff' }]}>COPIAR TODO EL TEXTO</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -998,7 +1111,7 @@ const styles = StyleSheet.create({
     copyText: { color: '#888', fontSize: 15, lineHeight: 22, fontWeight: '600' },
     marketingFooter: { flexDirection: 'row', gap: 10, marginTop: 20 },
     copyBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#111', padding: 15, borderRadius: 12, gap: 8 },
-    shareBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d4af37', padding: 15, borderRadius: 12, gap: 10 },
+    shareBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#d4af37', padding: 15, borderRadius: 12, gap: 10 },
     actionBtnText: { color: '#000', fontWeight: '900', fontSize: 13, letterSpacing: 0.5 },
 
     // Tools Menu Styles

@@ -1,0 +1,9 @@
+ORDER:Maxi Bonutto STATUS:received ID:4b1f456e-1d17-4a9d-8d95-e0edbb400105
+ITEM: Taza calentadora eléctrica  PID: null COST: 9500
+ITEM: Taza calentadora eléctrica  PID: null COST: 9500
+ITEM: Taza calentadora eléctrica  PID: null COST: 9500
+ITEM: Perfume PID: null COST: 3500
+ITEM: Perfume PID: null COST: 3500
+ITEM: Perfume PID: null COST: 3500
+ITEM: Perfume PID: null COST: 3500
+ITEM: Perfume PID: null COST: 3500

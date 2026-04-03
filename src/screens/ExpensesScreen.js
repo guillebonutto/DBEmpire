@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, StatusBar, RefreshControl, Linking } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, StatusBar, RefreshControl, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -8,15 +8,15 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { GeminiService } from '../services/geminiService';
-
-const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Descuento', 'Otro'];
+import { useFinanceStore } from '../store/useFinanceStore';
+const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Descuento', 'Pago de Deuda', 'Otro'];
 
 export default function ExpensesScreen({ navigation }) {
+    const { expenses, supplierOrders: orders, isLoading: storeLoading, addExpenseLocal, setFinanceState, fetchAllData } = useFinanceStore();
+
     const [viewMode, setViewMode] = useState('expenses'); // 'expenses' | 'purchases'
 
     // Expenses State
-    const [expenses, setExpenses] = useState([]);
-    const [loading, setLoading] = useState(false);
     const [adding, setAdding] = useState(false);
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState('');
@@ -24,49 +24,10 @@ export default function ExpensesScreen({ navigation }) {
     const [scanning, setScanning] = useState(false);
     const [expandedExpenseId, setExpandedExpenseId] = useState(null);
 
-    // Purchases (Supplier Orders) State
-    const [orders, setOrders] = useState([]);
-
-    const fetchExpenses = async () => {
-        setLoading(true);
-        try {
-            const { data, error } = await supabase
-                .from('expenses')
-                .select('*')
-                .order('created_at', { ascending: false })
-                .limit(50);
-
-            if (error) throw error;
-            setExpenses(data || []);
-        } catch (error) {
-            console.log('Error al cargar gastos:', error.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const fetchOrders = async () => {
-        setLoading(true);
-        try {
-            const { data, error } = await supabase
-                .from('supplier_orders')
-                .select('*')
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-            setOrders(data || []);
-        } catch (err) {
-            console.log(err);
-        } finally {
-            setLoading(false);
-        }
-    };
-
     useFocusEffect(
         useCallback(() => {
-            if (viewMode === 'expenses') fetchExpenses();
-            else fetchOrders();
-        }, [viewMode])
+            fetchAllData(); // Smart cached fetch (only runs if data is stale)
+        }, [])
     );
 
     // --- EXPENSES LOGIC ---
@@ -85,25 +46,42 @@ export default function ExpensesScreen({ navigation }) {
         // Si la categoría es Descuento, guardamos el monto como negativo para que reste de los totales
         const finalAmount = category === 'Descuento' ? -Math.abs(numAmount) : numAmount;
 
+        // Optimistic Update / Rollback Snapshot
+        const prevExpenses = [...expenses];
+        const newExpenseId = `local-${Date.now()}`;
+        
+        addExpenseLocal({
+            id: newExpenseId,
+            description: description.trim(),
+            amount: finalAmount,
+            category,
+            created_at: new Date().toISOString()
+        });
+
+        // UX Clear Form Early
+        setDescription('');
+        setAmount('');
+        setCategory('General');
         setAdding(true);
+
         try {
             const { error } = await supabase
                 .from('expenses')
                 .insert({
-                    description: description.trim(),
+                    description: description.trim(), // Re-use trimmed val
                     amount: finalAmount,
                     category
                 });
 
             if (error) throw error;
-
-            Alert.alert('✅ Éxito', 'Gasto registrado correctamente');
-            setDescription('');
-            setAmount('');
-            setCategory('General');
-            fetchExpenses();
+            // Success! The real fetch will happen naturally over time or you can force refresh, 
+            // but the optimistic update handles the immediate UI need.
+            
+            // Cleanest is to leave it to the next sync
         } catch (error) {
             console.log('Error al agregar gasto:', error);
+            // ROLLBACK
+            setFinanceState({ expenses: prevExpenses });
             Alert.alert('Error', 'No se pudo guardar el gasto: ' + error.message);
         } finally {
             setAdding(false);
@@ -111,26 +89,35 @@ export default function ExpensesScreen({ navigation }) {
     };
 
     const handleDeleteExpense = async (id) => {
-        Alert.alert(
-            'Confirmar Eliminación',
-            '¿Estás seguro de que quieres eliminar este gasto?',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Eliminar',
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            const { error } = await supabase.from('expenses').delete().eq('id', id);
-                            if (error) throw error;
-                            fetchExpenses();
-                        } catch (err) {
-                            Alert.alert('Error', 'No se pudo eliminar el gasto');
-                        }
+        const performDelete = async () => {
+            try {
+                const { error } = await supabase.from('expenses').delete().eq('id', id);
+                if (error) throw error;
+                fetchAllData(true);
+            } catch (err) {
+                if (Platform.OS === 'web') alert('Error: No se pudo eliminar el gasto');
+                else Alert.alert('Error', 'No se pudo eliminar el gasto');
+            }
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm('¿Estás seguro de que quieres eliminar este gasto?')) {
+                performDelete();
+            }
+        } else {
+            Alert.alert(
+                'Confirmar Eliminación',
+                '¿Estás seguro de que quieres eliminar este gasto?',
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    {
+                        text: 'Eliminar',
+                        style: 'destructive',
+                        onPress: performDelete
                     }
-                }
-            ]
-        );
+                ]
+            );
+        }
     };
 
     const handleScanReceipt = async () => {
@@ -188,93 +175,129 @@ export default function ExpensesScreen({ navigation }) {
 
         const installmentAmount = item.total_cost / total;
 
-        Alert.alert(
-            'Pagar Cuota',
-            `¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}? Se descontará de la caja.`,
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Confirmar Pago',
-                    onPress: async () => {
-                        setLoading(true);
-                        try {
-                            // 1. Create Expense Record
-                            const { error: expenseError } = await supabase
-                                .from('expenses')
-                                .insert({
-                                    description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name}`,
-                                    amount: installmentAmount,
-                                    category: 'Inventario',
-                                    created_at: new Date().toISOString()
-                                });
+        const confirmPayment = async () => {
+            setLoading(true);
+            try {
+                // 1. Create Expense Record
+                const newExpense = {
+                    description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name}`,
+                    amount: installmentAmount,
+                    category: 'Pago de Deuda',
+                    created_at: new Date().toISOString()
+                };
 
-                            if (expenseError) throw expenseError;
+                const prevExpenses = [...expenses];
+                const prevOrders = [...orders];
 
-                            // 2. Update Order Installments
-                            const { error: updateError } = await supabase
-                                .from('supplier_orders')
-                                .update({ installments_paid: currentPaid + 1 })
-                                .eq('id', item.id);
+                // Optimistic Local State (Approximation for instant feedback)
+                addExpenseLocal({ ...newExpense, id: `local-${Date.now()}` });
+                setFinanceState({
+                    supplierOrders: orders.map(o => o.id === item.id ? { ...o, installments_paid: currentPaid + 1 } : o)
+                });
 
-                            if (updateError) throw updateError;
+                const { error: expenseError } = await supabase
+                    .from('expenses')
+                    .insert(newExpense);
 
-                            Alert.alert('✅ Pago Registrado', 'Se generó el gasto y se actualizó la cuota.');
-                            fetchOrders();
-                        } catch (error) {
-                            console.log('Error paying installment:', error);
-                            Alert.alert('Error', 'No se pudo registrar el pago. Intente nuevamente.');
-                        } finally {
-                            setLoading(false);
-                        }
-                    }
-                }
-            ]
-        );
+                if (expenseError) throw expenseError;
+
+                // 2. Update Order Installments
+                const { error: updateError } = await supabase
+                    .from('supplier_orders')
+                    .update({ installments_paid: currentPaid + 1 })
+                    .eq('id', item.id);
+
+                if (updateError) throw updateError;
+
+                if (Platform.OS === 'web') alert('✅ Pago Registrado: Se generó el gasto y se actualizó la cuota.');
+                else Alert.alert('✅ Pago Registrado', 'Se generó el gasto y se actualizó la cuota.');
+            } catch (error) {
+                console.log('Error paying installment:', error);
+                
+                // Rollback
+                setFinanceState({ expenses: prevExpenses, supplierOrders: prevOrders });
+
+                if (Platform.OS === 'web') alert('Error: No se pudo registrar el pago. Intente nuevamente.');
+                else Alert.alert('Error', 'No se pudo registrar el pago. Intente nuevamente.');
+            } finally {
+                setAdding(false); // Using adding boolean since loading is from store
+            }
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm(`¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}? Se descontará de la caja.`)) {
+                confirmPayment();
+            }
+        } else {
+            Alert.alert(
+                'Pagar Cuota',
+                `¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}? Se descontará de la caja.`,
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Confirmar Pago', onPress: confirmPayment }
+                ]
+            );
+        }
     };
 
     const handleReceiveOrder = async (order) => {
         if (order.status === 'received') return;
 
-        Alert.alert('Recibir Mercadería', '¿Confirmar que llegó el pedido? Se sumará el stock automáticamente.', [
-            { text: 'Cancelar' },
-            {
-                text: 'Confirmar',
-                onPress: async () => {
-                    setLoading(true);
-                    try {
-                        // 1. Update Stock in Parallel
-                        if (order.supplier_order_items && order.supplier_order_items.length > 0) {
-                            const updatePromises = order.supplier_order_items.map(async (item) => {
-                                if (item.product_id) {
-                                    const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.product_id).single();
-                                    if (prod) {
-                                        const newStock = (prod.current_stock || 0) + (item.quantity || 0);
-                                        return supabase.from('products').update({ current_stock: newStock }).eq('id', item.product_id);
-                                    }
-                                }
-                                return Promise.resolve();
-                            });
-                            await Promise.all(updatePromises);
+        const confirmReception = async () => {
+            setAdding(true);
+            const prevOrders = [...orders];
+            
+            // Optimistic
+            setFinanceState({
+                supplierOrders: orders.map(o => o.id === order.id ? { ...o, status: 'received' } : o)
+            });
+
+            try {
+                // 1. Update Stock in Parallel
+                if (order.supplier_order_items && order.supplier_order_items.length > 0) {
+                    const updatePromises = order.supplier_order_items.map(async (item) => {
+                        if (item.product_id) {
+                            const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.product_id).single();
+                            if (prod) {
+                                const newStock = (prod.current_stock || 0) + (item.quantity || 0);
+                                return supabase.from('products').update({ current_stock: newStock }).eq('id', item.product_id);
+                            }
                         }
-
-                        // 2. Mark as Received
-                        const { error } = await supabase
-                            .from('supplier_orders')
-                            .update({ status: 'received' })
-                            .eq('id', order.id);
-
-                        if (error) throw error;
-
-                        Alert.alert('✅ Recibido', 'Stock actualizado.');
-                        fetchOrders();
-                    } catch (err) {
-                        Alert.alert('Error', 'Falló la recepción: ' + err.message);
-                    } finally {
-                        setLoading(false);
-                    }
+                        return Promise.resolve();
+                    });
+                    await Promise.all(updatePromises);
                 }
+
+                // 2. Mark as Received
+                const { error } = await supabase
+                    .from('supplier_orders')
+                    .update({ status: 'received' })
+                    .eq('id', order.id);
+
+                if (error) throw error;
+
+                if (Platform.OS === 'web') alert('✅ Recibido: Stock actualizado.');
+                else Alert.alert('✅ Recibido', 'Stock actualizado.');
+            } catch (err) {
+                // Rollback
+                setFinanceState({ supplierOrders: prevOrders });
+                if (Platform.OS === 'web') alert('Error: Falló la recepción: ' + err.message);
+                else Alert.alert('Error', 'Falló la recepción: ' + err.message);
+            } finally {
+                setAdding(false);
             }
-        ]);
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm('¿Confirmar que llegó el pedido? Se sumará el stock automáticamente.')) {
+                confirmReception();
+            }
+        } else {
+            Alert.alert('Recibir Mercadería', '¿Confirmar que llegó el pedido? Se sumará el stock automáticamente.', [
+                { text: 'Cancelar' },
+                { text: 'Confirmar', onPress: confirmReception }
+            ]);
+        }
     };
 
     const handleDeleteOrder = (id) => {
@@ -284,8 +307,12 @@ export default function ExpensesScreen({ navigation }) {
                 text: 'Borrar',
                 style: 'destructive',
                 onPress: async () => {
-                    await supabase.from('supplier_orders').delete().eq('id', id);
-                    fetchOrders();
+                    const prevOrders = [...orders];
+                    setFinanceState({ supplierOrders: orders.filter(o => o.id !== id) });
+                    const { error } = await supabase.from('supplier_orders').delete().eq('id', id);
+                    if (error) {
+                        setFinanceState({ supplierOrders: prevOrders });
+                    }
                 }
             }
         ]);
@@ -322,7 +349,8 @@ export default function ExpensesScreen({ navigation }) {
     // --- RENDER ITEMS ---
     const renderExpenseItem = useCallback(({ item }) => {
         const isDiscount = item.category === 'Descuento' || item.amount < 0;
-        const hasDetails = Array.isArray(item.details) && item.details.length > 0;
+        const variants = Array.isArray(item.details) ? item.details : (item.details?.variants || []);
+        const hasDetails = variants.length > 0;
         const isExpanded = expandedExpenseId === item.id;
 
         return (
@@ -358,13 +386,21 @@ export default function ExpensesScreen({ navigation }) {
 
                 {isExpanded && hasDetails && (
                     <View style={styles.detailsContainer}>
-                        <Text style={styles.detailsTitle}>DESGLOSE POR COLOR:</Text>
-                        {item.details.map((detail, idx) => (
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                            <Text style={styles.detailsTitle}>DESGLOSE POR COLOR:</Text>
+                        </View>
+                        {variants.map((detail, idx) => (
                             <View key={idx} style={styles.detailItem}>
                                 <Text style={styles.detailText}>{detail.color || 'Sin color'}</Text>
                                 <Text style={styles.detailQty}>x{detail.qty}</Text>
                             </View>
                         ))}
+                        {item.details?.total_qty && (
+                            <View style={[styles.detailItem, { borderTopWidth: 1, borderTopColor: '#333', marginTop: 5, paddingTop: 5 }]}>
+                                <Text style={[styles.detailText, { fontWeight: 'bold' }]}>TOTAL:</Text>
+                                <Text style={[styles.detailQty, { fontWeight: 'bold' }]}>x{item.details.total_qty}</Text>
+                            </View>
+                        )}
                     </View>
                 )}
 
@@ -514,7 +550,7 @@ export default function ExpensesScreen({ navigation }) {
             </LinearGradient>
 
             {/* LOADING OVERLAY (Optional but helpful if list is empty and loading) */}
-            {loading && expenses.length === 0 && orders.length === 0 && (
+            {storeLoading && expenses.length === 0 && orders.length === 0 && (
                 <View style={styles.loadingOverlay}>
                     <ActivityIndicator size="large" color="#d4af37" />
                     <Text style={{ color: '#666', marginTop: 10 }}>Cargando datos...</Text>
@@ -581,9 +617,9 @@ export default function ExpensesScreen({ navigation }) {
                         renderItem={renderExpenseItem}
                         contentContainerStyle={styles.listContent}
                         ListHeaderComponent={<Text style={styles.listTitle}>Historial Reciente</Text>}
-                        ListEmptyComponent={!loading ? <Text style={styles.emptyText}>No hay gastos registrados</Text> : null}
+                        ListEmptyComponent={!storeLoading ? <Text style={styles.emptyText}>No hay gastos registrados</Text> : null}
                         refreshControl={
-                            <RefreshControl refreshing={loading} onRefresh={fetchExpenses} tintColor="#d4af37" colors={['#d4af37']} />
+                            <RefreshControl refreshing={storeLoading} onRefresh={() => fetchAllData(true)} tintColor="#d4af37" colors={['#d4af37']} />
                         }
                         initialNumToRender={10}
                         maxToRenderPerBatch={10}
@@ -613,9 +649,9 @@ export default function ExpensesScreen({ navigation }) {
                         keyExtractor={item => item.id}
                         renderItem={renderOrderItem}
                         contentContainerStyle={styles.listContent}
-                        ListEmptyComponent={!loading ? <Text style={styles.emptyText}>No hay órdenes de compra.</Text> : null}
+                        ListEmptyComponent={!storeLoading ? <Text style={styles.emptyText}>No hay órdenes de compra.</Text> : null}
                         refreshControl={
-                            <RefreshControl refreshing={loading} onRefresh={fetchOrders} tintColor="#d4af37" colors={['#d4af37']} />
+                            <RefreshControl refreshing={storeLoading} onRefresh={() => fetchAllData(true)} tintColor="#d4af37" colors={['#d4af37']} />
                         }
                         initialNumToRender={5}
                         maxToRenderPerBatch={5}

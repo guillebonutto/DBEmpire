@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Linking, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Linking, Alert, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
@@ -9,6 +9,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 export default function SupplierOrdersScreen({ navigation }) {
     const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [pendingWizardOrders, setPendingWizardOrders] = useState([]);
 
     const fetchOrders = async () => {
         setLoading(true);
@@ -18,8 +19,47 @@ export default function SupplierOrdersScreen({ navigation }) {
                 .select('*')
                 .order('created_at', { ascending: false });
 
-            if (error) throw error;
             setOrders(data || []);
+
+            // 2. Check for received orders with un-processed items (Wizard interrupted)
+            if (data) {
+                const receivedIds = data.filter(o => o.status === 'received').map(o => o.id);
+                if (receivedIds.length > 0) {
+                    // Fetch items with their current product costs to detect unfinished price reviews
+                    const { data: items } = await supabase
+                        .from('supplier_order_items')
+                        .select('id, supplier_order_id, product_id, cost_per_unit, products(cost_price)')
+                        .in('supplier_order_id', receivedIds);
+                    
+                    if (items) {
+                        const now = new Date();
+                        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+                        const pendingItemIds = items.filter(item => {
+                            // 1. Unlinked items ALWAYS show in pending
+                            const needsLink = !item.product_id;
+                            if (needsLink) return true;
+
+                            // 2. Cost change ONLY shows if order is recent (last 7 days)
+                            // or it won't be visible to avoid cluttering with old orders
+                            const order = data.find(o => o.id === item.supplier_order_id);
+                            const orderDate = order ? new Date(order.created_at) : null;
+                            const isOld = orderDate && orderDate < sevenDaysAgo;
+                            
+                            const currentCost = item.products ? parseFloat(item.products.cost_price) || 0 : 0;
+                            const hasCostChange = item.product_id && Math.abs(currentCost - parseFloat(item.cost_per_unit)) > 0.01;
+                            
+                            return hasCostChange && !isOld;
+                        }).map(i => i.supplier_order_id);
+
+                        const uniqueOrderIds = [...new Set(pendingItemIds)];
+                        const pending = data.filter(o => uniqueOrderIds.includes(o.id));
+                        setPendingWizardOrders(pending);
+                    }
+                } else {
+                    setPendingWizardOrders([]);
+                }
+            }
         } catch (err) {
             console.log(err);
         } finally {
@@ -65,156 +105,224 @@ export default function SupplierOrdersScreen({ navigation }) {
     };
 
     const handleDelete = (id) => {
-        Alert.alert('Eliminar', '¿Borrar este pedido del historial?', [
-            { text: 'Cancelar' },
-            {
-                text: 'Borrar',
-                style: 'destructive',
-                onPress: async () => {
-                    await supabase.from('supplier_orders').delete().eq('id', id);
-                    fetchOrders();
-                }
+        const performDelete = async () => {
+            await supabase.from('supplier_orders').delete().eq('id', id);
+            fetchOrders();
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm('¿Borrar este pedido del historial?')) {
+                performDelete();
             }
-        ]);
+        } else {
+            Alert.alert('Eliminar', '¿Borrar este pedido del historial?', [
+                { text: 'Cancelar' },
+                {
+                    text: 'Borrar',
+                    style: 'destructive',
+                    onPress: performDelete
+                }
+            ]);
+        }
     };
 
     const handleReceiveOrder = async (order) => {
-        if (order.status === 'received') return;
+        const isResuming = order.status === 'received';
 
-        Alert.alert(
-            'Recibir Mercadería',
-            '¿Confirmas que llegó este pedido? Se actualizará el inventario.',
-            [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                    text: 'Confirmar Recepción',
-                    onPress: async () => {
-                        setLoading(true);
-                        try {
-                            // 1. Get Items
-                            const { data: items, error: itemsError } = await supabase
-                                .from('supplier_order_items')
-                                .select('*')
-                                .eq('supplier_order_id', order.id);
+        const confirmReception = async () => {
+            setLoading(true);
+            try {
+                // 1. Get Items
+                const { data: items, error: itemsError } = await supabase
+                    .from('supplier_order_items')
+                    .select('*')
+                    .eq('supplier_order_id', order.id);
 
-                            if (itemsError) throw itemsError;
+                if (itemsError) throw itemsError;
 
-                            const linkedItems = items.filter(i => i.product_id);
-                            const unlinkedItems = items.filter(i => !i.product_id);
+                const linkedItems = items.filter(i => i.product_id);
+                const unlinkedItems = items.filter(i => !i.product_id);
 
-                            // 2. Separate Items (Auto-Update vs Wizard)
-                            const itemsToAutoUpdate = [];
-                            const itemsToReview = [];
+                // 2. Separate Items (Auto-Update vs Wizard)
+                const itemsToAutoUpdate = [];
+                const itemsToReview = [];
 
-                            // Process Linked Items in Parallel
-                            const productCheckPromises = linkedItems.map(async (item) => {
-                                const { data: product } = await supabase
-                                    .from('products')
-                                    .select('*')
-                                    .eq('id', item.product_id)
-                                    .single();
+                // Process Linked Items
+                const productCheckPromises = linkedItems.map(async (item) => {
+                    const { data: product } = await supabase
+                        .from('products')
+                        .select('*')
+                        .eq('id', item.product_id)
+                        .single();
 
-                                if (product) {
-                                    const currentCost = parseFloat(product.cost_price) || 0;
-                                    const newCost = parseFloat(item.cost_per_unit) || 0;
+                    if (product) {
+                        const currentCost = parseFloat(product.cost_price) || 0;
+                        const newCost = parseFloat(item.cost_per_unit) || 0;
 
-                                    if (Math.abs(currentCost - newCost) > 0.01) {
-                                        itemsToReview.push({
-                                            id: item.id,
-                                            product: product,
-                                            cost: item.cost_per_unit,
-                                            quantity: item.quantity,
-                                            provider: order.provider_name
+                        if (Math.abs(currentCost - newCost) > 0.01) {
+                            itemsToReview.push({
+                                id: item.id,
+                                product: product,
+                                name: product.name,
+                                color: item.color,
+                                cost: item.cost_per_unit,
+                                quantity: item.quantity,
+                                provider: order.provider_name
+                            });
+                        } else {
+                            itemsToAutoUpdate.push({ item, product });
+                        }
+                    } else {
+                        // BROKEN LINK: The product pointed to no longer exists.
+                        // Treat it as unlinked so it appears in the wizard for correction.
+                        itemsToReview.push({
+                            id: item.id,
+                            name: item.temp_product_name || "Producto (Vínculo Roto)",
+                            color: item.color,
+                            cost: item.cost_per_unit,
+                            quantity: item.quantity,
+                            provider: order.provider_name,
+                            isNew: true
+                        });
+                    }
+                });
+                await Promise.all(productCheckPromises);
+
+                // Add Unlinked Items to Review Queue
+                unlinkedItems.forEach(item => {
+                    itemsToReview.push({
+                        id: item.id,
+                        name: item.temp_product_name,
+                        color: item.color,
+                        cost: item.cost_per_unit,
+                        quantity: item.quantity,
+                        provider: order.provider_name,
+                        isNew: true
+                    });
+                });
+
+                // 3. Execute Auto-Updates (Only if NOT resuming)
+                if (!isResuming) {
+                    const autoUpdatePromises = itemsToAutoUpdate.map(({ item, product }) => {
+                        const newStock = (parseInt(product.current_stock) || 0) + parseInt(item.quantity);
+                        const newLocalStock = (parseInt(product.stock_local) || 0) + parseInt(item.quantity);
+
+                        const productPromises = [];
+                        productPromises.push(
+                            supabase
+                                .from('products')
+                                .update({ current_stock: newStock, stock_local: newLocalStock })
+                                .eq('id', item.product_id)
+                        );
+
+                        if (item.color) {
+                            productPromises.push(
+                                supabase.rpc('upsert_variant_stock', {
+                                    p_id: item.product_id,
+                                    p_color: item.color,
+                                    p_qty: parseInt(item.quantity)
+                                })
+                            );
+                        }
+                        return Promise.all(productPromises);
+                    });
+                    await Promise.all(autoUpdatePromises);
+
+                    // 4. Update Order Status
+                    await supabase
+                        .from('supplier_orders')
+                        .update({ status: 'received' })
+                        .eq('id', order.id);
+                    
+                    // Refresh orders early so auto-updated products are visible
+                    fetchOrders();
+                }
+
+
+                // Processing grouped review list
+                const groupedReviewItems = [];
+                itemsToReview.forEach(item => {
+                    const key = item.isNew ? (item.name || 'Sin Nombre') : item.product?.id;
+                    let existing = groupedReviewItems.find(g => {
+                        if (item.isNew) return g.isNew && g.name === key;
+                        return !g.isNew && g.product?.id === key;
+                    });
+
+                    if (existing) {
+                        existing.ids.push(item.id);
+                        existing.quantity = (parseInt(existing.quantity) || 0) + (parseInt(item.quantity) || 0);
+                        if (item.color) {
+                            existing.variantsGrouped = existing.variantsGrouped || [];
+                            existing.variantsGrouped.push({ color: item.color, qty: item.quantity });
+                        }
+                    } else {
+                        groupedReviewItems.push({
+                            ...item,
+                            ids: [item.id],
+                            variantsGrouped: item.color ? [{ color: item.color, qty: item.quantity }] : []
+                        });
+                    }
+                });
+
+
+                // 5. Navigate to Wizard if needed
+                if (groupedReviewItems.length > 0) {
+                    if (Platform.OS === 'web') {
+                        alert(`📦 Revisión Necesaria: Se detectaron ${groupedReviewItems.length} productos para revisar. Te guiaremos para actualizarlos.`);
+                        navigation.navigate('AddProduct', {
+                            importQueue: groupedReviewItems,
+                            importIndex: 0
+                        });
+                    } else {
+                        Alert.alert(
+                            '📦 Revisión Necesaria',
+                            `Se detectaron ${groupedReviewItems.length} productos para revisar. Te guiaremos para actualizarlos.`,
+                            [
+                                {
+                                    text: 'Comenzar',
+                                    onPress: () => {
+                                        navigation.navigate('AddProduct', {
+                                            importQueue: groupedReviewItems,
+                                            importIndex: 0
                                         });
-                                    } else {
-                                        itemsToAutoUpdate.push({ item, product });
                                     }
                                 }
-                            });
-                            await Promise.all(productCheckPromises);
-
-                            // Add Unlinked Items to Review Queue
-                            unlinkedItems.forEach(item => {
-                                itemsToReview.push({
-                                    id: item.id,
-                                    name: item.temp_product_name,
-                                    cost: item.cost_per_unit,
-                                    quantity: item.quantity,
-                                    provider: order.provider_name,
-                                    isNew: true
-                                });
-                            });
-
-                            // 3. Execute Auto-Updates in Parallel
-                            const autoUpdatePromises = itemsToAutoUpdate.map(({ item, product }) => {
-                                const newStock = (parseInt(product.current_stock) || 0) + parseInt(item.quantity);
-                                const newLocalStock = (parseInt(product.stock_local) || 0) + parseInt(item.quantity);
-
-                                const productPromises = [];
-
-                                // Update general stock
-                                productPromises.push(
-                                    supabase
-                                        .from('products')
-                                        .update({
-                                            current_stock: newStock,
-                                            stock_local: newLocalStock
-                                        })
-                                        .eq('id', item.product_id)
-                                );
-
-                                // Update variant stock via RPC
-                                if (item.color) {
-                                    productPromises.push(
-                                        supabase.rpc('upsert_variant_stock', {
-                                            p_id: item.product_id,
-                                            p_color: item.color,
-                                            p_qty: parseInt(item.quantity)
-                                        })
-                                    );
-                                }
-
-                                return Promise.all(productPromises);
-                            });
-                            await Promise.all(autoUpdatePromises);
-
-                            // 4. Update Order Status
-                            await supabase
-                                .from('supplier_orders')
-                                .update({ status: 'received' })
-                                .eq('id', order.id);
-
-
-                            // 5. Navigate to Wizard if needed
-                            if (itemsToReview.length > 0) {
-                                Alert.alert(
-                                    '📦 Revisión Necesaria',
-                                    `Se detectaron ${itemsToReview.length} productos nuevos o con cambio de precio. Te guiaremos para actualizarlos.`,
-                                    [
-                                        {
-                                            text: 'Comenzar',
-                                            onPress: () => {
-                                                navigation.navigate('AddProduct', {
-                                                    importQueue: itemsToReview,
-                                                    importIndex: 0
-                                                });
-                                            }
-                                        }
-                                    ]
-                                );
-                            } else {
-                                Alert.alert('✅ Éxito', 'Inventario actualizado correctamente.');
-                                fetchOrders();
-                            }
-                        } catch (err) {
-                            Alert.alert('Error', 'Falló la recepción: ' + err.message);
-                        } finally {
-                            setLoading(false);
-                        }
+                            ]
+                        );
                     }
+                } else {
+                    if (Platform.OS === 'web') {
+                        alert('✅ Inventario actualizado correctamente.');
+                    } else {
+                        Alert.alert('✅ Éxito', 'Inventario actualizado correctamente.');
+                    }
+                    fetchOrders();
                 }
-            ]
-        );
+            } catch (err) {
+                if (Platform.OS === 'web') {
+                    alert('Error: Falló la recepción: ' + err.message);
+                } else {
+                    Alert.alert('Error', 'Falló la recepción: ' + err.message);
+                }
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (Platform.OS === 'web') {
+            if (window.confirm('¿Confirmas que llegó este pedido? Se actualizará el inventario.')) {
+                confirmReception();
+            }
+        } else {
+            Alert.alert(
+                'Recibir Mercadería',
+                '¿Confirmas que llegó este pedido? Se actualizará el inventario.',
+                [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Confirmar Recepción', onPress: confirmReception }
+                ]
+            );
+        }
     };
 
     const handlePayInstallment = async (item) => {
@@ -267,10 +375,20 @@ export default function SupplierOrdersScreen({ navigation }) {
                             </View>
                         </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
-                                <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
+                            <View style={[
+                                styles.statusBadge, 
+                                { backgroundColor: item.status === 'received' ? '#27ae60' : (item.status === 'consigned' ? '#e74c3c' : '#e67e22') }
+                            ]}>
+                                <Text style={styles.statusText}>
+                                    {item.status === 'received' ? 'RECIBIDO' : (item.status === 'consigned' ? 'CONSIGNACIÓN' : 'EN CAMINO')}
+                                </Text>
                             </View>
-                            {item.status === 'pending' ? (
+                            {(item.status !== 'consigned' && (item.notes || '').toUpperCase().includes('CONSIGNACION')) && (
+                                <View style={[styles.statusBadge, { backgroundColor: '#e74c3c', marginLeft: 5 }]}>
+                                    <Text style={styles.statusText}>CONSIGNACIÓN</Text>
+                                </View>
+                            )}
+                            {item.status === 'pending' || (item.status === 'consigned' && !item.notes?.includes('MANUALLY_RECEIVED')) ? (
                                 <TouchableOpacity
                                     style={styles.receiveBtn}
                                     onPress={() => handleReceiveOrder(item)}
@@ -377,6 +495,32 @@ export default function SupplierOrdersScreen({ navigation }) {
                 </View>
             )}
 
+            {pendingWizardOrders.length > 0 && (
+                <View style={styles.pendingSection}>
+                    <View style={styles.pendingHeader}>
+                        <MaterialCommunityIcons name="alert-circle" size={20} color="#e67e22" />
+                        <Text style={styles.pendingTitle}>INGRESOS PENDIENTES ({pendingWizardOrders.length})</Text>
+                    </View>
+                    <Text style={styles.pendingSubtitle}>Tienes productos de envíos recibidos que aún no procesaste en el inventario.</Text>
+                    {pendingWizardOrders.map(order => (
+                        <TouchableOpacity 
+                            key={order.id} 
+                            style={styles.pendingCard}
+                            onPress={() => handleReceiveOrder(order)}
+                        >
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.pendingOrderName}>{order.provider_name}</Text>
+                                <Text style={styles.pendingOrderDate}>{new Date(order.created_at).toLocaleDateString()}</Text>
+                            </View>
+                            <View style={styles.resumeBtn}>
+                                <MaterialCommunityIcons name="play-circle" size={16} color="#000" />
+                                <Text style={styles.resumeBtnText}>REANUDAR</Text>
+                            </View>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+            )}
+
             <FlatList
                 data={orders}
                 keyExtractor={item => item.id}
@@ -446,5 +590,16 @@ const styles = StyleSheet.create({
     emptyText: { color: '#666', marginTop: 10, fontSize: 16 },
 
     discountBadge: { backgroundColor: 'rgba(46, 204, 113, 0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 8 },
-    discountText: { color: '#2ecc71', fontSize: 10, fontWeight: 'bold' }
+    discountText: { color: '#2ecc71', fontSize: 10, fontWeight: 'bold' },
+
+    // Pending Section Styles
+    pendingSection: { padding: 20, backgroundColor: '#1a1a1a', borderBottomWidth: 1, borderBottomColor: '#333' },
+    pendingHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 5 },
+    pendingTitle: { color: '#e67e22', fontWeight: '900', fontSize: 12, marginLeft: 8, letterSpacing: 1 },
+    pendingSubtitle: { color: '#888', fontSize: 11, marginBottom: 15 },
+    pendingCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a0a0a', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#333', marginBottom: 10 },
+    pendingOrderName: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+    pendingOrderDate: { color: '#555', fontSize: 11 },
+    resumeBtn: { flexDirection: 'row', backgroundColor: '#e67e22', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, alignItems: 'center' },
+    resumeBtnText: { color: '#000', fontWeight: '900', fontSize: 10, marginLeft: 5 }
 });

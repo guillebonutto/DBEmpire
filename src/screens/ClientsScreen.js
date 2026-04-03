@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ScrollView, Linking } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
 import { CRMService } from '../services/crmService';
@@ -100,9 +101,11 @@ export default function ClientsScreen({ navigation }) {
         }
     };
 
-    useEffect(() => {
-        fetchClients();
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            fetchClients();
+        }, [])
+    );
 
     // Filter logic
     useEffect(() => {

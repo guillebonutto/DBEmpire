@@ -14,20 +14,22 @@ export const SecurityService = {
             const deviceSig = await DeviceAuthService.getDeviceSignature();
             const userRole = await AsyncStorage.getItem('user_role') || 'unknown';
 
-            // Fire and forget - don't block the UI for logging
-            supabase.from('activity_logs').insert({
+            // Await the insert and check for errors
+            const { error } = await supabase.from('activity_logs').insert({
                 action_type: action,
                 description: details,
                 metadata: metadata,
                 device_sig: deviceSig,
                 user_role: userRole,
                 created_at: new Date().toISOString()
-            }).then(({ error }) => {
-                if (error) console.log('Security Log Error:', error);
             });
+
+            if (error) throw error;
+            return true;
 
         } catch (err) {
             console.log('Error logging security event:', err);
+            throw err; // Re-throw so caller knows it failed
         }
     },
 

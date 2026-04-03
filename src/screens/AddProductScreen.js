@@ -8,9 +8,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Linking } from 'react-native';
+import { IdentitySection, PriceSection, StockSection, OperativeSection, VariantsSection, OverheadSection } from '../components/ProductFormSections';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
-import { Linking } from 'react-native';
 
 export default function AddProductScreen({ navigation, route }) {
     // Wizard Mode: Detect "Product to Edit" either from params or from Queue
@@ -80,10 +81,12 @@ export default function AddProductScreen({ navigation, route }) {
         cost_price: '',
         profit_margin_percent: '',
         sale_price: '',
+        sale_price_cordoba: '',
         stock_local: '',
         stock_cordoba: '',
         defect_notes: '',
-        barcode: route.params?.scannedBarcode || ''
+        barcode: route.params?.scannedBarcode || '',
+        is_individual: false
     });
 
 
@@ -161,7 +164,7 @@ export default function AddProductScreen({ navigation, route }) {
     const fetchAllProducts = useCallback(async () => {
         const { data } = await supabase
             .from('products')
-            .select('id, name, sale_price, barcode, image_url')
+            .select('id, name, sale_price, sale_price_cordoba, barcode, image_url, is_individual')
             .eq('active', true)
             .order('name');
         setAllProducts(data || []);
@@ -341,10 +344,12 @@ export default function AddProductScreen({ navigation, route }) {
                     cost_price: productToEdit.cost_price?.toString() || '',
                     profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
                     sale_price: productToEdit.sale_price?.toString() || '',
+                    sale_price_cordoba: (productToEdit.sale_price_cordoba || productToEdit.sale_price)?.toString() || '',
                     stock_local: productToEdit.stock_local?.toString() || '',
                     stock_cordoba: productToEdit.stock_cordoba?.toString() || '',
                     defect_notes: productToEdit.defect_notes || '',
-                    barcode: productToEdit.barcode || ''
+                    barcode: productToEdit.barcode || '',
+                    is_individual: !!productToEdit.is_individual
                 });
                 setOverheadInternet(productToEdit.internet_cost?.toString() || '');
                 setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
@@ -534,7 +539,6 @@ export default function AddProductScreen({ navigation, route }) {
         try {
             let finalImageUrl = image;
 
-            // If image is local URI (not http), upload it
             if (image && !image.startsWith('http')) {
                 const uploadedUrl = await uploadImage(image);
                 if (uploadedUrl) {
@@ -545,10 +549,8 @@ export default function AddProductScreen({ navigation, route }) {
                 }
             }
 
-            // Common Payload Data
             let finalDescription = formData.description;
             if (isBundle && bundleItems.length > 0) {
-                // Remove existing bundle tags if any (prevent nesting)
                 const cleanDesc = formData.description.replace(/^\[\[BUNDLE:.*?\]\]/s, '').trim();
                 finalDescription = `[[BUNDLE:${JSON.stringify({ items: bundleItems })}]] ${cleanDesc}`;
             }
@@ -557,6 +559,8 @@ export default function AddProductScreen({ navigation, route }) {
                 description: finalDescription,
                 provider: formData.provider,
                 cost_price: parseFloat(formData.cost_price) || 0,
+                sale_price: parseFloat(formData.sale_price) || 0,
+                sale_price_cordoba: parseFloat(formData.sale_price_cordoba) || parseFloat(formData.sale_price) || 0,
                 profit_margin_percent: parseFloat(formData.profit_margin_percent) || 0,
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
@@ -564,6 +568,7 @@ export default function AddProductScreen({ navigation, route }) {
                 variants: variants,
                 active: true,
                 image_url: finalImageUrl,
+                is_individual: !!formData.is_individual
             };
 
             let productId = productToEdit?.id;
@@ -571,8 +576,6 @@ export default function AddProductScreen({ navigation, route }) {
             let costPrice = overrideCost !== null ? overrideCost : (parseFloat(formData.cost_price) || 0);
 
             if (isLiquidation && productToEdit) {
-                // --- LIQUIDATION LOGIC ---
-                // 1. Update OLD product (Liquidation)
                 const oldStockLocal = parseInt(productToEdit.stock_local) || 0;
                 const oldStockCordoba = parseInt(productToEdit.stock_cordoba) || 0;
                 const { error: updateError } = await supabase
@@ -580,46 +583,40 @@ export default function AddProductScreen({ navigation, route }) {
                     .update({
                         name: `${productToEdit.name} (LIQUIDACIÓN)`,
                         barcode: `LIQ-${productToEdit.barcode || Date.now()}`,
-                        // Keep old price and old stock
                         sale_price: productToEdit.sale_price,
                         stock_local: oldStockLocal,
                         stock_cordoba: oldStockCordoba,
-                        current_stock: oldStockLocal + oldStockCordoba, // Maintain for legacy if needed
-                        active: true // Ensure it stays active
+                        current_stock: oldStockLocal + oldStockCordoba,
+                        active: true
                     })
                     .eq('id', productToEdit.id);
 
                 if (updateError) throw updateError;
 
-                // 2. Create NEW product
                 const newTotalStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                 const oldTotalStock = oldStockLocal + oldStockCordoba;
-                const newStockOnly = newTotalStock - oldTotalStock; // Only the new units
-                stockDifference = newStockOnly; // For expense calculation
+                const newStockOnly = newTotalStock - oldTotalStock;
+                stockDifference = newStockOnly;
 
                 const { data: newProd, error: insertError } = await supabase
                     .from('products')
                     .insert([{
                         ...basePayload,
-                        name: formData.name, // New Name
-                        sale_price: parseFloat(formData.sale_price) || 0, // New Price
-                        current_stock: newStockOnly, // Only new stock
-                        barcode: formData.barcode?.trim() || null // New Barcode (or kept from scan)
+                        name: formData.name,
+                        current_stock: newStockOnly,
+                        barcode: formData.barcode?.trim() || null
                     }])
                     .select()
                     .single();
 
                 if (insertError) throw insertError;
-                productId = newProd.id; // Future operations on the NEW product
+                if (newProd) productId = newProd.id;
 
                 Alert.alert('Liquidación Exitosa', 'Se ha separado el stock antiguo como "Liquidación" y creado el nuevo ingreso.');
-
             } else {
-                // --- NORMAL LOGIC (Update or Insert) ---
                 const productPayload = {
                     ...basePayload,
                     name: formData.name,
-                    sale_price: parseFloat(formData.sale_price) || 0,
                     stock_local: parseInt(formData.stock_local) || 0,
                     stock_cordoba: parseInt(formData.stock_cordoba) || 0,
                     current_stock: (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0),
@@ -627,21 +624,18 @@ export default function AddProductScreen({ navigation, route }) {
                 };
 
                 if (productToEdit) {
-                    // Update
                     const { error: updateError } = await supabase
                         .from('products')
                         .update(productPayload)
                         .eq('id', productToEdit.id);
                     if (updateError) throw updateError;
 
-                    // Calculate stock diff for expense
                     const oldStock = (parseInt(productToEdit.stock_local) || 0) + (parseInt(productToEdit.stock_cordoba) || 0);
                     const newStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                     if (newStock > oldStock) {
                         stockDifference = newStock - oldStock;
                     }
                 } else {
-                    // Insert
                     const { data: newProd, error: insertError } = await supabase
                         .from('products')
                         .insert([productPayload])
@@ -885,154 +879,63 @@ export default function AddProductScreen({ navigation, route }) {
     return (
         <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
             <StatusBar barStyle="light-content" />
-            <SafeAreaView style={styles.safe} edges={['top']}>
-                {renderWizardHeader()}
-            </SafeAreaView>
+            <SafeAreaView style={styles.safe} edges={['top']}>{renderWizardHeader()}</SafeAreaView>
+            
+            <IdentitySection formData={formData} handleChange={handleChange} image={image} onPickImage={pickImage} onScanBarcode={async () => {
+                    if (permission && !permission.granted) {
+                        const result = await requestPermission();
+                        if (!result.granted) {
+                            Alert.alert("Permiso requerido", "Habilita la cámara para escanear.");
+                            return;
+                        }
+                    }
+                    setScanningMode('main');
+                    setScanned(false);
+                    setIsScanning(true);
+            }} />
 
-            <TouchableOpacity onPress={pickImage} style={styles.imagePicker}>
-                {image ? (
-                    <Image source={{ uri: image }} style={styles.imagePreview} />
-                ) : (
-                    <View style={styles.imagePlaceholder}>
-                        <Text style={styles.imagePlaceholderText}>+ FOTO</Text>
+            <PriceSection formData={formData} handleChange={handleChange} pendingPurchases={pendingPurchases} queueItem={queueItem} onShowPPPModal={() => setShowPPPModal(true)} />
+            
+            <StockSection formData={formData} handleChange={handleChange} />
+
+            <OperativeSection formData={formData} handleChange={handleChange} suppliersList={suppliersList} isBundle={isBundle} onToggleBundle={() => setIsBundle(!isBundle)} isIndividual={!!formData.is_individual} onToggleIndividual={() => handleChange('is_individual', !formData.is_individual)} bundleItems={bundleItems} onShowBundlePicker={() => setShowBundlePicker(true)} onShowSupplierModal={() => setShowSupplierModal(true)} />
+
+            <VariantsSection variants={variants} addVariant={addVariant} removeVariant={removeVariant} updateVariant={updateVariant} />
+
+            <View style={styles.overheadWrapper}>
+                <Text style={styles.sectionTitle}><Text>COSTOS (Opcional)</Text></Text>
+                <OverheadSection value={overheadInternet} onChangeText={setOverheadInternet} label="Internet" icon="wifi" />
+                <OverheadSection value={overheadElectricity} onChangeText={setOverheadElectricity} label="Electricidad" icon="flash" />
+                {(parseFloat(overheadInternet) > 0 || parseFloat(overheadElectricity) > 0) && (
+                    <View style={styles.resultBox}>
+                        {(() => {
+                            const price = parseFloat(formData.sale_price) || 0;
+                            const cost = parseFloat(formData.cost_price) || 0;
+                            const margin = price - cost;
+                            const totalFixed = (parseFloat(overheadInternet) || 0) + (parseFloat(overheadElectricity) || 0);
+                            if (margin <= 0) return <Text style={{ color: '#e74c3c' }}><Text>El precio debe ser mayor al costo para calcular.</Text></Text>;
+                            const breakEven = Math.ceil(totalFixed / margin);
+                            return (
+                                <View style={styles.breakEvenBox}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                                        <MaterialCommunityIcons name="check-circle" size={20} color="#2ecc71" />
+                                        <Text style={{ fontSize: 12, color: '#aaa', fontWeight: 'bold', marginLeft: 8, letterSpacing: 0.5 }}><Text>PUNTO DE EQUILIBRIO</Text></Text>
+                                    </View>
+                                    <View style={{ marginBottom: 12 }}><Text style={{ fontSize: 14, color: '#fff', lineHeight: 20 }}>
+                                        <Text>Necesitas vender </Text><Text style={{ fontSize: 16, color: '#2ecc71', fontWeight: '900' }}>{breakEven} unidades</Text><Text> para cubrir gastos.</Text>
+                                    </Text></View>
+                                </View>
+                            );
+                        })()}
                     </View>
                 )}
+            </View>
+
+            <TouchableOpacity style={styles.saveButton} onPress={saveProduct} disabled={loading}>
+                {loading ? <ActivityIndicator color="white" /> : <Text style={styles.saveButtonText}><Text>{productToEdit ? 'ACTUALIZAR PRODUCTO' : 'GUARDAR PRODUCTO IMPERIAL'}</Text></Text>}
             </TouchableOpacity>
 
-            <Text style={styles.label}>Nombre del Producto *</Text>
-            <TextInput
-                style={styles.input}
-                value={formData.name}
-                onChangeText={(text) => handleChange('name', text)}
-                placeholder="Ej. Zapatillas Nike Air"
-            />
 
-            <Text style={styles.label}>Código de Barras</Text>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-                <TextInput
-                    style={[styles.input, { flex: 1 }]}
-                    value={formData.barcode}
-                    onChangeText={(text) => handleChange('barcode', text)}
-                    placeholder="Escanear o escribir..."
-                />
-                <TouchableOpacity
-                    style={{ backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20, borderRadius: 8 }}
-                    onPress={async () => {
-                        if (permission && !permission.granted) {
-                            const result = await requestPermission();
-                            if (!result.granted) {
-                                Alert.alert("Permiso requerido", "Habilita la cámara para escanear.");
-                                return;
-                            }
-                        }
-                        setScanningMode('main');
-                        setScanned(false);
-                        setIsScanning(true);
-                    }}
-                >
-                    <MaterialCommunityIcons name="barcode-scan" size={24} color="#d4af37" />
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.row}>
-                <View style={styles.halfInput}>
-                    <Text style={styles.label}>Costo ($)</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={formData.cost_price}
-                        onChangeText={(text) => handleChange('cost_price', text)}
-                        keyboardType="numeric"
-                        placeholder="0.00"
-                    />
-                    {pendingPurchases.length > 0 && (
-                        <TouchableOpacity
-                            style={styles.pppBadge}
-                            onPress={() => setShowPPPModal(true)}
-                        >
-                            <MaterialCommunityIcons name="calculator-variant" size={14} color="#d4af37" />
-                            <Text style={styles.pppBadgeText}>PROMEDIAR CON {pendingPurchases.length} COMPRAS</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-                <View style={styles.halfInput}>
-                    <Text style={styles.label}>Margen (%)</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={formData.profit_margin_percent}
-                        onChangeText={(text) => handleChange('profit_margin_percent', text)}
-                        keyboardType="numeric"
-                        placeholder="30"
-                    />
-                </View>
-            </View>
-
-            {/* PPP MODAL */}
-            <Modal visible={showPPPModal} transparent animationType="fade">
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>PROMEDIO PONDERADO (PPP)</Text>
-                        <Text style={styles.modalSubtitle}>Selecciona las compras "en camino" que llegaron en este lote para unificar el costo.</Text>
-
-                        <ScrollView style={{ maxHeight: 300 }}>
-                            <View style={styles.pppItemCurrent}>
-                                <Text style={{ color: '#d4af37', fontWeight: 'bold', fontSize: 12 }}>ESTA COMPRA (ACTUAL)</Text>
-                                <Text style={{ color: '#fff' }}>{queueItem?.quantity} un. x ${queueItem?.cost}</Text>
-                            </View>
-
-                            {pendingPurchases.map(item => {
-                                const isSelected = selectedPPPItems.find(i => i.id === item.id);
-                                return (
-                                    <TouchableOpacity
-                                        key={item.id}
-                                        style={[styles.pppItem, isSelected && styles.pppItemSelected]}
-                                        onPress={() => {
-                                            if (isSelected) {
-                                                setSelectedPPPItems(prev => prev.filter(i => i.id !== item.id));
-                                            } else {
-                                                setSelectedPPPItems(prev => [...prev, item]);
-                                            }
-                                        }}
-                                    >
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.supplier_orders.provider_name}</Text>
-                                            <Text style={{ color: '#666', fontSize: 11 }}>{new Date(item.supplier_orders.created_at).toLocaleDateString()}</Text>
-                                            <Text style={{ color: '#d4af37' }}>{item.quantity} un. x ${item.cost_per_unit}</Text>
-                                        </View>
-                                        <MaterialCommunityIcons
-                                            name={isSelected ? "checkbox-marked" : "checkbox-blank-outline"}
-                                            size={24}
-                                            color={isSelected ? "#d4af37" : "#444"}
-                                        />
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </ScrollView>
-
-                        <Text style={styles.pppResultText}>
-                            Nuevo Costo Estimado: <Text style={{ color: '#2ecc71' }}>${
-                                (() => {
-                                    let totalCost = (parseFloat(queueItem?.cost) || 0) * (parseInt(queueItem?.quantity) || 1);
-                                    let totalQty = parseInt(queueItem?.quantity) || 1;
-                                    selectedPPPItems.forEach(item => {
-                                        totalCost += (parseFloat(item.cost_per_unit) || 0) * (parseInt(item.quantity) || 1);
-                                        totalQty += parseInt(item.quantity) || 1;
-                                    });
-                                    return (totalCost / totalQty).toFixed(2);
-                                })()
-                            }</Text>
-                        </Text>
-
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity style={styles.cancelButton} onPress={() => setShowPPPModal(false)}>
-                                <Text style={styles.cancelButtonText}>CANCELAR</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.applyButton} onPress={calculatePPP}>
-                                <Text style={styles.applyButtonText}>APLICAR PROMEDIO</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
 
             {/* CRM MATCH MODAL */}
             <Modal
@@ -1065,7 +968,7 @@ export default function AddProductScreen({ navigation, route }) {
                                         setGeneratingMsg(index);
                                         try {
                                             const prompt = `Genera un mensaje de WhatsApp corto y entusiasta para avisarle a un cliente llamado ${client.name} que el producto "${formData.name}" ya está disponible nuevamente. El cliente ya lo había comprado antes o compró algo similar (${client.lastPurchasedItem}). Solo devuelve el texto del mensaje.`;
-                                            const message = await GeminiService.generateMarketingCopy(prompt);
+                                            const message = await GeminiService.handleGeneralRequest(prompt);
 
                                             const phone = client.phone?.replace(/[^0-9]/g, '');
                                             Linking.openURL(`whatsapp://send?phone=${phone}&text=${encodeURIComponent(message)}`);

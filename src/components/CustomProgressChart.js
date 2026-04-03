@@ -1,30 +1,40 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text } from 'react-native';
-import Svg, { Path, Line, G, Defs, Rect, ClipPath, Text as SvgText } from 'react-native-svg';
+import React, { useState, useMemo, useRef } from 'react';
+import { View, Text, PanResponder } from 'react-native';
+import Svg, { Path, Line, G, Defs, Rect, ClipPath, Text as SvgText, Circle } from 'react-native-svg';
 
 const CustomProgressChart = ({ progressData }) => {
     const [containerWidth, setContainerWidth] = useState(0);
+    const [tooltip, setTooltip] = useState(null); // { x, y, value, label, index }
 
-    const chartContent = useMemo(() => {
-        if (!progressData?.datasets || progressData.datasets.length === 0) return null;
-        if (containerWidth === 0) return null;
+    // Keep a ref to allPoints so PanResponder can access latest without re-creating
+    const allPointsRef = useRef([]);
+    const innerGeomRef = useRef({ paddingLeft: 62, paddingRight: 16, paddingTop: 20, paddingBottom: 38, innerWidth: 0 });
+
+    const { chartContent } = useMemo(() => {
+        if (!progressData?.datasets || progressData.datasets.length === 0) return { chartContent: null };
+        if (containerWidth === 0) return { chartContent: null };
 
         const data = progressData.datasets[0].data;
-        if (data.length === 0) return null;
+        if (data.length === 0) return { chartContent: null };
 
         const chartWidth = containerWidth;
         const chartHeight = 220;
-        const paddingLeft = 55;   // space for Y labels
-        const paddingRight = 20;
+        const paddingLeft = 62;
+        const paddingRight = 16;
         const paddingTop = 20;
-        const paddingBottom = 35; // space for X labels
+        const paddingBottom = 38;
 
         const innerWidth = chartWidth - paddingLeft - paddingRight;
         const innerHeight = chartHeight - paddingTop - paddingBottom;
 
-        const minY = Math.min(...data, -100);
-        const maxY = Math.max(...data, 100);
-        const dataRange = maxY - minY;
+        // Always include 0 in the visible range
+        const rawMin = Math.min(...data, 0);
+        const rawMax = Math.max(...data, 0);
+        const rawRange = rawMax - rawMin;
+        const pad = rawRange === 0 ? 10 : rawRange * 0.06;
+        const minY = rawMin - (rawMin < 0 ? pad : 0);
+        const maxY = rawMax + (rawMax > 0 ? pad : 0);
+        const dataRange = maxY - minY || 1;
 
         const getX = (index) => paddingLeft + (index / Math.max(data.length - 1, 1)) * innerWidth;
         const getY = (value) => {
@@ -34,12 +44,21 @@ const CustomProgressChart = ({ progressData }) => {
 
         const zeroY = getY(0);
 
-        // Dynamic ClipPath IDs to force re-render on data change
         const clipAboveId = `clipAbove_${Math.round(zeroY * 100)}_${containerWidth}`;
         const clipBelowId = `clipBelow_${Math.round(zeroY * 100)}_${containerWidth}`;
 
-        // Smooth bezier path
-        const allPoints = data.map((v, i) => ({ x: getX(i), y: getY(v) }));
+        const allPoints = data.map((v, i) => ({
+            x: getX(i),
+            y: getY(v),
+            value: v,
+            label: (progressData.labels?.[i] !== undefined && progressData.labels[i] !== null && progressData.labels[i] !== '') ? String(progressData.labels[i]) : `Punto ${i + 1}`,
+            index: i,
+        }));
+
+        // Store in ref for PanResponder
+        allPointsRef.current = allPoints;
+        innerGeomRef.current = { paddingLeft, paddingRight, paddingTop, paddingBottom, innerWidth };
+
         const getBezierPath = (points) => {
             if (points.length === 0) return '';
             if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
@@ -60,18 +79,26 @@ const CustomProgressChart = ({ progressData }) => {
         const yAxisLabels = [];
         for (let i = 0; i < 5; i++) {
             const value = minY + (i / 4) * dataRange;
-            yAxisLabels.push({ value: value.toFixed(0), y: getY(value) });
+            yAxisLabels.push({ value, y: getY(value) });
         }
 
-        // X-axis labels — max 7 to avoid overlap
+        const formatY = (val) => {
+            const abs = Math.abs(val);
+            if (abs >= 1000000) return `$${(val / 1000000).toFixed(1)}M`;
+            if (abs >= 1000) return `$${(val / 1000).toFixed(0)}k`;
+            return `$${val.toFixed(0)}`;
+        };
+
+        // X-axis labels — max 8, always first and last
         const rawLabels = progressData.labels || [];
-        const step = rawLabels.length > 7 ? Math.ceil(rawLabels.length / 7) : 1;
+        const maxLabels = 8;
+        const step = rawLabels.length > maxLabels ? Math.ceil(rawLabels.length / maxLabels) : 1;
         const xAxisLabels = rawLabels
-            .map((label, index) => ({ label, x: getX(index) }))
+            .map((label, index) => ({ label, x: getX(index), index }))
             .filter((_, i) => i % step === 0 || i === rawLabels.length - 1);
 
-        return (
-            <Svg width={chartWidth} height={chartHeight}>
+        const chartSvg = (
+            <Svg width={chartWidth} height={chartHeight} pointerEvents="none">
                 <Defs>
                     <ClipPath id={clipAboveId}>
                         <Rect x="0" y="0" width={chartWidth} height={zeroY} />
@@ -91,10 +118,10 @@ const CustomProgressChart = ({ progressData }) => {
                     <Line key={`gx-${i}`} x1={l.x} y1={paddingTop} x2={l.x} y2={chartHeight - paddingBottom} stroke="#1a1a1a" strokeWidth="0.5" />
                 ))}
 
-                {/* GREEN area */}
+                {/* GREEN area (above zero) */}
                 <Path d={areaPath} fill="rgba(0, 255, 136, 0.35)" clipPath={`url(#${clipAboveId})`} />
 
-                {/* RED area */}
+                {/* RED area (below zero) */}
                 <Path d={areaPath} fill="rgba(255, 77, 77, 0.35)" clipPath={`url(#${clipBelowId})`} />
 
                 {/* Zero line */}
@@ -111,11 +138,23 @@ const CustomProgressChart = ({ progressData }) => {
                 {/* Data line */}
                 <Path d={linePath} stroke="rgba(180,180,180,0.7)" strokeWidth="1" fill="none" />
 
+                {/* Tooltip dot highlight */}
+                {tooltip && allPoints[tooltip.index] && (
+                    <Circle
+                        cx={allPoints[tooltip.index].x}
+                        cy={allPoints[tooltip.index].y}
+                        r="5"
+                        fill={tooltip.value >= 0 ? '#00ff88' : '#ff4d4d'}
+                        stroke="#fff"
+                        strokeWidth="1.5"
+                    />
+                )}
+
                 {/* Y-axis labels */}
                 <G>
                     {yAxisLabels.map((l, i) => (
                         <SvgText key={`yl-${i}`} x={paddingLeft - 5} y={l.y + 4} fill="#666" fontSize="9" textAnchor="end">
-                            {`$${Number(l.value).toLocaleString('es-AR')}`}
+                            {formatY(l.value)}
                         </SvgText>
                     ))}
                 </G>
@@ -123,14 +162,86 @@ const CustomProgressChart = ({ progressData }) => {
                 {/* X-axis labels */}
                 <G>
                     {xAxisLabels.map((l, i) => (
-                        <SvgText key={`xl-${i}`} x={l.x} y={chartHeight - paddingBottom + 14} fill="rgba(160,160,160,1)" fontSize="9" textAnchor="middle">
+                        <SvgText
+                            key={`xl-${i}`}
+                            x={l.x}
+                            y={chartHeight - paddingBottom + 14}
+                            fill="rgba(160,160,160,1)"
+                            fontSize="9"
+                            textAnchor="middle"
+                        >
                             {l.label}
                         </SvgText>
                     ))}
                 </G>
             </Svg>
         );
-    }, [progressData, containerWidth]);
+
+        return { chartContent: chartSvg };
+    }, [progressData, containerWidth, tooltip]);
+
+    // Find nearest point to a given X coordinate
+    const getNearestPoint = (touchX) => {
+        const points = allPointsRef.current;
+        if (!points || points.length === 0) return null;
+        let nearest = null;
+        let minDist = Infinity;
+        for (const pt of points) {
+            const dist = Math.abs(pt.x - touchX);
+            if (dist < minDist) {
+                minDist = dist;
+                nearest = pt;
+            }
+        }
+        return nearest;
+    };
+
+    // PanResponder: handles tap, drag, and release
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: () => true,
+
+            onPanResponderGrant: (evt) => {
+                const touchX = evt.nativeEvent.locationX;
+                const pt = getNearestPoint(touchX);
+                if (pt) setTooltip(pt);
+            },
+
+            onPanResponderMove: (evt) => {
+                const touchX = evt.nativeEvent.locationX;
+                const pt = getNearestPoint(touchX);
+                if (pt) setTooltip(pt);
+            },
+
+            onPanResponderRelease: (evt) => {
+                // If finger released outside the chart area, dismiss tooltip
+                const { paddingLeft, paddingRight, innerWidth } = innerGeomRef.current;
+                const touchX = evt.nativeEvent.locationX;
+                const touchY = evt.nativeEvent.locationY;
+                const chartHeight = 220;
+                const paddingTop = 20;
+                const paddingBottom = 38;
+                const isInsideX = touchX >= paddingLeft && touchX <= paddingLeft + innerWidth;
+                const isInsideY = touchY >= paddingTop && touchY <= chartHeight - paddingBottom;
+                if (!isInsideX || !isInsideY) {
+                    setTooltip(null);
+                }
+            },
+
+            onPanResponderTerminate: () => {
+                setTooltip(null);
+            },
+        })
+    ).current;
+
+    const formatTooltipValue = (val) => {
+        if (val === undefined || val === null) return '';
+        const abs = Math.abs(val);
+        if (abs >= 1000000) return `$${(val / 1000000).toFixed(2)}M`;
+        if (abs >= 1000) return `$${val.toLocaleString('es-AR', { maximumFractionDigits: 0 })}`;
+        return `$${val.toFixed(2)}`;
+    };
 
     return (
         <View>
@@ -140,18 +251,50 @@ const CustomProgressChart = ({ progressData }) => {
                     height: 220,
                     backgroundColor: '#0a0a0a',
                     borderRadius: 16,
-                    overflow: 'hidden',
+                    overflow: 'visible',
                     borderWidth: 1,
                     borderColor: '#1a1a1a',
+                    position: 'relative',
                 }}
                 onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
+                {...panResponder.panHandlers}
             >
                 {chartContent}
 
-                {/* Info about days if labels exist */}
-                {progressData.labels?.length > 0 && (
-                    <View style={{ position: 'absolute', bottom: 6, left: 0, right: 0, alignItems: 'center' }}>
-                        <Text style={{ color: '#444', fontSize: 8, fontWeight: 'bold', letterSpacing: 1 }}>DÍAS DEL PERÍODO</Text>
+                {/* Floating tooltip */}
+                {tooltip && (
+                    <View
+                        style={{
+                            position: 'absolute',
+                            left: Math.min(
+                                Math.max(tooltip.x - 40, 4),
+                                (containerWidth || 300) - 90
+                            ),
+                            top: Math.max(tooltip.y - 52, 4),
+                            backgroundColor: '#1a1a1a',
+                            borderRadius: 8,
+                            paddingHorizontal: 10,
+                            paddingVertical: 6,
+                            borderWidth: 1,
+                            borderColor: tooltip.value >= 0 ? '#00ff88' : '#ff4d4d',
+                            zIndex: 100,
+                            minWidth: 80,
+                            alignItems: 'center',
+                        }}
+                        pointerEvents="none"
+                    >
+                        {tooltip.label ? (
+                            <Text style={{ color: '#888', fontSize: 9, marginBottom: 2, fontWeight: '600' }}>
+                                {tooltip.label}
+                            </Text>
+                        ) : null}
+                        <Text style={{
+                            color: tooltip.value >= 0 ? '#00ff88' : '#ff4d4d',
+                            fontWeight: 'bold',
+                            fontSize: 11,
+                        }}>
+                            {formatTooltipValue(tooltip.value)}
+                        </Text>
                     </View>
                 )}
             </View>
