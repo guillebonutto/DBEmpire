@@ -279,10 +279,20 @@ export default function AdminScreen({ navigation }) {
         for (const e of (expenses || [])) {
             const eMs = new Date(e.created_at).getTime();
             const val = parseFloat(e.amount) || 0;
-            const isDebt = e.category === 'Pago de Deuda';
+            const isDebtPayment = e.category === 'Pago de Deuda';
+            const desc = (e.description || '').toLowerCase();
+            const isInitialCreditStock = desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado');
+
             if (eMs < startMs) {
-                prevExpCaja += val;
-                if (!isDebt) prevExpROI += val;
+                // Liquidez: Ignora compras grandes a crédito (ficticio, no toca billete) pero resta cuotas
+                if (!isInitialCreditStock) {
+                    prevExpCaja += val; 
+                }
+                
+                // ROI (Rentabilidad): Resta compras grandes (para recuperar capital metido) pero ignora pago de cuotas repetido
+                if (!isDebtPayment) {
+                    prevExpROI += val; 
+                }
             } else if (!endMs || eMs <= endMs) {
                 currentExpenses.push(e);
             }
@@ -346,11 +356,23 @@ export default function AdminScreen({ navigation }) {
         const grossProfit = finalSales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
         const totalCommissions = finalSales.reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
         
-        const totalExpensesCaja = currentExpenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
-        const totalExpensesROI = currentExpenses.reduce((sum, e) => sum + (e.category !== 'Pago de Deuda' ? (parseFloat(e.amount) || 0) : 0), 0);
-        const debtPayments = totalExpensesCaja - totalExpensesROI;
+        // ----- REGLAS MAGICAS CONTABLES DEL IMPERIO -----
+        const isExpenseCreditStock = (e) => {
+            const desc = (e.description || '').toLowerCase();
+            return desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado');
+        };
+        const isExpenseDebtPayment = (e) => e.category === 'Pago de Deuda';
 
-        const netCaja = histBalCaja + totalSales - totalExpensesCaja; // Liquidez real (Caja Fuerte)
+        // Total de pagos de cuotas para el panel informativo
+        const debtPayments = currentExpenses.reduce((sum, e) => sum + (isExpenseDebtPayment(e) ? (parseFloat(e.amount) || 0) : 0), 0);
+        
+        // CAJA FUERTE (Liquidez): Resta Todo (incluyendo pagos de cuota) PERO ignora inversiones iniciales de stock marcadas como crédito
+        const totalExpensesCaja = currentExpenses.reduce((sum, e) => sum + (!isExpenseCreditStock(e) ? (parseFloat(e.amount) || 0) : 0), 0);
+        
+        // RENTABILIDAD (ROI): DEBE incluir las inversiones a crédito (para medir recuperación de capital)! Solo ignora pagos de cuota.
+        const totalExpensesROI = currentExpenses.reduce((sum, e) => sum + (!isExpenseDebtPayment(e) ? (parseFloat(e.amount) || 0) : 0), 0);
+
+        const netCaja = histBalCaja + totalSales - totalExpensesCaja; // Liquidez (Caja Fuerte) - Ignora deudas
         const netProfit = histBalROI + totalSales - totalExpensesROI; // Rentabilidad pura del negocio
 
         setStats({ totalSales, totalProfit: grossProfit, totalCommissions, totalExpenses: totalExpensesROI, debtPayments, netCaja, netProfit, sellerCount: 1 });
