@@ -7,47 +7,34 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
+import { useFinanceStore } from '../store/useFinanceStore';
+import { useClientStore } from '../store/useClientStore';
+
 export default function OrdersScreen({ navigation, route }) {
-    const [orders, setOrders] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [viewType, setViewType] = useState(route.params?.initialViewType || 'pedidos'); // 'pedidos' o 'presupuestos'
-    
-    // 🔥 Reaccionar a cambios en los parámetros de navegación (p.ej. al volver desde Home con otro botón)
-    React.useEffect(() => {
-        if (route.params?.initialViewType) {
-            setViewType(route.params.initialViewType);
-        }
-    }, [route.params?.initialViewType]);
+    const { sales, saleItems, isLoading, fetchAllData } = useFinanceStore();
+    const { clients } = useClientStore();
+    const [viewType, setViewType] = useState(route.params?.initialViewType || 'pedidos');
 
-    const fetchOrders = async () => {
-        setLoading(true);
-        try {
-            // Traer todos los pedidos pendientes o presupuestos (excluyendo lo entregado/completado)
-            const { data, error } = await supabase
-                .from('sales')
-                .select('*, clients(name), sale_items(*, products(name))')
-                .not('status', 'in', '("completed","cancelled","exitosa","vended","transfer_completed")')
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-            
-            // Filtro extra de seguridad para ignorar todo lo que sea de Logística (CBA/Socio)
-            const filteredData = (data || []).filter(s => {
-                const isLogistics = s.clients?.name && (s.clients.name.includes('Cordoba') || s.clients.name.includes('CBA') || s.clients.name.includes('Socio'));
-                return !isLogistics;
-            });
-
-            setOrders(filteredData);
-        } catch (err) {
-            console.log(err);
-        } finally {
-            setLoading(false);
-        }
-    };
+    // Filter and enrich data from store
+    const displayedOrders = sales.filter(o => {
+        const isBudget = o.status === 'budget';
+        const isPending = !['completed', 'cancelled', 'exitosa', 'vended', 'transfer_completed'].includes(o.status);
+        
+        if (viewType === 'presupuestos') return isBudget;
+        return isPending && !isBudget;
+    }).map(sale => {
+        const client = clients.find(c => c.id === sale.client_id);
+        const items = saleItems.filter(si => si.sale_id === sale.id);
+        return {
+            ...sale,
+            clients: client || null,
+            sale_items: items
+        };
+    });
 
     useFocusEffect(
         useCallback(() => {
-            fetchOrders();
+            fetchAllData(); 
         }, [])
     );
 
@@ -78,7 +65,7 @@ export default function OrdersScreen({ navigation, route }) {
                                 .eq('id', order.id);
 
                             if (error) throw error;
-                            fetchOrders();
+                            fetchAllData(true);
                             Alert.alert('Éxito', 'Pedido finalizado y archivado.');
                         } catch (err) {
                             Alert.alert('Error', 'No se pudo actualizar.');
@@ -92,20 +79,21 @@ export default function OrdersScreen({ navigation, route }) {
     };
 
     const generateReceiptPDF = async (saleData) => {
+        const isBudget = saleData.status === 'budget';
         try {
             const html = `
                 <html>
                 <body style="font-family: sans-serif; padding: 20px; color: #333;">
                     <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #d4af37; padding-bottom: 10px;">
                         <h1 style="color: #d4af37; margin: 0; font-size: 24px;">DIGITAL BOOST EMPIRE</h1>
-                        <p style="margin: 5px 0; font-size: 12px; font-weight: bold; color: #888;">PRESUPUESTO / COMPROBANTE</p>
+                        <p style="margin: 5px 0; font-size: 12px; font-weight: bold; color: #888;">${isBudget ? 'PRESUPUESTO' : 'COMPROBANTE DE PEDIDO'}</p>
+                        ${isBudget ? '<div style="margin-top:8px;background:#fff8e1;border:1px solid #d4af37;border-radius:6px;padding:8px;font-size:11px;color:#7d5a00;">⚠️ Validez: 7 días desde la emisión.</div>' : ''}
                     </div>
                     
                     <div style="margin-bottom: 20px; font-size: 14px;">
                         <p style="margin: 5px 0;"><strong>Fecha:</strong> ${new Date(saleData.created_at).toLocaleString()}</p>
-                        <p style="margin: 5px 0;"><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
+                        <p style="margin: 5px 0;"><strong>${isBudget ? 'Presupuesto' : 'Operación'}:</strong> #${isBudget ? 'PRS' : 'SC'}-${saleData.id.slice(0, 8).toUpperCase()}</p>
                         <p style="margin: 5px 0;"><strong>Cliente:</strong> ${saleData.clients?.name || 'Anónimo'}</p>
-                        ${saleData.status === 'budget' ? '<p style="margin: 5px 0; color: #e67e22; font-weight: bold;">ESTADO: PRESUPUESTO</p>' : ''}
                     </div>
 
                     <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
@@ -125,21 +113,50 @@ export default function OrdersScreen({ navigation, route }) {
                                     <td style="text-align: center; padding: 10px;">${item.quantity}</td>
                                     <td style="text-align: right; padding: 10px;">$${(Number(item.unit_price_at_sale) * item.quantity).toFixed(2)}</td>
                                 </tr>
-                            `).join('') || ''}
+                            `).join('') || '<tr><td colspan="3" style="padding:10px;color:#999;text-align:center;">Sin detalle de productos</td></tr>'}
                         </tbody>
                     </table>
 
                     <div style="text-align: right; font-size: 18px; border-top: 2px solid #d4af37; padding-top: 10px;">
-                        <p><strong>TOTAL: $${Number(saleData.total_amount).toFixed(2)}</strong></p>
+                        <p><strong>${isBudget ? 'TOTAL COTIZADO' : 'TOTAL'}: $${Number(saleData.total_amount).toFixed(2)}</strong></p>
                     </div>
                 </body>
                 </html>
             `;
             const { uri } = await Print.printToFileAsync({ html });
-            await Sharing.shareAsync(uri);
+            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: isBudget ? 'Enviar Presupuesto' : 'Enviar Comprobante' });
         } catch (err) {
             Alert.alert('Error', 'No se pudo generar el PDF.');
         }
+    };
+
+    const handleConvertToSale = async (order) => {
+        Alert.alert(
+            '✅ Convertir a Venta',
+            `¿Confirmar venta por $${order.total_amount} al cliente ${order.clients?.name || 'Anónimo'}?`,
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'CONFIRMAR VENTA',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            const { error } = await supabase
+                                .from('sales')
+                                .update({ status: 'completed' })
+                                .eq('id', order.id);
+                            if (error) throw error;
+                            fetchAllData(true);
+                            Alert.alert('✅ Venta confirmada', 'El presupuesto fue convertido en venta y archivado.');
+                        } catch (err) {
+                            Alert.alert('Error', 'No se pudo convertir el presupuesto.');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const renderOrderItem = useCallback(({ item }) => (
@@ -186,20 +203,28 @@ export default function OrdersScreen({ navigation, route }) {
                     <Text style={[styles.actionText, { color: '#d4af37' }]}>PDF</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={styles.actionBtn}
-                    onPress={() => handleFinishOrder(item)}
-                >
-                    <MaterialCommunityIcons name="check-circle-outline" size={20} color="#fff" />
-                    <Text style={styles.actionText}>FINALIZAR</Text>
-                </TouchableOpacity>
+                {item.status === 'budget' ? (
+                    <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: '#27ae60' }]}
+                        onPress={() => handleConvertToSale(item)}
+                    >
+                        <MaterialCommunityIcons name="check-decagram" size={20} color="#fff" />
+                        <Text style={styles.actionText}>CONFIRMAR VENTA</Text>
+                    </TouchableOpacity>
+                ) : (
+                    <TouchableOpacity
+                        style={styles.actionBtn}
+                        onPress={() => handleFinishOrder(item)}
+                    >
+                        <MaterialCommunityIcons name="check-circle-outline" size={20} color="#fff" />
+                        <Text style={styles.actionText}>FINALIZAR</Text>
+                    </TouchableOpacity>
+                )}
             </View>
         </View>
     ), []);
 
-    const displayedOrders = orders.filter(o => 
-        viewType === 'presupuestos' ? o.status === 'budget' : o.status !== 'budget'
-    );
+
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
@@ -218,13 +243,13 @@ export default function OrdersScreen({ navigation, route }) {
             </View>
 
             <View style={styles.tabContainer}>
-                <TouchableOpacity 
+                <TouchableOpacity
                     style={[styles.tabBtn, viewType === 'pedidos' && styles.tabBtnActive]}
                     onPress={() => setViewType('pedidos')}
                 >
                     <Text style={[styles.tabText, viewType === 'pedidos' && styles.tabTextActive]}>📦 PEDIDOS A ENVIAR</Text>
                 </TouchableOpacity>
-                <TouchableOpacity 
+                <TouchableOpacity
                     style={[styles.tabBtn, viewType === 'presupuestos' && styles.tabBtnActive]}
                     onPress={() => setViewType('presupuestos')}
                 >
@@ -237,7 +262,7 @@ export default function OrdersScreen({ navigation, route }) {
                 keyExtractor={item => item.id}
                 renderItem={renderOrderItem}
                 contentContainerStyle={{ padding: 20 }}
-                refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchOrders} tintColor="#d4af37" />}
+                refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => fetchAllData(true)} tintColor="#d4af37" />}
                 ListEmptyComponent={
                     <View style={styles.empty}>
                         <MaterialCommunityIcons name={viewType === 'presupuestos' ? "file-document-outline" : "package-variant-closed"} size={50} color="#333" />

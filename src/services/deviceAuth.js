@@ -65,30 +65,78 @@ export const DeviceAuthService = {
 
     /**
      * Checks if this device is authorized and returns its assigned role.
+     * SQLite-first: instant offline response, no network hang.
      */
     checkAuthorization: async () => {
         const signature = await DeviceAuthService.getDeviceSignature();
         if (!signature) return null;
 
+        const { LocalDbService } = require('./localDbService');
+
+        // 1. Check SQLite FIRST — instant, works offline
+        try {
+            const localDevices = await LocalDbService.getAll('authorized_devices');
+            const localDevice = localDevices.find(d => d.device_signature === signature && (d.is_active === 1 || d.is_active === true));
+            if (localDevice) {
+                console.log('[Auth] Authorized via SQLite:', localDevice.role);
+                await AsyncStorage.setItem('user_role', localDevice.role);
+                // Background-refresh from Supabase without blocking
+                DeviceAuthService.refreshAuthFromServer(signature, localDevice, LocalDbService).catch(() => {});
+                return localDevice.role;
+            }
+        } catch (e) {
+            console.warn('[Auth] SQLite check failed:', e.message);
+        }
+
+        // 2. Not in SQLite? Try Supabase with a timeout
+        try {
+            const timeout = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 5000)
+            );
+            const fetchPromise = supabase
+                .from('authorized_devices')
+                .select('*')
+                .eq('device_signature', signature)
+                .eq('is_active', true)
+                .limit(1);
+
+            const { data, error } = await Promise.race([fetchPromise, timeout]);
+
+            if (!error && data && data.length > 0) {
+                const device = data[0];
+                await LocalDbService.saveItem('authorized_devices', {
+                    id: device.id,
+                    device_signature: signature,
+                    role: device.role,
+                    is_active: 1
+                });
+                await AsyncStorage.setItem('user_role', device.role);
+                return device.role;
+            }
+        } catch (e) {
+            console.warn('[Auth] Supabase check failed or timed out:', e.message);
+        }
+
+        return null;
+    },
+
+    refreshAuthFromServer: async (signature, localDevice, LocalDbService) => {
         try {
             const { data, error } = await supabase
                 .from('authorized_devices')
-                .select('role')
+                .select('*')
                 .eq('device_signature', signature)
                 .limit(1);
-
-            if (error) throw error;
-            
-            const device = data && data.length > 0 ? data[0] : null;
-            if (!device) return null;
-
-            // Save role locally as well for offline/fast access
-            await AsyncStorage.setItem('user_role', device.role);
-            return device.role;
-        } catch (e) {
-            console.error('Error checking device authorization:', e);
-            return null;
-        }
+            if (!error && data && data.length > 0) {
+                const device = data[0];
+                await LocalDbService.saveItem('authorized_devices', {
+                    id: device.id,
+                    device_signature: signature,
+                    role: device.role,
+                    is_active: device.is_active ? 1 : 0
+                });
+            }
+        } catch {}
     },
 
     /**

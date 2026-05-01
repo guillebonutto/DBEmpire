@@ -39,6 +39,7 @@ import BrandingScreen from '../screens/BrandingScreen';
 import TransfersScreen from '../screens/TransfersScreen';
 import NewTransferScreen from '../screens/NewTransferScreen';
 import AIDashboardScreen from '../screens/AIDashboardScreen';
+import ProductTesterScreen from '../screens/ProductTesterScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -292,6 +293,11 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="AIDashboard"
                 component={AIDashboardScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="ProductTester"
+                component={ProductTesterScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

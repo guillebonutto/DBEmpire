@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Alert, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Alert, TextInput, InteractionManager } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
@@ -7,11 +7,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFinanceStore } from '../store/useFinanceStore';
 
 export default function SalesScreen({ navigation }) {
-    const [loading, setLoading] = useState(false);
+    const { sales: recentSales, isLoading: loading, fetchAllData: fetchSalesData } = useFinanceStore();
     const [stats, setStats] = useState({ today: 0, month: 0, countToday: 0, commissions: 0 });
-    const [recentSales, setRecentSales] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [viewType, setViewType] = useState('ventas'); // 'ventas' o 'presupuestos'
 
@@ -114,37 +114,16 @@ export default function SalesScreen({ navigation }) {
         }
     };
 
-    const fetchSalesData = async () => {
-        setLoading(true);
-        try {
-            const now = new Date();
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-            // Logic:
-            // 1. Fetch EVERYTHING that is 'budget' or 'pending' (regardless of date)
-            // 2. Fetch 'completed/exitosa' ONLY for the current month
-            const { data, error } = await supabase
-                .from('sales')
-                .select('*, profiles(full_name), clients(name), promotions(title), sale_items(*, products(name))')
-                .or(`status.in.(budget,pending),and(status.in.(completed,exitosa,"",vended),created_at.gte.${startOfMonth})`)
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-
-            if (data) {
-                processStats(data);
-                setRecentSales(data);
-            }
-        } catch (err) {
-            console.log(err);
-        } finally {
-            setLoading(false);
+    // Statistics are now calculated from the store data whenever it changes
+    React.useEffect(() => {
+        if (recentSales) {
+            processStats(recentSales);
         }
-    };
+    }, [recentSales]);
 
     // Filtered sales based on search query and view type
     const filteredRecentSales = useMemo(() => {
-        let list = [...recentSales];
+        let list = Array.isArray(recentSales) ? [...recentSales] : [];
         
         // Tab Filtering
         if (viewType === 'ventas') {
@@ -205,9 +184,12 @@ export default function SalesScreen({ navigation }) {
         setStats({ today: totalToday, month: totalMonth, countToday: count, commissions: totalCommissions });
     };
 
+    // Initial fetch from store is silent if we already have data
     useFocusEffect(
         useCallback(() => {
-            fetchSalesData();
+            InteractionManager.runAfterInteractions(() => {
+                fetchSalesData();
+            });
         }, [])
     );
 

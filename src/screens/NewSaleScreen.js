@@ -513,21 +513,25 @@ export default function NewSaleScreen({ navigation, route }) {
         });
     }, [promos, cart]);
 
-    const generateReceiptPDF = async (saleData, client, cart) => {
+    const generateReceiptPDF = async (saleData, client, cart, docType = 'sale') => {
         try {
             const date = new Date().toLocaleString();
+            const isBudget = docType === 'budget' || saleData?.status === 'budget';
+            const accentColor = '#d4af37';
+
             const htmlContent = `
             <html>
                 <body style="font-family: 'Helvetica', 'Arial', sans-serif; padding: 40px; color: #333;">
                     <div style="text-align: center; margin-bottom: 30px;">
-                        <h1 style="color: #d4af37; margin: 0; font-size: 28px; letter-spacing: 2px;">DIGITAL BOOST EMPIRE</h1>
-                        <p style="margin: 5px 0; color: #888; font-size: 14px;">Recibo de Venta Oficial</p>
-                        <div style="width: 100%; height: 1px; background-color: #d4af37; margin-top: 15px;"></div>
+                        <h1 style="color: ${accentColor}; margin: 0; font-size: 28px; letter-spacing: 2px;">DIGITAL BOOST EMPIRE</h1>
+                        <p style="margin: 5px 0; color: #888; font-size: 14px;">${isBudget ? 'PRESUPUESTO' : 'Recibo de Venta Oficial'}</p>
+                        ${isBudget ? `<div style="margin-top: 10px; background-color: #fff8e1; border: 1px solid #d4af37; border-radius: 6px; padding: 8px; font-size: 12px; color: #7d5a00;">⚠️ Este presupuesto tiene validez de 7 días desde la fecha de emisión.</div>` : ''}
+                        <div style="width: 100%; height: 1px; background-color: ${accentColor}; margin-top: 15px;"></div>
                     </div>
                     
                     <div style="margin-bottom: 30px; font-size: 14px; line-height: 1.6;">
                         <p style="margin: 2px 0;"><strong>Fecha:</strong> ${date}</p>
-                        <p style="margin: 2px 0;"><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
+                        <p style="margin: 2px 0;"><strong>${isBudget ? 'Presupuesto' : 'Operación'}:</strong> #${isBudget ? 'PRS' : 'SC'}-${saleData.id.slice(0, 8).toUpperCase()}</p>
                         <p style="margin: 2px 0;"><strong>Cliente:</strong> ${client ? client.name : 'Venta de Mostrador'}</p>
                     </div>
 
@@ -573,9 +577,9 @@ export default function NewSaleScreen({ navigation, route }) {
                         </tbody>
                     </table>
 
-                    <div style="text-align: right; margin-top: 10px; padding-top: 10px; border-top: 1px solid #d4af37;">
+                    <div style="text-align: right; margin-top: 10px; padding-top: 10px; border-top: 1px solid ${accentColor};">
                         <p style="margin: 0; color: #888; font-size: 14px;">Subtotal: $${subtotal.toFixed(2)}</p>
-                        <h2 style="margin: 10px 0 0 0; color: #000; font-size: 22px;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
+                        <h2 style="margin: 10px 0 0 0; color: #000; font-size: 22px;">${isBudget ? 'TOTAL COTIZADO' : 'TOTAL A PAGAR'}: $${total.toFixed(2)}</h2>
                     </div>
 
                     <div style="margin-top: 60px; text-align: center; color: #bbb; font-size: 11px;">
@@ -586,14 +590,16 @@ export default function NewSaleScreen({ navigation, route }) {
             </html>
             `;
 
+            const dialogTitle = isBudget ? 'Enviar Presupuesto' : 'Enviar Recibo';
             const { uri } = await Print.printToFileAsync({ html: htmlContent });
-            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: 'Enviar Recibo' });
+            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle });
         } catch (error) {
             console.log('Error generating PDF:', error);
             if (Platform.OS === 'web') alert('Error: No se pudo generar el recibo digital.');
             else Alert.alert('Error', 'No se pudo generar el recibo digital.');
         }
     };
+
 
     const processCheckout = async (client, checkoutSaleType = saleType) => {
         if (loading) return; // ANTI-DOUBLE SALE LOCK
@@ -668,39 +674,13 @@ export default function NewSaleScreen({ navigation, route }) {
                 throw new Error('Error al preparar los datos de la venta.');
             }
 
-            if (!netState.isConnected) {
-                // OFFLINE MODE
-                const offlineId = await SyncService.queueSale(salePayload, cart);
-                if (Platform.OS === 'web') {
-                    alert('📴 Modo Offline Activo: No tienes internet. La venta se ha guardado localmente y se sincronizará automáticamente cuando recuperes la señal.');
-                    clearCart();
-                    setSelectedClient(null);
-                    setSelectedPromo(null);
-                    setManualDiscount('');
-                    setManualDiscountType('fixed');
-                    setClientModalVisible(false);
-                    navigation.navigate('Main');
-                } else {
-                    Alert.alert(
-                        '📴 Modo Offline Activo',
-                        'No tienes internet. La venta se ha guardado localmente y se sincronizará automáticamente cuando recuperes la señal.',
-                        [{
-                            text: 'ENTENDIDO', onPress: () => {
-                                clearCart();
-                                setSelectedClient(null);
-                                setSelectedPromo(null);
-                                setManualDiscount('');
-                                setManualDiscountType('fixed');
-                                setClientModalVisible(false);
-                                navigation.navigate('Main');
-                            }
-                        }]
-                    );
-                }
-                return;
-            }
+            // --- OFFLINE-FIRST FLUIDITY LOGIC ---
+            // We always queue the action locally first to ensure the UI is fast ("fluidez constante")
+            // The SyncService will handle the background push to Supabase.
+            
+            await SyncService.queueAction('sale', salePayload, { items: cart });
 
-            // OPTIMISTIC UPDATE: Deduct stock instantly in UI so it feels lightning fast
+            // 1. Optimistic Stock Update
             if (checkoutSaleType !== 'budget') {
                 cart.forEach(item => {
                     const localDeduct = saleLocation === 'local' ? item.qty : 0;
@@ -708,23 +688,15 @@ export default function NewSaleScreen({ navigation, route }) {
                 });
             }
 
-            // OPTIMISTIC FINANCES UPDATE
-            const prevFinanceState = { 
-                sales: Array.isArray(sales) ? [...sales] : [], 
-                saleItems: Array.isArray(saleItems) ? [...saleItems] : [] 
-            };
+            // 2. Optimistic Finance Update
             if (checkoutSaleType !== 'budget') {
-                const localId = `local-${Date.now()}`;
                 const optSale = {
                     ...salePayload,
-                    id: localId,
+                    id: `local-${Date.now()}`,
                     created_at: new Date().toISOString()
                 };
-                
-                // Validate cart before mapping for optimistic items
-                const validCart = Array.isArray(cart) ? cart : [];
-                const optItems = validCart.map(item => ({
-                    sale_id: localId,
+                const optItems = cart.map(item => ({
+                    sale_id: optSale.id,
                     product_id: item.id,
                     quantity: item.qty,
                     products: { name: item.name }
@@ -732,218 +704,13 @@ export default function NewSaleScreen({ navigation, route }) {
                 addSaleLocal(optSale, optItems);
             }
 
-            // 1. Create Sale Record - BUT SKIP IF BUDGET (only generate PDF, don't save to DB)
-            let saleData = null;
-            let saleError = null;
-
-            if (checkoutSaleType === 'budget') {
-                // PRESUPUESTO: Only generate PDF, don't insert into database
-                console.log('Budget mode: Skipping database insertion, will generate PDF only');
-                
-                // Create a temporary ID for the PDF generation
-                saleData = {
-                    id: `budget-${Date.now()}`,
-                    ...salePayload,
-                    created_at: new Date().toISOString()
-                };
-            } else {
-                // VENTAS REALES (completed, pending): Insert into database
-                const result = await supabase
-                    .from('sales')
-                    .insert(salePayload)
-                    .select()
-                    .single();
-
-                saleData = result.data;
-                saleError = result.error;
-
-                // Fallback: If device_sig column doesn't exist yet, retry without it
-                if (saleError && saleError.message.includes('device_sig')) {
-                    console.log('Retry: device_sig column missing. Inserting without it.');
-                    delete salePayload.device_sig;
-                    const retry = await supabase
-                        .from('sales')
-                        .insert(salePayload)
-                        .select()
-                        .single();
-                    saleData = retry.data;
-                    saleError = retry.error;
-                }
-
-                if (saleError) {
-                    console.error('Sale Insert Error:', saleError);
-                    throw new Error('No se pudo crear el registro de venta.');
-                }
-
-                // Validate saleData exists
-                if (!saleData || !saleData.id) {
-                    console.error('Sale data is missing or has no ID:', saleData);
-                    throw new Error('La respuesta de venta no contiene un ID válido.');
-                }
-            }
-
-            // 2. Insert Items
-            // Validate cart is an array before mapping
-            if (!Array.isArray(cart) || cart.length === 0) {
-                console.error('Cart is not a valid array or is empty:', cart);
-                throw new Error('El carrito no contiene artículos válidos.');
-            }
-
-            // 2. Insert Items - BUT SKIP IF BUDGET
-            if (checkoutSaleType !== 'budget') {
-                const saleItems = cart.map(item => {
-                    const unitPrice = getRegionalPrice(item, saleLocation);
-                    return {
-                        sale_id: saleData.id,
-                        product_id: item.id,
-                        quantity: item.qty,
-                        unit_price_at_sale: unitPrice,
-                        subtotal: unitPrice * item.qty,
-                        color: item.color || item.selectedColor || null
-                    };
-                });
-
-                const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
-                if (itemsError) {
-                    console.error('Items Insert Error:', itemsError);
-                    // Critical error: Sale exists but no items. We should probably inform the user.
-                    if (Platform.OS === 'web') alert('Error Parcial: La venta se registró pero hubo un problema guardando los productos. Por favor revisa el historial.');
-                    else Alert.alert('Error Parcial', 'La venta se registró pero hubo un problema guardando los productos. Por favor revisa el historial.');
-                    throw new Error('Error al guardar los productos de la venta.');
-                }
-
-                console.log('Sale items created successfully. Checking for bundle deductions...');
-            } else {
-                // BUDGET: Just log that we're skipping items insertion
-                console.log('Budget mode: Skipping sale_items insertion');
-            }
-
-            // 3. Update Stock (Skip if it's just a budget/quote)
-            if (checkoutSaleType !== 'budget') {
-                try {
-                    const lowStockProducts = [];
-                    for (const item of cart) {
-                        // --- BUNDLE STOCK DEDUCTION LOGIC ---
-                        if (item.description?.startsWith('[[BUNDLE:')) {
-                            try {
-                                const parts = item.description.split(']]');
-                                const jsonStr = parts[0].replace('[[BUNDLE:', '').trim();
-                                
-                                // Validate jsonStr before parsing
-                                if (!jsonStr || jsonStr.length === 0) {
-                                    console.log('Invalid bundle format: empty jsonStr');
-                                    continue;
-                                }
-                                
-                                const bundleData = JSON.parse(jsonStr);
-                                
-                                // Validate bundleData structure
-                                if (!bundleData || !bundleData.items || !Array.isArray(bundleData.items)) {
-                                    console.log('Invalid bundle data structure:', bundleData);
-                                    continue;
-                                }
-
-                                // Deduct each item in the bundle
-                                for (const bundleItem of bundleData.items) {
-                                    const { data: childProd } = await supabase
-                                        .from('products')
-                                        .select('current_stock, name')
-                                        .eq('id', bundleItem.id)
-                                        .single();
-
-                                    if (childProd) {
-                                        const childrenToDeduct = bundleItem.qty * item.qty;
-                                        const newChildStock = (childProd.current_stock || 0) - childrenToDeduct;
-                                        await supabase.from('products').update({ current_stock: newChildStock }).eq('id', bundleItem.id);
-
-                                        if (newChildStock <= 5) {
-                                            if (!lowStockProducts.find(p => p.name === childProd.name)) {
-                                                lowStockProducts.push({ name: childProd.name, stock: newChildStock });
-                                            }
-                                        }
-                                    }
-                                }
-                            } catch (e) {
-                                console.log('Bundle deduction error:', e);
-                            }
-                        }
-                        // -------------------------------------
-
-                        const fieldToUpdate = saleLocation === 'local' ? 'stock_local' : 'stock_cordoba';
-                        const currentLocationStock = saleLocation === 'local' ? (item.stock_local || 0) : (item.stock_cordoba || 0);
-                        const newLocationStock = currentLocationStock - item.qty;
-
-                        const totalStock = (parseInt(item.current_stock) || 0) - item.qty;
-
-                        const updatePromises = [];
-
-                        // Default updates
-                        updatePromises.push(
-                            supabase.from('products').update({
-                                [fieldToUpdate]: newLocationStock,
-                                current_stock: totalStock
-                            }).eq('id', item.id)
-                        );
-
-                        // Variant specific update - Directly update the variants JSON array
-                        if (item.color && item.variants && Array.isArray(item.variants)) {
-                            const updatedVariants = item.variants.map(variant => {
-                                if (variant.color === item.color) {
-                                    return {
-                                        ...variant,
-                                        stock: Math.max(0, (variant.stock || 0) - item.qty)
-                                    };
-                                }
-                                return variant;
-                            });
-                            
-                            updatePromises.push(
-                                supabase.from('products').update({ 
-                                    variants: updatedVariants 
-                                }).eq('id', item.id)
-                            );
-                            
-                            console.log(`Variant stock updated for ${item.name} (${item.color}): -${item.qty}`);
-                        }
-
-                        await Promise.all(updatePromises);
-
-                        if (newLocationStock <= 5) {
-                            lowStockProducts.push({ name: item.name, stock: newLocationStock });
-                            NotificationService.sendLowStockAlert(`${item.name} (${saleLocation})`, newLocationStock).catch(e => console.log('Notification Error:', e));
-                        }
-                    }
-
-                    // If there are critical products, schedule the 5-hour reminder
-                    if (lowStockProducts.length > 0) {
-                        NotificationService.scheduleStockReminder(lowStockProducts).catch(e => console.log('Reminder Error:', e));
-                    }
-                } catch (stockError) {
-                    console.error('Stock Update Error:', stockError);
-                    // Non-critical for the sale itself, but important for inventory
-                    if (Platform.OS === 'web') alert('Aviso: Venta registrada, pero hubo un error actualizando el stock de algunos productos.');
-                    else Alert.alert('Aviso', 'Venta registrada, pero hubo un error actualizando el stock de algunos productos.');
-                }
-            }
-
+            // Success! 
             if (Platform.OS === 'web') {
-                // Different messages for different sale types
-                let successTitle = '✅ Venta Exitosa';
-                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¿Deseas enviar el recibo digital?`;
-                let confirmText = 'Sí, enviar';
-                
-                if (checkoutSaleType === 'budget') {
-                    successTitle = '📋 Presupuesto Generado';
-                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas descargar el presupuesto en PDF?`;
-                    confirmText = 'Sí, descargar';
-                } else if (checkoutSaleType === 'pending') {
-                    successTitle = '💳 Deuda Registrada';
-                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas enviar el comprobante de deuda?`;
-                    confirmText = 'Sí, enviar';
-                }
+                let successTitle = '✅ Operación Registrada';
+                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\nLa operación se sincronizará en segundo plano. ¿Deseas generar el PDF?`;
                 
                 if (window.confirm(`${successTitle}\n${successMessage}`)) {
-                    await generateReceiptPDF(saleData, client, cart);
+                    await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
                 }
                 clearCart();
                 setSelectedClient(null);
@@ -953,28 +720,15 @@ export default function NewSaleScreen({ navigation, route }) {
                 setClientModalVisible(false);
                 navigation.navigate('Sales');
             } else {
-                // Different messages for mobile
-                let successTitle = '✅ Venta Exitosa';
-                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¿Deseas enviar el recibo digital?`;
-                let confirmText = 'Sí, enviar';
-                
-                if (checkoutSaleType === 'budget') {
-                    successTitle = '📋 Presupuesto Generado';
-                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas descargar el presupuesto en PDF?`;
-                    confirmText = 'Sí, descargar';
-                } else if (checkoutSaleType === 'pending') {
-                    successTitle = '💳 Deuda Registrada';
-                    successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client.name}\n\n¿Deseas enviar el comprobante de deuda?`;
-                    confirmText = 'Sí, enviar';
-                }
+                let successTitle = '✅ Operación Registrada';
+                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\nLa operación se sincronizará en segundo plano.`;
                 
                 Alert.alert(
                     successTitle,
                     successMessage,
                     [
                         {
-                            text: 'No, solo cerrar',
-                            style: 'cancel',
+                            text: 'CERRAR',
                             onPress: () => {
                                 clearCart();
                                 setSelectedClient(null);
@@ -986,9 +740,9 @@ export default function NewSaleScreen({ navigation, route }) {
                             }
                         },
                         {
-                            text: 'SÍ, ENVIAR RECIBO',
+                            text: 'VER PDF',
                             onPress: async () => {
-                                await generateReceiptPDF(saleData, client, cart);
+                                await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
                                 clearCart();
                                 setSelectedClient(null);
                                 setSelectedPromo(null);
@@ -1002,17 +756,12 @@ export default function NewSaleScreen({ navigation, route }) {
                 );
             }
 
+            return; // Exit here, the background sync handles the rest.
+
         } catch (error) {
             console.log('Checkout Error:', error);
-            
-            // ROLLBACK OPTIMISTIC UPDATE
-            if (checkoutSaleType !== 'budget') {
-                console.log('Rolling back optimistic stock update due to failure...');
-                setProducts(previousProducts);
-                setFinanceState(prevFinanceState);
-            }
-
-            Alert.alert('Error', error.message || 'No se pudo procesar la venta.');
+            if (Platform.OS === 'web') alert(`Error: ${error.message}`);
+            else Alert.alert('Error', error.message);
         } finally {
             setLoading(false);
         }

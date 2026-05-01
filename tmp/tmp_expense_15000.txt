@@ -1,0 +1,1 @@
+[{"id":"297199e3-e3df-433f-8709-297e3d0f0aff","description":"Tarjetas de negocio 100u (doble faz)","amount":15000,"category":"General","created_at":"2026-01-30T20:10:06.037918-03:00","discount":0,"product_id":null,"color":null,"quantity":null,"details":[]}]

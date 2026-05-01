@@ -26,7 +26,8 @@ module.exports = {
             edgeToEdgeEnabled: true
         },
         web: {
-            favicon: "./assets/favicon.png"
+            favicon: "./assets/favicon.png",
+            jsEngine: "jsc"
         },
         extra: {
             eas: {
@@ -58,7 +59,8 @@ module.exports = {
                 }
             ],
             "expo-asset",
-            "@react-native-community/datetimepicker"
+            "@react-native-community/datetimepicker",
+            "expo-sqlite"
         ]
     }
 };

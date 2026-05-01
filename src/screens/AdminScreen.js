@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions, RefreshControl, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, StatusBar, Dimensions, RefreshControl, Platform, Linking, InteractionManager, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LineChart, PieChart } from 'react-native-chart-kit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CustomProgressChart from '../components/CustomProgressChart';
-import { useAuthStore } from '../store/useAuthStore';
 import { useProductStore } from '../store/useProductStore';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { supabase } from '../services/supabase';
+import * as Clipboard from 'expo-clipboard';
+import NetInfo from '@react-native-community/netinfo';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -27,6 +28,7 @@ if (Platform.OS === 'web') {
 }
 
 export default function AdminScreen({ navigation }) {
+    const [userRole, setUserRole] = useState('seller');
     const [commissionRate, setCommissionRate] = useState('10');
     const [googleKey, setGoogleKey] = useState('');
     const [loading, setLoading] = useState(false);
@@ -39,7 +41,9 @@ export default function AdminScreen({ navigation }) {
         totalCommissions: 0,
         totalExpenses: 0,
         netProfit: 0,
-        sellerCount: 0
+        sellerCount: 0,
+        debtPayments: 0,
+        netCaja: 0,
     });
     const [dateFilter, setDateFilter] = useState('month');
     const [currentDate, setCurrentDate] = useState(new Date());
@@ -54,6 +58,7 @@ export default function AdminScreen({ navigation }) {
         failed_actions: 0,
         top_type: 'N/A'
     });
+    const [screenReady, setScreenReady] = useState(false);
 
     const { sales, expenses, supplierOrders, saleItems, settings, isLoading: storeLoading, fetchAllData } = useFinanceStore();
 
@@ -66,6 +71,8 @@ export default function AdminScreen({ navigation }) {
     useEffect(() => {
         const checkRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
+            if (role) setUserRole(role);
+            
             // AHORA TANTO ADMIN COMO SELLER (SOCIO) TIENEN ACCESO TOTAL
             if (role !== 'admin' && role !== 'seller') {
                 Alert.alert('Acceso Denegado', 'No tienes permisos de administrador.');
@@ -73,17 +80,24 @@ export default function AdminScreen({ navigation }) {
             }
         };
         checkRole();
-        fetchAllData(true); // ✅ Force fresh fetch every time we open Balance panel
 
-        // 🔄 RECONCILIACIÓN SILENCIOSA EN BACKGROUND AL ENTRAR AL PANEL
-        useProductStore.getState().fetchProducts(true);
-        fetchAIPerformance();
+        // 🚀 INSTANT READY: No esperar a que el internet responda
+        setScreenReady(true);
+        
+        InteractionManager.runAfterInteractions(() => {
+            fetchAllData(); 
+            useProductStore.getState().fetchProducts();
+            fetchAIPerformance();
+        });
     }, []);
 
     const fetchAIPerformance = async () => {
         try {
+            const netInfo = await NetInfo.fetch();
+            if (!netInfo.isConnected) return; // Skip if offline
+
             // Read from our new SQL View
-            const { data, error } = await supabase.from('ai_action_performance').select('*');
+            const { data, error } = await supabase.from('ai_action_performance').select('*').limit(100);
             if (error) throw error;
             if (data && data.length > 0) {
                 let totalProfit = 0, success = 0, fail = 0;
@@ -111,56 +125,16 @@ export default function AdminScreen({ navigation }) {
         }
     };
 
-    // ── Watch store data changes to process derivatives automatically ──────────
-    useEffect(() => {
-        if (!sales || !expenses) return; // wait until store has data
-        processLocalData(dateFilterRef.current, currentDateRef.current, viewAllMonthsRef.current);
-        calculateTopLevelStats();
-    }, [sales, expenses, saleItems, supplierOrders, settings]); // re-run when store data arrives
-
-    const calculateTopLevelStats = useCallback(() => {
-        // Settings
-        const comm = settings.find(s => s.key === 'commission_rate');
-        const key = settings.find(s => s.key === 'google_api_key');
-        if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
-        if (key) setGoogleKey(key.value);
-        const splitImp = settings.find(s => s.key === 'profit_split_imperio');
-        const splitVend = settings.find(s => s.key === 'profit_split_vendedores');
-        if (splitImp && splitVend) {
-            setProfitSplit({ imperio: parseInt(splitImp.value), vendedores: parseInt(splitVend.value) });
-        }
-
-        // Supplier debt
-        let debt = 0, monthly = 0;
-        supplierOrders.forEach(order => {
-            const isConsignment = order.status === 'consigned' || (order.notes || '').toUpperCase().includes('CONSIGNACION');
-            if (isConsignment) return; // Skip consignment from main debt
-            const totalInst = order.installments_total || 1;
-            const paidInst = order.installments_paid || 0;
-            if (paidInst < totalInst) {
-                const effectiveTotal = (parseFloat(order.total_cost) || 0) - (parseFloat(order.discount) || 0);
-                const perIns = effectiveTotal / totalInst;
-                debt += perIns * (totalInst - paidInst);
-                monthly += perIns;
-            }
-        });
-        setTotalDebt(debt);
-        setNextMonthlyPayment(monthly);
-    }, [settings, supplierOrders]);
-
     // ── Generate timeline (pure, no state reads — uses params) ─────────────────
     const generateTimeline = (filter, date, allMonths) => {
         const timeline = [];
         const now = new Date();
 
         if (filter === 'day') {
-            const tgtDay = now.getDate();
-            const tgtMonth = now.getMonth();
             for (let i = 0; i < 24; i++) {
                 timeline.push({
                     key: i,
                     label: i % 4 === 0 ? `${i}:00` : '',
-                    dateMatch: (d) => d.getHours() === i && d.getDate() === tgtDay && d.getMonth() === tgtMonth,
                     total: 0, income: 0, expense: 0
                 });
             }
@@ -168,13 +142,10 @@ export default function AdminScreen({ navigation }) {
             for (let i = 6; i >= 0; i--) {
                 const d = new Date(now);
                 d.setDate(d.getDate() - i);
-                const tgtDay = d.getDate();
-                const tgtMonth = d.getMonth();
                 const dayStr = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
                 timeline.push({
                     key: dayStr,
                     label: dayStr,
-                    dateMatch: (dt) => dt.getDate() === tgtDay && dt.getMonth() === tgtMonth,
                     total: 0, income: 0, expense: 0
                 });
             }
@@ -186,7 +157,6 @@ export default function AdminScreen({ navigation }) {
                     timeline.push({
                         key: index,
                         label: m,
-                        dateMatch: (dt) => dt.getMonth() === index && dt.getFullYear() === tgtYear,
                         total: 0, income: 0, expense: 0
                     });
                 });
@@ -199,7 +169,6 @@ export default function AdminScreen({ navigation }) {
                     timeline.push({
                         key: i,
                         label,
-                        dateMatch: (dt) => dt.getDate() === i && dt.getMonth() === tgtMonth && dt.getFullYear() === tgtYear,
                         total: 0, income: 0, expense: 0
                     });
                 }
@@ -210,7 +179,6 @@ export default function AdminScreen({ navigation }) {
                 timeline.push({
                     key: year,
                     label: year.toString(),
-                    dateMatch: (dt) => dt.getFullYear() === year,
                     total: 0, income: 0, expense: 0
                 });
             }
@@ -234,37 +202,67 @@ export default function AdminScreen({ navigation }) {
                 endMs = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999).getTime();
             } else {
                 startMs = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
-                // End of last day of month at 23:59:59.999
                 endMs = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
             }
         } else if (filter === 'year') {
-            startMs = new Date(now.getFullYear() - 4, 0, 1).getTime();
+            startMs = new Date(now.getFullYear(), 0, 1).getTime();
+            endMs = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999).getTime();
+        } else {
+            startMs = 0; // All time
+            endMs = now.getTime();
         }
-
-        return { startMs, endMs: endMs || null };
+        return { startMs, endMs };
     };
 
-    // ── Helper: get timeline bucket key for a date (O(1) lookup) ───────────────
-    const getBucketKey = (filter, date, allMonths, d) => {
-        if (filter === 'day') return d.getHours();
-        if (filter === 'week') return d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
-        if (filter === 'month') {
-            if (allMonths) return d.getMonth();
-            return d.getDate();
+    // ── Settings + Deuda (top-level, no depende del filtro de fecha) ─────────
+    const calculateTopLevelStats = useCallback(() => {
+        if (!settings || !supplierOrders) return;
+        
+        const comm = settings.find(s => s.key === 'commission_rate');
+        const key = settings.find(s => s.key === 'google_api_key');
+        if (comm) setCommissionRate((parseFloat(comm.value) * 100).toString());
+        if (key) setGoogleKey(key.value);
+        
+        const splitImp = settings.find(s => s.key === 'profit_split_imperio');
+        const splitVend = settings.find(s => s.key === 'profit_split_vendedores');
+        if (splitImp && splitVend) {
+            setProfitSplit({ imperio: parseInt(splitImp.value) || 70, vendedores: parseInt(splitVend.value) || 30 });
         }
-        if (filter === 'year') return d.getFullYear();
-        return null;
-    };
 
-    // ── Process all charts/stats from local cache — SYNCHRONOUS, no await ─────
-    const processLocalData = useCallback((filter, date, allMonths) => {
-        const { startMs, endMs } = getDateRange(filter, date, allMonths);
+        let debt = 0, monthly = 0;
+        supplierOrders.forEach(order => {
+            const isConsignment = (order.status || '').toLowerCase().includes('consign');
+            
+            // Consignments are full debts until paid/received
+            if (isConsignment && order.status !== 'received') {
+                debt += (parseFloat(order.total_cost) || 0);
+                return;
+            }
 
-        // Single-pass: split into current/prev in one loop
-        // Use parsed timestamps (ms) to avoid string comparison issues with mixed timezones
+            const totalCost = parseFloat(order.total_amount || order.total_cost || 0);
+            const totalInst = parseInt(order.installments_total || 1);
+            const paidInst = parseInt(order.installments_paid || 0);
+
+            if (paidInst < totalInst) {
+                const perIns = totalCost / totalInst;
+                debt += perIns * (totalInst - paidInst);
+                monthly += perIns;
+            }
+        });
+        setTotalDebt(debt);
+        setNextMonthlyPayment(monthly);
+    }, [settings, supplierOrders]);
+
+    // ── Process charts/stats from local cache — SYNCHRONOUS ───────────────────
+    const processAndCalculateAllData = useCallback((currentFilter, currentDateObj, currentViewAllMonths) => {
+        if (!sales || !expenses || !saleItems || !supplierOrders || !settings) return;
+        const { startMs, endMs } = getDateRange(currentFilter, currentDateObj, currentViewAllMonths);
+
+        // Split sales/expenses into prev (before period) and current (in period)
         let prevIncome = 0, prevExpCaja = 0, prevExpROI = 0;
         const currentSales = [];
         const currentExpenses = [];
+
         for (const s of (sales || [])) {
             const sMs = new Date(s.created_at).getTime();
             if (sMs < startMs) {
@@ -276,6 +274,7 @@ export default function AdminScreen({ navigation }) {
                 currentSales.push(s);
             }
         }
+
         for (const e of (expenses || [])) {
             const eMs = new Date(e.created_at).getTime();
             const val = parseFloat(e.amount) || 0;
@@ -284,21 +283,16 @@ export default function AdminScreen({ navigation }) {
             const isInitialCreditStock = desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado');
 
             if (eMs < startMs) {
-                // Liquidez: Ignora compras grandes a crédito (ficticio, no toca billete) pero resta cuotas
-                if (!isInitialCreditStock) {
-                    prevExpCaja += val; 
-                }
-                
-                // ROI (Rentabilidad): Resta compras grandes (para recuperar capital metido) pero ignora pago de cuotas repetido
-                if (!isDebtPayment) {
-                    prevExpROI += val; 
-                }
+                if (!isInitialCreditStock) prevExpCaja += val;
+                // ROI histórico: incluye el costo de compras (consolidado) pero no las cuotas (deuda)
+                if (!isDebtPayment) prevExpROI += val;
             } else if (!endMs || eMs <= endMs) {
                 currentExpenses.push(e);
             }
         }
 
         const histBalCaja = prevIncome - prevExpCaja;
+        // ROI usa el ingreso total para recuperar la gigantesca inversión de stock inicial
         const histBalROI = prevIncome - prevExpROI;
 
         // Finalized sales only
@@ -308,27 +302,28 @@ export default function AdminScreen({ navigation }) {
         });
 
         // ── Charts — build index Map for O(1) bucket lookup ────────────────────
-        const timeline = generateTimeline(filter, date, allMonths);
-        // Map from bucket key → timeline index
+        const timeline = generateTimeline(currentFilter, currentDateObj, currentViewAllMonths);
         const bucketIndex = new Map();
         timeline.forEach((t, i) => bucketIndex.set(t.key, i));
 
         finalSales.forEach(sale => {
             const d = new Date(sale.created_at);
-            const key = getBucketKey(filter, date, allMonths, d);
+            const key = getBucketKey(d, currentFilter, currentViewAllMonths);
             const idx = bucketIndex.get(key);
             if (idx !== undefined) {
                 const amount = parseFloat(sale.total_amount) || 0;
                 timeline[idx].total += amount;
-                timeline[idx].income += amount;
+                timeline[idx].income += amount; // ROI chart usa ingresos totales (revenue) para matar los gastos de stock
             }
         });
+
         currentExpenses.forEach(e => {
             const d = new Date(e.created_at);
-            const key = getBucketKey(filter, date, allMonths, d);
+            const key = getBucketKey(d, currentFilter, currentViewAllMonths);
             const idx = bucketIndex.get(key);
-            const isDebt = e.category === 'Pago de Deuda';
-            if (idx !== undefined && !isDebt) timeline[idx].expense += (parseFloat(e.amount) || 0);
+            // Exclude debt payments AND bank yields from the ROI expense chart bars (stock expenses are included)
+            const skip = e.category === 'Pago de Deuda' || e.category === 'Rendimiento Bancario';
+            if (idx !== undefined && !skip) timeline[idx].expense += (parseFloat(e.amount) || 0);
         });
 
         setSalesData({
@@ -355,27 +350,47 @@ export default function AdminScreen({ navigation }) {
         const totalSales = finalSales.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
         const grossProfit = finalSales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
         const totalCommissions = finalSales.reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
-        
-        // ----- REGLAS MAGICAS CONTABLES DEL IMPERIO -----
-        const isExpenseCreditStock = (e) => {
-            const desc = (e.description || '').toLowerCase();
-            return desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado');
-        };
-        const isExpenseDebtPayment = (e) => e.category === 'Pago de Deuda';
 
-        // Total de pagos de cuotas para el panel informativo
-        const debtPayments = currentExpenses.reduce((sum, e) => sum + (isExpenseDebtPayment(e) ? (parseFloat(e.amount) || 0) : 0), 0);
-        
-        // CAJA FUERTE (Liquidez): Resta Todo (incluyendo pagos de cuota) PERO ignora inversiones iniciales de stock marcadas como crédito
-        const totalExpensesCaja = currentExpenses.reduce((sum, e) => sum + (!isExpenseCreditStock(e) ? (parseFloat(e.amount) || 0) : 0), 0);
-        
-        // RENTABILIDAD (ROI): DEBE incluir las inversiones a crédito (para medir recuperación de capital)! Solo ignora pagos de cuota.
-        const totalExpensesROI = currentExpenses.reduce((sum, e) => sum + (!isExpenseDebtPayment(e) ? (parseFloat(e.amount) || 0) : 0), 0);
+        // ── Expense split ──────────────────────────────────────────────
+        // Rules:
+        //   'Pago de Deuda'       -> Caja only (not ROI)
+        //   'Rendimiento Bancario'-> Caja positive income (not ROI, not an expense)
+        //   everything else       -> both Caja AND ROI
+        const isDebtPayment   = (e) => e.category === 'Pago de Deuda';
+        const isBankYield     = (e) => e.category === 'Rendimiento Bancario';
 
-        const netCaja = histBalCaja + totalSales - totalExpensesCaja; // Liquidez (Caja Fuerte) - Ignora deudas
-        const netProfit = histBalROI + totalSales - totalExpensesROI; // Rentabilidad pura del negocio
+        const operatingExpenses = currentExpenses.reduce((sum, e) =>
+            isDebtPayment(e) || isBankYield(e) ? sum : sum + (parseFloat(e.amount) || 0), 0);
+        const debtPayments      = currentExpenses.reduce((sum, e) =>
+            isDebtPayment(e) ? sum + (parseFloat(e.amount) || 0) : sum, 0);
+        const bankYields        = currentExpenses.reduce((sum, e) =>
+            isBankYield(e) ? sum + (parseFloat(e.amount) || 0) : sum, 0);
+        const totalExpensesCaja = operatingExpenses + debtPayments; // yields are income, not expense
 
-        setStats({ totalSales, totalProfit: grossProfit, totalCommissions, totalExpenses: totalExpensesROI, debtPayments, netCaja, netProfit, sellerCount: 1 });
+        // ROI balance: histórico (ingresos - gastos incl. stock) + current ingresos - current operatingExp
+        const netCaja   = histBalCaja + totalSales + bankYields - totalExpensesCaja;
+        const netProfit = histBalROI  + totalSales - operatingExpenses;
+
+        // ── Advanced metrics ───────────────────────────────────────────────────
+        const margin = totalSales > 0 ? (grossProfit / totalSales) * 100 : 0;
+        const operatingRatio = grossProfit > 0 ? (operatingExpenses / grossProfit) * 100 : 0;
+
+        // ── Smart alert flags ──────────────────────────────────────────────────
+        const alerts = [];
+        if (operatingExpenses > grossProfit && grossProfit > 0)
+            alerts.push({ type: 'critical', msg: '💣 Gastos operativos superan el margen bruto. El negocio está en pérdida operativa.' });
+        if (margin > 0 && margin < 20)
+            alerts.push({ type: 'warning', msg: `⚠️ Margen bruto bajo (${margin.toFixed(1)}%). Revisá precios de venta o costos.` });
+        if (operatingRatio > 80 && grossProfit > 0)
+            alerts.push({ type: 'warning', msg: `🔥 Los gastos operativos consumen el ${operatingRatio.toFixed(0)}% de tu margen. ¿Podés reducir alguno?` });
+        if (netCaja < 0 && netProfit > 0)
+            alerts.push({ type: 'info', msg: '💡 Tu ROI es positivo pero la Caja está en rojo. Estás pagando deudas más rápido de lo que cobrás.' });
+        if (netCaja < 0 && netProfit < 0)
+            alerts.push({ type: 'critical', msg: '🚨 Tanto el ROI como la Caja están en negativo. Prioridad máxima: reducir egresos.' });
+        if (bankYields > 0)
+            alerts.push({ type: 'info', msg: `💰 Rendimientos bancarios del período: $${bankYields.toFixed(2)} (no afectan ROI, suman a Caja).` });
+
+        setStats({ totalSales, totalProfit: grossProfit, totalCommissions, totalExpenses: operatingExpenses, debtPayments, bankYields, netCaja, netProfit, margin, operatingRatio, alerts, sellerCount: 1 });
 
         // ── Device breakdown ───────────────────────────────────────────────────
         const deviceMap = {};
@@ -390,9 +405,7 @@ export default function AdminScreen({ navigation }) {
         })).sort((a, b) => b.total - a.total));
 
         // ── Products ───────────────────────────────────────────────────────────
-        const currentSaleItems = saleItems.filter(item =>
-            finalSales.some(s => s.id === item.sale_id)
-        );
+        const currentSaleItems = saleItems.filter(item => finalSales.some(s => s.id === item.sale_id));
         if (currentSaleItems.length > 0) {
             const productMap = {};
             currentSaleItems.forEach(item => {
@@ -409,93 +422,118 @@ export default function AdminScreen({ navigation }) {
         } else {
             setProductData([]);
         }
-    }, [sales, expenses, supplierOrders, saleItems, settings]);
+    }, [sales, expenses, saleItems, supplierOrders, settings]);
 
-    // ── Force full refresh (pull-to-refresh) ───────────────────────────────────
-    const forceRefresh = () => {
-        fetchAllData(true);
+    // ── Watch store data changes to process derivatives automatically ──────────
+    useEffect(() => {
+        if (!sales || !expenses || !saleItems || !supplierOrders || !settings) return;
+        calculateTopLevelStats();
+        processAndCalculateAllData(dateFilterRef.current, currentDateRef.current, viewAllMonthsRef.current);
+    }, [sales, expenses, saleItems, supplierOrders, settings]);
+
+    const getBucketKey = (date, filter, allMonths) => {
+        if (filter === 'day') {
+            return date.getHours();
+        } else if (filter === 'week') {
+            return date.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+        } else if (filter === 'month') {
+            if (allMonths) {
+                return date.getMonth();
+            }
+            return date.getDate();
+        } else if (filter === 'year') {
+            return date.getFullYear();
+        }
+        return null;
     };
 
-    // ── Change month: update ref + state + process immediately ────────────────
-    const changeMonth = (increment) => {
-        const newDate = new Date(currentDateRef.current);
-        newDate.setMonth(newDate.getMonth() + increment);
-        currentDateRef.current = newDate;
-        setCurrentDate(newDate); // triggers re-render for the label
-        processLocalData(dateFilterRef.current, newDate, viewAllMonthsRef.current);
-    };
-
-    // ── Change filter ──────────────────────────────────────────────────────────
-    const changeFilter = (newFilter, resetAllMonths = false) => {
-        dateFilterRef.current = newFilter;
-        if (resetAllMonths) viewAllMonthsRef.current = false;
+    const changeFilter = (newFilter, resetDate = false) => {
         setDateFilter(newFilter);
-        if (resetAllMonths) setViewAllMonths(false);
-        processLocalData(newFilter, currentDateRef.current, resetAllMonths ? false : viewAllMonthsRef.current);
+        dateFilterRef.current = newFilter;
+        if (resetDate) {
+            setCurrentDate(new Date());
+            currentDateRef.current = new Date();
+        }
+        processAndCalculateAllData(newFilter, resetDate ? new Date() : currentDateRef.current, viewAllMonthsRef.current);
     };
 
-    // ── Toggle "Ver Año Completo" ──────────────────────────────────────────────
+    const changeMonth = (direction) => {
+        const newDate = new Date(currentDate);
+        newDate.setMonth(newDate.getMonth() + direction);
+        setCurrentDate(newDate);
+        currentDateRef.current = newDate;
+        processAndCalculateAllData(dateFilterRef.current, newDate, viewAllMonthsRef.current);
+    };
+
     const toggleAllMonths = () => {
-        const newVal = !viewAllMonthsRef.current;
-        viewAllMonthsRef.current = newVal;
-        setViewAllMonths(newVal);
-        processLocalData(dateFilterRef.current, currentDateRef.current, newVal);
+        const newState = !viewAllMonths;
+        setViewAllMonths(newState);
+        viewAllMonthsRef.current = newState;
+        processAndCalculateAllData(dateFilterRef.current, currentDateRef.current, newState);
     };
 
-    const updateCommissionRate = async () => {
-        const rate = parseFloat(commissionRate);
-        if (isNaN(rate) || rate < 0 || rate > 100) {
-            if (Platform.OS === 'web') alert('Error: Ingresa un porcentaje válido entre 0 y 100');
-            else Alert.alert('Error', 'Ingresa un porcentaje válido entre 0 y 100');
-            return;
-        }
+    const forceRefresh = useCallback(() => {
         setLoading(true);
+        fetchAllData(true);
+        fetchAIPerformance();
+        // processAndCalculateAllData will be called by the useEffect after fetchAllData updates the store
+    }, [fetchAllData]);
+
+    const handleWhatsAppPress = async (text) => {
+        const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(text)}`;
         try {
-            const { error } = await supabase.from('settings').upsert({ key: 'commission_rate', value: (rate / 100).toString() }, { onConflict: 'key' });
-            if (error) throw error;
-            forceRefresh(); // Triggers force sync with Supabase and reloads UI
-            if (Platform.OS === 'web') alert(`✅ Actualizado: La comisión ahora es del ${rate}%`);
-            else Alert.alert('✅ Actualizado', `La comisión ahora es del ${rate}%`);
+            const supported = await Linking.canOpenURL(whatsappUrl);
+            if (supported) {
+                await Linking.openURL(whatsappUrl);
+            } else {
+                await Clipboard.setStringAsync(text);
+                Alert.alert('Copiado al portapapeles', 'WhatsApp no está instalado. El mensaje ha sido copiado al portapapeles.');
+            }
         } catch (error) {
-            if (Platform.OS === 'web') alert('Error: No se pudo actualizar la comisión');
-            else Alert.alert('Error', 'No se pudo actualizar la comisión');
-        } finally {
-            setLoading(false);
+            console.error('Error al abrir WhatsApp o copiar al portapapeles:', error);
+            await Clipboard.setStringAsync(text);
+            Alert.alert('Copiado al portapapeles', 'Ocurrió un error. El mensaje ha sido copiado al portapapeles.');
         }
     };
 
-    const updateGoogleKey = async () => {
-        if (!googleKey.trim()) {
-            if (Platform.OS === 'web') alert('Error: Ingresa una API Key válida');
-            else Alert.alert('Error', 'Ingresa una API Key válida');
-            return;
-        }
-        setLoading(true);
-        try {
-            const { error } = await supabase.from('settings').upsert({ key: 'google_api_key', value: googleKey.trim() }, { onConflict: 'key' });
-            if (error) throw error;
-            forceRefresh();
-            if (Platform.OS === 'web') alert('✅ Desbloqueado: Google Gemini está listo para trabajar 🧠⚡');
-            else Alert.alert('✅ Desbloqueado', 'Google Gemini está listo para trabajar 🧠⚡');
-        } catch (error) {
-            if (Platform.OS === 'web') alert('Error: No se pudo guardar la API Key');
-            else Alert.alert('Error', 'No se pudo guardar la API Key');
-        } finally {
-            setLoading(false);
+    const formatCurrency = (value) => {
+        if (value === null || value === undefined) return '$0';
+        return `$${Number(value).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`;
+    };
+
+    const getProfitColor = (value) => value >= 0 ? '#2ecc71' : '#e74c3c';
+
+    const chartConfig = {
+        backgroundColor: '#1e2923',
+        backgroundGradientFrom: '#1e2923',
+        backgroundGradientTo: '#08130D',
+        decimalPlaces: 0, // optional, defaults to 2dp
+        color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+        labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+        style: {
+            borderRadius: 16
+        },
+        propsForDots: {
+            r: '6',
+            strokeWidth: '2',
+            stroke: '#d4af37'
         }
     };
 
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
-            <StatusBar barStyle="light-content" />
-
-            <LinearGradient colors={['#000000', '#1a1a1a']} style={styles.header}>
+        <SafeAreaView style={styles.safeArea}>
+            <StatusBar barStyle="light-content" backgroundColor="#1a1a1a" />
+            <LinearGradient
+                colors={['#1a1a1a', '#333333']}
+                style={styles.headerContainer}
+            >
                 <View style={styles.headerContent}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
                         <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>PANEL DE CONTROL</Text>
+                    <Text style={styles.headerTitle}>Panel de Administración</Text>
                     <View style={{ width: 24 }} />
+
                 </View>
 
                 <View style={styles.filterContainer}>
@@ -541,16 +579,23 @@ export default function AdminScreen({ navigation }) {
                 contentContainerStyle={styles.content}
                 refreshControl={<RefreshControl refreshing={loading || storeLoading} onRefresh={forceRefresh} tintColor="#d4af37" />}
             >
-                {/* Stats Cards */}
+                {!screenReady ? (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 }}>
+                        <ActivityIndicator size="large" color="#d4af37" />
+                        <Text style={{ color: '#888', marginTop: 15, fontWeight: 'bold' }}>CARGANDO INTELIGENCIA FINANCIERA...</Text>
+                    </View>
+                ) : (
+                    <>
+                        {/* Stats Cards */}
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
                         <MaterialCommunityIcons name="cash-multiple" size={28} color="#d4af37" />
-                        <Text style={styles.statValue}>${stats.totalSales.toFixed(0)}</Text>
+                        <Text style={styles.statValue}>{formatCurrency(stats.totalSales)}</Text>
                         <Text style={styles.statLabel}>Ventas</Text>
                     </View>
                     <View style={styles.statCard}>
                         <MaterialCommunityIcons name="currency-usd" size={28} color="#2ecc71" />
-                        <Text style={styles.statValue}>${stats.totalProfit.toFixed(0)}</Text>
+                        <Text style={styles.statValue}>{formatCurrency(stats.totalProfit)}</Text>
                         <Text style={styles.statLabel}>Margen Productos</Text>
                     </View>
                 </View>
@@ -558,13 +603,13 @@ export default function AdminScreen({ navigation }) {
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
                         <MaterialCommunityIcons name="cash-minus" size={28} color="#e74c3c" />
-                        <Text style={styles.statValue}>${stats.totalExpenses?.toFixed(0)}</Text>
+                        <Text style={styles.statValue}>{formatCurrency(stats.totalExpenses)}</Text>
                         <Text style={styles.statLabel}>Gastos Operativos</Text>
                     </View>
                     <View style={styles.statCard}>
                         <MaterialCommunityIcons name="credit-card-minus" size={28} color="#f39c12" />
                         <Text style={[styles.statValue, { color: '#f39c12' }]}>
-                            ${stats.debtPayments?.toFixed(0)}
+                            {formatCurrency(stats.debtPayments)}
                         </Text>
                         <Text style={[styles.statLabel, { color: '#f39c12' }]}>Deudas Pagadas</Text>
                     </View>
@@ -574,18 +619,60 @@ export default function AdminScreen({ navigation }) {
                     <View style={[styles.statCard, { borderColor: '#3498db' }]}>
                         <MaterialCommunityIcons name="safe" size={28} color="#3498db" />
                         <Text style={[styles.statValue, { color: '#3498db' }]}>
-                            ${stats.netCaja?.toFixed(0)}
+                            {formatCurrency(stats.netCaja)}
                         </Text>
                         <Text style={[styles.statLabel, { color: '#3498db' }]}>Caja Fuerte (Liquidez)</Text>
                     </View>
-                    <View style={[styles.statCard, { borderColor: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
-                        <MaterialCommunityIcons name="scale-balance" size={28} color={stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c'} />
-                        <Text style={[styles.statValue, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>
-                            ${stats.netProfit?.toFixed(0)}
+                    <View style={[styles.statCard, { borderColor: getProfitColor(stats.netProfit) }]}>
+                        <MaterialCommunityIcons name="scale-balance" size={28} color={getProfitColor(stats.netProfit)} />
+                        <Text style={[styles.statValue, { color: getProfitColor(stats.netProfit) }]}>
+                            {formatCurrency(stats.netProfit)}
                         </Text>
-                        <Text style={[styles.statLabel, { color: stats.netProfit >= 0 ? '#2ecc71' : '#e74c3c' }]}>Rentabilidad (ROI)</Text>
+                        <Text style={[styles.statLabel, { color: getProfitColor(stats.netProfit) }]}>Rentabilidad (ROI)</Text>
                     </View>
                 </View>
+
+                {/* ── Smart Alert Panel ───────────────────────────────────── */}
+                {stats.alerts && stats.alerts.length > 0 && (
+                    <View style={{ marginHorizontal: 15, marginBottom: 15, gap: 8 }}>
+                        <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>⚡ ALERTAS DEL IMPERIO</Text>
+                        {stats.alerts.map((alert, idx) => (
+                            <View key={idx} style={[
+                                styles.alertBanner,
+                                alert.type === 'critical' ? styles.alertCritical :
+                                alert.type === 'warning' ? styles.alertWarning :
+                                styles.alertInfo
+                            ]}>
+                                <Text style={[
+                                    styles.alertText,
+                                    alert.type === 'critical' ? { color: '#ff6b6b' } :
+                                    alert.type === 'warning' ? { color: '#f39c12' } :
+                                    { color: '#74b9ff' }
+                                ]}>{alert.msg}</Text>
+                            </View>
+                        ))}
+                    </View>
+                )}
+
+                {/* ── Margin & Efficiency row ─────────────────────────────── */}
+                {stats.totalSales > 0 && (
+                    <View style={[styles.statsGrid, { marginTop: 5, marginBottom: 5 }]}>
+                        <View style={[styles.statCard, { borderColor: stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c' }]}>
+                            <MaterialCommunityIcons name="percent" size={28} color={stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c'} />
+                            <Text style={[styles.statValue, { color: stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c' }]}>
+                                {stats.margin?.toFixed(1)}%
+                            </Text>
+                            <Text style={[styles.statLabel, { color: '#888' }]}>Margen Bruto</Text>
+                        </View>
+                        <View style={[styles.statCard, { borderColor: stats.operatingRatio <= 50 ? '#2ecc71' : stats.operatingRatio <= 80 ? '#f39c12' : '#e74c3c' }]}>
+                            <MaterialCommunityIcons name="gauge" size={28} color={stats.operatingRatio <= 50 ? '#2ecc71' : stats.operatingRatio <= 80 ? '#f39c12' : '#e74c3c'} />
+                            <Text style={[styles.statValue, { color: stats.operatingRatio <= 50 ? '#2ecc71' : stats.operatingRatio <= 80 ? '#f39c12' : '#e74c3c' }]}>
+                                {stats.operatingRatio?.toFixed(0)}%
+                            </Text>
+                            <Text style={[styles.statLabel, { color: '#888' }]}>Eficiencia Op.</Text>
+                        </View>
+                    </View>
+                )}
 
                 {/* Quick Access Section */}
                 <View style={styles.quickAccessSection}>
@@ -639,8 +726,15 @@ export default function AdminScreen({ navigation }) {
                         <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Analytics')}>
                             <MaterialCommunityIcons name="google-analytics" size={32} color="#9b59b6" />
                             <Text style={styles.quickAccessTitle}>Analíticas</Text>
-                            <Text style={styles.quickAccessSubtitle}>Productos</Text>
+                            <Text style={styles.quickAccessSubtitle}>Generales</Text>
                         </TouchableOpacity>
+                        {userRole === 'admin' && (
+                            <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ProductTester')}>
+                                <MaterialCommunityIcons name="flask" size={32} color="#e74c3c" />
+                                <Text style={styles.quickAccessTitle}>Testing</Text>
+                                <Text style={styles.quickAccessSubtitle}>Productos</Text>
+                            </TouchableOpacity>
+                        )}
                         <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('RestockAdvisor')}>
                             <MaterialCommunityIcons name="truck-delivery" size={32} color="#1abc9c" />
                             <Text style={styles.quickAccessTitle}>Restock</Text>
@@ -651,95 +745,70 @@ export default function AdminScreen({ navigation }) {
                             <Text style={styles.quickAccessTitle}>Promociones</Text>
                             <Text style={styles.quickAccessSubtitle}>Activas</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={[styles.quickAccessCard, { borderColor: '#d4af37', borderWidth: 1.5 }]} onPress={() => navigation.navigate('AIDashboard')}>
-                            <MaterialCommunityIcons name="brain" size={32} color="#d4af37" />
-                            <Text style={[styles.quickAccessTitle, { color: '#d4af37' }]}>Empire AI</Text>
-                            <Text style={styles.quickAccessSubtitle}>Dashboard</Text>
-                        </TouchableOpacity>
+                        {userRole === 'admin' && (
+                            <TouchableOpacity style={[styles.quickAccessCard, { borderColor: '#d4af37', borderWidth: 1.5 }]} onPress={() => navigation.navigate('AIDashboard')}>
+                                <MaterialCommunityIcons name="brain" size={32} color="#d4af37" />
+                                <Text style={[styles.quickAccessTitle, { color: '#d4af37' }]}>Empire AI</Text>
+                                <Text style={styles.quickAccessSubtitle}>Dashboard</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
 
-                    <Text style={styles.categoryLabel}>📦 Logística & Envíos</Text>
+                    <Text style={styles.categoryLabel}>⚙️ Configuración y Herramientas</Text>
                     <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={[styles.quickAccessCard, { minWidth: '60%' }]} onPress={() => navigation.navigate('Transfers')}>
-                            <MaterialCommunityIcons name="truck-delivery" size={32} color="#d4af37" />
-                            <Text style={styles.quickAccessTitle}>LOGÍSTICA EMPIRE</Text>
-                            <Text style={styles.quickAccessSubtitle}>Gestión Córdoba & Envíos</Text>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Settings')}>
+                            <MaterialCommunityIcons name="cog" size={32} color="#d4af37" />
+                            <Text style={styles.quickAccessTitle}>Ajustes</Text>
+                            <Text style={styles.quickAccessSubtitle}>Generales</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ShippingRates')}>
-                            <MaterialCommunityIcons name="currency-usd" size={32} color="#16a085" />
-                            <Text style={styles.quickAccessTitle}>Tarifas</Text>
-                            <Text style={styles.quickAccessSubtitle}>Fletes</Text>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Users')}>
+                            <MaterialCommunityIcons name="account-group" size={32} color="#95a5a6" />
+                            <Text style={styles.quickAccessTitle}>Usuarios</Text>
+                            <Text style={styles.quickAccessSubtitle}>Roles</Text>
                         </TouchableOpacity>
-                    </View>
-
-                    <Text style={styles.categoryLabel}>🔒 Seguridad</Text>
-                    <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ActivityLog')}>
-                            <MaterialCommunityIcons name="shield-account" size={32} color="#d4af37" />
-                            <Text style={styles.quickAccessTitle}>Auditoría</Text>
-                            <Text style={styles.quickAccessSubtitle}>Actividad</Text>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Backup')}>
+                            <MaterialCommunityIcons name="cloud-upload" size={32} color="#3498db" />
+                            <Text style={styles.quickAccessTitle}>Backup</Text>
+                            <Text style={styles.quickAccessSubtitle}>Datos</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
 
-                {/* 🤖 Rendimiento del Asesor Inteligente (IA Feedback Loop) */}
-                <View style={styles.chartCard}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 15 }}>
-                        <MaterialCommunityIcons name="brain" size={24} color="#bdc3c7" />
-                        <Text style={[styles.sectionTitle, { marginLeft: 8, marginTop: 0, marginBottom: 0 }]}>RENDIMIENTO MOTOR DE IA</Text>
-                    </View>
-
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
-                        <View style={{ flex: 1 }}>
-                            <Text style={{ color: '#bdc3c7', fontSize: 12 }}>GANANCIA GENERADA IA</Text>
-                            <Text style={{ color: aiPerformance.total_profit >= 0 ? '#2ecc71' : '#e74c3c', fontSize: 22, fontWeight: 'bold' }}>
-                                ${aiPerformance.total_profit.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
-                            </Text>
-                        </View>
-                        <View style={{ flex: 1, alignItems: 'center' }}>
-                            <Text style={{ color: '#bdc3c7', fontSize: 12 }}>ACERTADAS / FALLIDAS</Text>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
-                                <MaterialCommunityIcons name="arrow-up-circle" size={16} color="#2ecc71" />
-                                <Text style={{ color: 'white', fontWeight: 'bold', marginHorizontal: 4 }}>{aiPerformance.successful_actions}</Text>
-                                <MaterialCommunityIcons name="arrow-down-circle" size={16} color="#e74c3c" />
-                                <Text style={{ color: 'white', fontWeight: 'bold', marginLeft: 4 }}>{aiPerformance.failed_actions}</Text>
+                {/* AI Performance Section - ADMIN ONLY */}
+                {userRole === 'admin' && (
+                    <View style={styles.aiPerformanceSection}>
+                        <Text style={styles.sectionTitle}>RENDIMIENTO EMPIRE AI</Text>
+                        <View style={styles.aiStatsGrid}>
+                            <View style={styles.aiStatCard}>
+                                <MaterialCommunityIcons name="robot-happy" size={24} color="#d4af37" />
+                                <Text style={styles.aiStatValue}>{formatCurrency(aiPerformance.total_profit)}</Text>
+                                <Text style={styles.aiStatLabel}>Ganancia Generada</Text>
+                            </View>
+                            <View style={styles.aiStatCard}>
+                                <MaterialCommunityIcons name="check-circle-outline" size={24} color="#2ecc71" />
+                                <Text style={styles.aiStatValue}>{aiPerformance.successful_actions}</Text>
+                                <Text style={styles.aiStatLabel}>Acciones Exitosas</Text>
+                            </View>
+                            <View style={styles.aiStatCard}>
+                                <MaterialCommunityIcons name="close-circle-outline" size={24} color="#e74c3c" />
+                                <Text style={styles.aiStatValue}>{aiPerformance.failed_actions}</Text>
+                                <Text style={styles.aiStatLabel}>Acciones Fallidas</Text>
+                            </View>
+                            <View style={styles.aiStatCard}>
+                                <MaterialCommunityIcons name="star-four-points-outline" size={24} color="#f1c40f" />
+                                <Text style={styles.aiStatValue}>{aiPerformance.top_type}</Text>
+                                <Text style={styles.aiStatLabel}>Acción Más Rentable</Text>
                             </View>
                         </View>
                     </View>
-
-                    <View style={{ backgroundColor: '#111', padding: 12, borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Text style={{ color: '#d4af37', fontSize: 13, fontWeight: 'bold' }}>ESTRATEGIA MÁS RENTABLE</Text>
-                        <Text style={{ color: 'white', fontSize: 13, textTransform: 'uppercase' }}>{aiPerformance.top_type}</Text>
-                    </View>
-                </View>
-
-                {/* Debt Projection Card */}
-                {totalDebt > 0 && (
-                    <TouchableOpacity style={[styles.chartCard, { borderLeftWidth: 5, borderLeftColor: '#e74c3c' }]} onPress={() => navigation.navigate('SupplierOrders')}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <View>
-                                <Text style={[styles.sectionTitle, { marginBottom: 5 }]}>DEUDA TOTAL A PROVEEDORES</Text>
-                                <Text style={{ color: '#e74c3c', fontSize: 24, fontWeight: '900' }}>
-                                    ${totalDebt.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
-                                </Text>
-                            </View>
-                            <View style={{ alignItems: 'flex-end' }}>
-                                <Text style={{ color: '#666', fontSize: 10, fontWeight: 'bold' }}>ESTE MES:</Text>
-                                <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>
-                                    ${nextMonthlyPayment.toLocaleString('es-AR', { maximumFractionDigits: 0 })}
-                                </Text>
-                            </View>
-                        </View>
-                        <Text style={{ color: '#555', fontSize: 11, marginTop: 10, fontStyle: 'italic' }}>
-                            Monto pendiente de todas las importaciones en cuotas.
-                        </Text>
-                    </TouchableOpacity>
                 )}
 
-                {/* Sales Chart */}
-                <View style={styles.chartCard}>
-                    <Text style={styles.sectionTitle}>TENDENCIA DE VENTAS</Text>
-                    {salesData.data.length > 0 && salesData.data.some(d => d > 0) ? (
+                {/* Charts Section */}
+                <View style={styles.chartSection}>
+                    <Text style={styles.sectionTitle}>GRÁFICOS Y ANÁLISIS</Text>
+
+                    <Text style={styles.chartTitle}>TENDENCIA DE VENTAS</Text>
+                    {salesData.data && salesData.data.length > 0 && salesData.data.some(d => d > 0) ? (
                         <LineChart
                             data={{ labels: salesData.labels, datasets: [{ data: salesData.data }] }}
                             width={screenWidth - 80}
@@ -767,21 +836,15 @@ export default function AdminScreen({ navigation }) {
                     ) : (
                         <Text style={styles.noDataText}>No hay datos suficientes para mostrar</Text>
                     )}
-                </View>
 
-                {/* ROI Chart */}
-                <View style={styles.chartCard}>
-                    <Text style={styles.sectionTitle}>RECUPERACIÓN DE INVERSIÓN (ROI)</Text>
+                    <Text style={styles.chartTitle}>RECUPERACIÓN DE INVERSIÓN (ROI)</Text>
                     {progressData.datasets?.length > 0 ? (
                         <CustomProgressChart progressData={progressData} />
                     ) : (
                         <Text style={styles.noDataText}>No hay datos suficientes</Text>
                     )}
-                </View>
 
-                {/* Top Products Pie Chart */}
-                <View style={styles.chartCard}>
-                    <Text style={styles.sectionTitle}>TOP 5 PRODUCTOS MÁS VENDIDOS</Text>
+                    <Text style={styles.chartTitle}>TOP 5 PRODUCTOS MÁS VENDIDOS</Text>
                     {productData.length > 0 ? (
                         <PieChart
                             data={productData}
@@ -797,14 +860,8 @@ export default function AdminScreen({ navigation }) {
                     ) : (
                         <Text style={styles.noDataText}>No hay datos de productos disponibles</Text>
                     )}
-                </View>
 
-                {/* Hardware Performance */}
-                <View style={styles.chartCard}>
-                    <Text style={styles.sectionTitle}>DESEMPEÑO POR ALIADO (HARDWARE)</Text>
-                    <Text style={[styles.settingsDesc, { marginTop: -5, marginBottom: 15 }]}>
-                        Ventas totales atribuidas a cada dispositivo físico autorizado.
-                    </Text>
+                    <Text style={styles.chartTitle}>DESEMPEÑO POR ALIADO (HARDWARE)</Text>
                     {deviceData.length > 0 ? (
                         <View>
                             {deviceData.map((d, i) => (
@@ -813,11 +870,11 @@ export default function AdminScreen({ navigation }) {
                                         <MaterialCommunityIcons name="cellphone-check" size={18} color="#d4af37" style={{ marginRight: 10 }} />
                                         <View>
                                             <Text style={{ color: '#fff', fontWeight: 'bold' }}>{d.sig}</Text>
-                                            <Text style={{ color: '#666', fontSize: 11 }}>Comisión: ${d.commissions.toFixed(2)}</Text>
+                                            <Text style={{ color: '#666', fontSize: 11 }}>Comisión: {formatCurrency(d.commissions)}</Text>
                                         </View>
                                     </View>
                                     <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={{ color: '#d4af37', fontWeight: '900' }}>${d.total.toFixed(0)}</Text>
+                                        <Text style={{ color: '#d4af37', fontWeight: '900' }}>{formatCurrency(d.total)}</Text>
                                         <Text style={{ color: '#444', fontSize: 10, fontWeight: '700' }}>VENTAS</Text>
                                     </View>
                                 </View>
@@ -826,133 +883,409 @@ export default function AdminScreen({ navigation }) {
                     ) : (
                         <Text style={styles.noDataText}>Sin datos de dispositivos</Text>
                     )}
+
+
                 </View>
 
-                {/* Commission Settings */}
-                <View style={styles.settingsCard}>
-                    <Text style={styles.sectionTitle}>CONFIGURACIÓN DE COMISIONES</Text>
-                    <Text style={styles.settingsDesc}>Define el porcentaje de ganancia que reciben los vendedores por cada venta</Text>
-                    <View style={styles.inputContainer}>
-                        <TextInput style={styles.input} value={commissionRate} onChangeText={setCommissionRate} keyboardType="numeric" placeholder="10" placeholderTextColor="#666" />
-                        <Text style={styles.inputSuffix}>%</Text>
+                {/* Settings Section */}
+                <View style={styles.settingsSection}>
+                    <Text style={styles.sectionTitle}>AJUSTES RÁPIDOS</Text>
+                    <View style={styles.settingItem}>
+                        <Text style={styles.settingLabel}>Tasa de Comisión (%)</Text>
+                        <TextInput
+                            style={styles.settingInput}
+                            value={commissionRate}
+                            onChangeText={setCommissionRate}
+                            keyboardType="numeric"
+                            placeholder="Ej: 10"
+                            placeholderTextColor="#888"
+                        />
                     </View>
-                    <TouchableOpacity style={styles.saveButton} onPress={updateCommissionRate} disabled={loading}>
-                        <MaterialCommunityIcons name="content-save" size={20} color="black" />
-                        <Text style={styles.saveButtonText}>GUARDAR CAMBIOS</Text>
+                    <View style={styles.settingItem}>
+                        <Text style={styles.settingLabel}>Google API Key</Text>
+                        <TextInput
+                            style={styles.settingInput}
+                            value={googleKey}
+                            onChangeText={setGoogleKey}
+                            placeholder="Ingresa tu clave de API de Google"
+                            placeholderTextColor="#888"
+                        />
+                    </View>
+                    <TouchableOpacity style={styles.saveButton} onPress={async () => {
+                        await supabase.from('settings').upsert({ key: 'commission_rate', value: (parseFloat(commissionRate) / 100).toString() }, { onConflict: 'key' });
+                        await supabase.from('settings').upsert({ key: 'google_api_key', value: googleKey }, { onConflict: 'key' });
+                        Alert.alert('Guardado', 'Configuración actualizada correctamente.');
+                        fetchAllData(true); // Refresh settings
+                    }}>
+                        <Text style={styles.saveButtonText}>Guardar Ajustes</Text>
                     </TouchableOpacity>
                 </View>
 
-                {/* AI Settings */}
-                <View style={styles.settingsCard}>
-                    <Text style={styles.sectionTitle}>GEMINI AI (Google API Key)</Text>
-                    <Text style={styles.settingsDesc}>Pega aquí tu llave de Google (gratis) para activar el Asistente de Marketing y el Escáner de Recibos.</Text>
-                    <View style={styles.inputContainer}>
-                        <TextInput style={[styles.input, { fontSize: 14, textAlign: 'left' }]} value={googleKey} onChangeText={setGoogleKey} placeholder="AIzaSy..." placeholderTextColor="#666" secureTextEntry />
+                {/* Closing Summary */}
+                <View style={styles.closingSummarySection}>
+                    <Text style={styles.sectionTitle}>RESUMEN DE CIERRE</Text>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Ventas Totales:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalSales)}</Text>
                     </View>
-                    <TouchableOpacity style={styles.saveButton} onPress={updateGoogleKey} disabled={loading}>
-                        <MaterialCommunityIcons name="google" size={20} color="black" />
-                        <Text style={styles.saveButtonText}>ACTIVAR GEMINI ♊</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Profit Split & Monthly Closing */}
-                <View style={styles.settingsCard}>
-                    <Text style={styles.sectionTitle}>REPARTO DE GANANCIAS (CIERRE)</Text>
-                    <Text style={styles.settingsDesc}>Configura cómo se divide la Ganancia Neta (después de gastos y comisiones).</Text>
-                    <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.miniLabel}>IMPERIO %</Text>
-                            <TextInput style={[styles.input, { fontSize: 18 }]} value={profitSplit.imperio.toString()} onChangeText={(v) => setProfitSplit({ ...profitSplit, imperio: parseInt(v) || 0 })} keyboardType="numeric" />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.miniLabel}>VENDEDORES %</Text>
-                            <TextInput style={[styles.input, { fontSize: 18 }]} value={profitSplit.vendedores.toString()} onChangeText={(v) => setProfitSplit({ ...profitSplit, vendedores: parseInt(v) || 0 })} keyboardType="numeric" />
-                        </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Margen de Productos:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalProfit)}</Text>
                     </View>
-                    <View style={styles.closingSummary}>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryText}>Ganancia Neta:</Text>
-                            <Text style={styles.summaryValue}>${stats.netProfit.toFixed(0)}</Text>
-                        </View>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryText}>Para el Imperio ({profitSplit.imperio}%):</Text>
-                            <Text style={[styles.summaryValue, { color: '#2ecc71' }]}>${(stats.netProfit * (profitSplit.imperio / 100)).toFixed(0)}</Text>
-                        </View>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryText}>Para Vendedores ({profitSplit.vendedores}%):</Text>
-                            <Text style={[styles.summaryValue, { color: '#3498db' }]}>${(stats.netProfit * (profitSplit.vendedores / 100)).toFixed(0)}</Text>
-                        </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Gastos Operativos:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalExpenses)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Comisiones:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalCommissions)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Deudas Pagadas:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(stats.debtPayments)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Caja Fuerte (Liquidez):</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(stats.netCaja)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Rentabilidad Neta (ROI):</Text>
+                        <Text style={[styles.summaryValue, { color: getProfitColor(stats.netProfit) }]}>{formatCurrency(stats.netProfit)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Deuda Total a Proveedores:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(totalDebt)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>Próximo Pago Mensual:</Text>
+                        <Text style={styles.summaryValue}>{formatCurrency(nextMonthlyPayment)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                        <Text style={styles.summaryLabel}>División de Ganancias (Imperio/Vendedores):</Text>
+                        <Text style={styles.summaryValue}>{profitSplit.imperio}% / {profitSplit.vendedores}%</Text>
                     </View>
                     <TouchableOpacity
-                        style={[styles.saveButton, { backgroundColor: '#25D366' }]}
-                        onPress={() => {
-                            const msg =
-                                `📊 *CIERRE MENSUAL - DB EMPIRE*\n\n` +
-                                `💰 Ventas Totales: $${stats.totalSales.toFixed(0)}\n` +
-                                `📉 Gastos: $${stats.totalExpenses.toFixed(0)}\n` +
-                                `🤝 Comisiones: $${stats.totalCommissions.toFixed(0)}\n` +
-                                `--------------------------\n` +
-                                `✨ *GANANCIA NETA: $${stats.netProfit.toFixed(0)}*\n\n` +
-                                `🏰 Imperio (${profitSplit.imperio}%): $${(stats.netProfit * (profitSplit.imperio / 100)).toFixed(0)}\n` +
-                                `👥 Vendedores (${profitSplit.vendedores}%): $${(stats.netProfit * (profitSplit.vendedores / 100)).toFixed(0)}\n\n` +
-                                `_Generado automáticamente por DB Empire_`;
-                            require('react-native').Linking.openURL(`whatsapp://send?text=${encodeURIComponent(msg)}`);
-                        }}
+                        style={styles.whatsappButton}
+                        onPress={() => handleWhatsAppPress(
+                            `*Resumen de Cierre - ${currentDate.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }).toUpperCase()}*
+
+` +
+                            `*Ventas Totales:* ${formatCurrency(stats.totalSales)}
+` +
+                            `*Margen de Productos:* ${formatCurrency(stats.totalProfit)}
+` +
+                            `*Gastos Operativos:* ${formatCurrency(stats.totalExpenses)}
+` +
+                            `*Comisiones:* ${formatCurrency(stats.totalCommissions)}
+` +
+                            `*Deudas Pagadas:* ${formatCurrency(stats.debtPayments)}
+` +
+                            `*Caja Fuerte (Liquidez):* ${formatCurrency(stats.netCaja)}
+` +
+                            `*Rentabilidad Neta (ROI):* ${formatCurrency(stats.netProfit)}
+` +
+                            `*Deuda Total a Proveedores:* ${formatCurrency(totalDebt)}
+` +
+                            `*Próximo Pago Mensual:* ${formatCurrency(nextMonthlyPayment)}
+` +
+                            `*División de Ganancias:* Imperio ${profitSplit.imperio}% / Vendedores ${profitSplit.vendedores}%
+
+` +
+                            `_Generado por EmpireOS_`
+                        )}
                     >
                         <MaterialCommunityIcons name="whatsapp" size={24} color="white" />
-                        <Text style={[styles.saveButtonText, { color: 'white' }]}>ENVIAR RESUMEN CIERRE</Text>
+                        <Text style={styles.whatsappButtonText}>Compartir por WhatsApp</Text>
                     </TouchableOpacity>
                 </View>
-
+            </>
+        )}
             </ScrollView>
         </SafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000000' },
-    header: { paddingTop: 10, paddingBottom: 20, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#333' },
+    safeArea: {
+        flex: 1,
+        backgroundColor: '#000000',
+    },
+    headerContainer: {
+        padding: 20,
+        paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight + 10 : 20,
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
+        elevation: 5,
+    },
     headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    headerTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 2 },
+    headerTitle: {
+        color: '#d4af37',
+        fontSize: 18,
+        fontWeight: '900',
+        letterSpacing: 2,
+    },
     backBtn: { padding: 5 },
-    expenseBtn: { padding: 5 },
-    scrollView: { flex: 1 },
-    content: { padding: 20, paddingBottom: 40 },
-    filterContainer: { flexDirection: 'row', gap: 10, marginBottom: 20 },
-    filterBtn: { flex: 1, backgroundColor: '#1e1e1e', padding: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-    filterBtnActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
-    filterText: { color: '#888', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
-    filterTextActive: { color: '#000' },
-    statsGrid: { flexDirection: 'row', gap: 15, marginBottom: 15 },
-    statCard: { flex: 1, backgroundColor: '#1e1e1e', padding: 20, borderRadius: 15, alignItems: 'center', borderWidth: 1, borderColor: '#333' },
-    statValue: { fontSize: 24, fontWeight: '900', color: '#fff', marginTop: 10 },
-    statLabel: { fontSize: 10, color: '#888', marginTop: 5, textAlign: 'center', letterSpacing: 1 },
-    chartCard: { backgroundColor: '#1e1e1e', padding: 20, borderRadius: 15, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
-    sectionTitle: { fontSize: 14, fontWeight: '900', color: '#d4af37', marginBottom: 15, letterSpacing: 1 },
-    chart: { marginVertical: 8, borderRadius: 16 },
-    noDataText: { color: '#666', textAlign: 'center', padding: 40, fontStyle: 'italic' },
-    settingsCard: { backgroundColor: '#1e1e1e', padding: 20, borderRadius: 15, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
-    settingsDesc: { color: '#888', fontSize: 13, marginBottom: 20, lineHeight: 20 },
-    inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-    input: { flex: 1, backgroundColor: '#000', color: '#fff', padding: 18, borderRadius: 12, fontSize: 24, fontWeight: 'bold', borderWidth: 1, borderColor: '#d4af37', textAlign: 'center' },
-    inputSuffix: { fontSize: 24, fontWeight: 'bold', color: '#d4af37', marginLeft: 10 },
-    saveButton: { backgroundColor: '#d4af37', padding: 18, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-    saveButtonText: { color: 'black', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
-    monthNavContainer: { paddingHorizontal: 20, paddingBottom: 15 },
-    monthSelector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 15, gap: 20 },
-    navArrow: { padding: 5 },
-    monthLabel: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 1, minWidth: 150, textAlign: 'center' },
-    generalToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#1e1e1e', padding: 10, borderRadius: 8, alignSelf: 'center', borderWidth: 1, borderColor: '#333' },
-    generalToggleText: { color: '#d4af37', fontWeight: 'bold' },
-    miniLabel: { color: '#666', fontSize: 10, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
-    closingSummary: { backgroundColor: '#000', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
-    summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-    summaryText: { color: '#888', fontSize: 12 },
-    summaryValue: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-    quickAccessSection: { marginBottom: 20 },
-    categoryLabel: { color: '#999', fontSize: 13, fontWeight: 'bold', marginTop: 15, marginBottom: 10, letterSpacing: 0.5 },
-    quickAccessGrid: { flexDirection: 'row', gap: 12, marginBottom: 10, flexWrap: 'wrap' },
-    quickAccessCard: { flex: 1, minWidth: '30%', backgroundColor: '#1e1e1e', padding: 18, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#333', gap: 8 },
-    quickAccessTitle: { color: '#fff', fontSize: 13, fontWeight: 'bold', textAlign: 'center' },
-    quickAccessSubtitle: { color: '#666', fontSize: 10, textAlign: 'center' }
+    filterContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        borderRadius: 10,
+        padding: 5,
+        marginBottom: 15,
+    },
+    filterBtn: {
+        paddingVertical: 8,
+        paddingHorizontal: 15,
+        borderRadius: 8,
+    },
+    filterBtnActive: {
+        backgroundColor: '#d4af37',
+    },
+    filterText: {
+        color: '#fff',
+        fontWeight: 'bold',
+    },
+    filterTextActive: {
+        color: '#1a1a1a',
+    },
+    monthNavContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    monthSelector: { flexDirection: 'row', alignItems: 'center' },
+    navArrow: {
+        padding: 5,
+    },
+    monthLabel: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginHorizontal: 10,
+    },
+    generalToggle: { flexDirection: 'row', alignItems: 'center' },
+    generalToggleText: {
+        color: '#d4af37',
+        marginLeft: 5,
+        fontSize: 14,
+    },
+    scrollView: {
+        flex: 1,
+    },
+    content: {
+        padding: 20,
+        paddingBottom: 100, // Espacio extra para el scroll
+    },
+    statsGrid: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 10,
+    },
+    statCard: {
+        backgroundColor: '#2a2a2a',
+        borderRadius: 15,
+        padding: 15,
+        width: '48%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    statValue: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginTop: 5,
+    },
+    statLabel: {
+        fontSize: 12,
+        color: '#ccc',
+        marginTop: 3,
+        textAlign: 'center',
+    },
+    quickAccessSection: {
+        marginTop: 20,
+    },
+    sectionTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#d4af37',
+        marginBottom: 15,
+        textAlign: 'center',
+    },
+    categoryLabel: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginTop: 15,
+        marginBottom: 10,
+    },
+    quickAccessGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+    },
+    quickAccessCard: {
+        backgroundColor: '#2a2a2a',
+        borderRadius: 15,
+        padding: 15,
+        width: '31%', // Aproximadamente 1/3 del ancho con espacio
+        alignItems: 'center',
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    quickAccessTitle: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginTop: 5,
+        textAlign: 'center',
+    },
+    quickAccessSubtitle: {
+        fontSize: 10,
+        color: '#ccc',
+        textAlign: 'center',
+    },
+    aiPerformanceSection: {
+        marginTop: 20,
+    },
+    aiStatsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+    },
+    aiStatCard: {
+        backgroundColor: '#2a2a2a',
+        borderRadius: 15,
+        padding: 10,
+        width: '48%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    aiStatValue: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginTop: 5,
+    },
+    aiStatLabel: {
+        fontSize: 10,
+        color: '#ccc',
+        marginTop: 3,
+        textAlign: 'center',
+    },
+    chartSection: {
+        marginTop: 20,
+    },
+    chartTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginBottom: 10,
+        marginTop: 15,
+        textAlign: 'center',
+    },
+    chart: {
+        marginVertical: 8,
+        borderRadius: 16,
+    },
+    noDataText: {
+        color: '#ccc',
+        textAlign: 'center',
+        marginTop: 20,
+        fontSize: 14,
+    },
+    settingsSection: {
+        marginTop: 20,
+    },
+    settingItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    settingLabel: {
+        color: '#fff',
+        fontSize: 16,
+    },
+    settingInput: {
+        backgroundColor: '#333',
+        color: '#fff',
+        borderRadius: 8,
+        padding: 8,
+        width: '50%',
+        textAlign: 'right',
+    },
+    saveButton: {
+        backgroundColor: '#d4af37',
+        padding: 15,
+        borderRadius: 10,
+        alignItems: 'center',
+        marginTop: 10,
+    },
+    saveButtonText: {
+        color: '#1a1a1a',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    closingSummarySection: {
+        marginTop: 20,
+        backgroundColor: '#2a2a2a',
+        borderRadius: 15,
+        padding: 20,
+        marginBottom: 20,
+    },
+    summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    summaryLabel: {
+        color: '#ccc',
+        fontSize: 15,
+    },
+    summaryValue: {
+        color: '#fff',
+        fontSize: 15,
+        fontWeight: 'bold',
+    },
+    whatsappButton: {
+        flexDirection: 'row',
+        backgroundColor: '#25D366',
+        padding: 15,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 20,
+    },
+    whatsappButtonText: {
+        color: 'white',
+        fontWeight: 'bold',
+        marginLeft: 10,
+        fontSize: 16,
+    },
+    // Estilos reutilizables
+    rowSpaceBetweenCenter: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    rowAlignCenter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    // ── Alert banner styles ───────────────────────────────────────────
+    alertBanner: {
+        padding: 12,
+        borderRadius: 10,
+        borderLeftWidth: 3,
+    },
+    alertCritical: {
+        backgroundColor: '#ff6b6b18',
+        borderLeftColor: '#ff6b6b',
+    },
+    alertWarning: {
+        backgroundColor: '#f39c1218',
+        borderLeftColor: '#f39c12',
+    },
+    alertInfo: {
+        backgroundColor: '#74b9ff18',
+        borderLeftColor: '#74b9ff',
+    },
+    alertText: {
+        fontSize: 13,
+        fontWeight: '600',
+        lineHeight: 18,
+    },
 });

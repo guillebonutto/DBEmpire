@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Image, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView, InteractionManager, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert, StatusBar, TextInput, Modal, Linking, Share, Clipboard, ActivityIndicator, ScrollView, InteractionManager, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ import { CRMService } from '../services/crmService';
 import { SecurityService } from '../services/securityService';
 import { useProductStore } from '../store/useProductStore';
 import { useAuthStore } from '../store/useAuthStore';
+import { ImageMapping } from '../assets/image_mapping';
 
 // 1. Move Item Renderer OUTSIDE and Memoize it to prevent re-setup during navigation
 const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing, stockColor, totalStock }) => {
@@ -23,7 +25,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
             style={styles.productCard}
             onPress={async () => {
                 const currentRole = userRole || await AsyncStorage.getItem('user_role');
-                if (currentRole === 'admin' || currentRole === 'leader') {
+                if (currentRole === 'admin' || currentRole === 'leader' || currentRole === 'seller') {
                     navigation.navigate('AddProduct', { product: item });
                 } else {
                     Platform.OS === 'web' 
@@ -35,14 +37,19 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
         >
             <View style={styles.cardInner}>
                 <View style={styles.imageWrapper}>
-                    {item.image_url ? (
-                        <Image source={{ uri: item.image_url }} style={styles.productImage} />
+                    {item.image_url || ImageMapping[item.id] ? (
+                        <Image 
+                            source={ImageMapping[item.id] || { uri: item.image_url }} 
+                            style={styles.productImage}
+                            contentFit="cover"
+                            cachePolicy="disk"
+                        />
                     ) : (
                         <View style={styles.placeholderImage}>
                             <MaterialCommunityIcons name="image-off-outline" size={24} color="#333" />
                         </View>
                     )}
-                    {(userRole === 'admin' || userRole === 'leader') && (
+                    {(userRole === 'admin' || userRole === 'leader' || userRole === 'seller') && (
                         <TouchableOpacity
                             style={styles.deleteBadge}
                             onPress={() => handleDelete(item)}
@@ -140,7 +147,12 @@ export default function StockScreen({ navigation, route }) {
         useCallback(() => {
             requestPermission();
             setScreenReady(true);
-            doFetchProducts(true); // SILENT RECONCILIATION
+            
+            // DEFER background sync until interactions (navigation) are finished
+            // This ensures "fluidez constante" when switching tabs.
+            InteractionManager.runAfterInteractions(() => {
+                doFetchProducts(false); 
+            });
         }, [])
     );
 
@@ -415,13 +427,44 @@ export default function StockScreen({ navigation, route }) {
                     .cover { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #0f0f0f 0%, #1a0a00 50%, #000 100%); page-break-after: always; text-align: center; }
                     .cover-logo { font-size: 80px; font-weight: 900; color: #d4af37; letter-spacing: 10px; margin-bottom: 20px; }
                     .exclusive-badge { background: #d4af37; color: #000; padding: 10px 30px; border-radius: 50px; font-weight: 700; letter-spacing: 5px; }
-                    .product-page { height: 100vh; display: flex; justify-content: center; align-items: center; page-break-after: always; padding: 40px; }
-                    .product-card { width: 100%; max-width: 600px; background: #111; border: 2px solid #d4af37; border-radius: 20px; overflow: hidden; }
-                    .img-box { width: 100%; height: 400px; background: #050505; }
+                    
+                    /* Centrado perfecto en la página */
+                    .product-page { 
+                        height: 100vh; 
+                        width: 100vw;
+                        display: flex; 
+                        justify-content: center; 
+                        align-items: center; 
+                        page-break-after: always; 
+                        box-sizing: border-box;
+                        background: #000;
+                    }
+                    
+                    .product-card { 
+                        width: 85%; 
+                        max-width: 520px; 
+                        background: #111; 
+                        border: 2px solid #d4af37; 
+                        border-radius: 24px; 
+                        overflow: hidden; 
+                        box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+                    }
+                    
+                    .img-box { width: 100%; aspect-ratio: 1/1; background: #050505; display: flex; align-items: center; justify-content: center; overflow: hidden; }
                     .img-box img { width: 100%; height: 100%; object-fit: cover; }
+                    
                     .card-body { padding: 30px; text-align: center; }
-                    .title { font-size: 32px; color: #d4af37; margin-bottom: 15px; }
-                    .price { font-size: 48px; font-weight: 900; color: #fff; margin-top: 20px; }
+                    .title { font-size: 28px; font-weight: 900; color: #d4af37; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
+                    .desc { font-size: 16px; color: #aaa; line-height: 1.5; margin-bottom: 25px; }
+                    
+                    /* Precio a la derecha */
+                    .price-box { 
+                        text-align: right; 
+                        border-top: 1px solid #333; 
+                        padding-top: 15px; 
+                        margin-top: 10px;
+                    }
+                    .price { font-size: 42px; font-weight: 900; color: #fff; }
                 </style>
             </head>
             <body>
@@ -433,11 +476,17 @@ export default function StockScreen({ navigation, route }) {
                     <div class="product-page">
                         <div class="product-card">
                             <div class="img-box">
-                                ${p.image_url ? `<img src="${p.image_url}" />` : '<div style="height:100%; display:flex; align-items:center; justify-content:center; color:#333;">NO IMAGE</div>'}
+                                ${p.image_url 
+                                    ? `<img src="${p.image_url}" />` 
+                                    : '<div style="color:#333; font-weight:900; font-size:20px;">DIGITAL BOOST</div>'
+                                }
                             </div>
                             <div class="card-body">
-                                <div class="title">${p.name.toUpperCase()}</div>
-                                <div class="price">$${p.sale_price}</div>
+                                <div class="title">${p.name}</div>
+                                <div class="desc">${p.description || "Calidad Garantizada. Producto exclusivo de Digital Boost Empire."}</div>
+                                <div class="price-box">
+                                    <div class="price">$${p.sale_price}</div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -631,7 +680,7 @@ export default function StockScreen({ navigation, route }) {
                     </TouchableOpacity>
                 </View>
 
-                {userRole === 'admin' && (
+                {(userRole === 'admin' || userRole === 'leader' || userRole === 'seller') && (
                     <TouchableOpacity
                         style={styles.addButton}
                         onPress={() => navigation.navigate('AddProduct')}
@@ -719,7 +768,7 @@ export default function StockScreen({ navigation, route }) {
                                 <Text style={styles.toolLabel}>Ajuste Manual</Text>
                             </TouchableOpacity>
 
-                            {userRole === 'admin' && (
+                            {(userRole === 'admin' || userRole === 'leader' || userRole === 'seller') && (
                                 <TouchableOpacity
                                     style={styles.toolItem}
                                     onPress={() => { setToolsModalVisible(false); navigation.navigate('BulkAdjustment'); }}

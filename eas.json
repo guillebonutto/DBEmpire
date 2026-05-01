@@ -1,42 +1,47 @@
 {
-    "cli": {
-        "version": ">= 12.5.1"
+  "cli": {
+    "version": ">= 12.5.1",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "APP_VARIANT": "production"
+      },
+      "channel": "preview"
     },
-    "build": {
-        "preview": {
-            "android": {
-                "buildType": "apk"
-            },
-            "env": {
-                "APP_VARIANT": "production"
-            }
-        },
-        "development": {
-            "developmentClient": true,
-            "distribution": "internal",
-            "android": {
-                "buildType": "apk"
-            },
-            "env": {
-                "APP_VARIANT": "development"
-            }
-        },
-        "production": {
-            "android": {
-                "buildType": "app-bundle",
-                "gradleCommand": ":app:bundleRelease"
-            },
-            "env": {
-                "APP_VARIANT": "production"
-            }
-        },
-        "development-static": {
-            "android": {
-                "buildType": "apk"
-            },
-            "env": {
-                "APP_VARIANT": "development"
-            }
-        }
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "APP_VARIANT": "development"
+      },
+      "channel": "development"
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleRelease"
+      },
+      "env": {
+        "APP_VARIANT": "production"
+      },
+      "channel": "production"
+    },
+    "development-static": {
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "APP_VARIANT": "development"
+      },
+      "channel": "development-static"
     }
+  }
 }

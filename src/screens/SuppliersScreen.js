@@ -35,7 +35,7 @@ export default function SuppliersScreen({ navigation }) {
             // 2. Fetch all products linked to these suppliers (checking both item-level and order-level providers)
             const { data: itemsData, error: iError } = await supabase
                 .from('supplier_order_items')
-                .select('product_id, supplier_id, products(id, name, image_url, current_stock), supplier, supplier_orders(provider_name)')
+                .select('product_id, products(id, name, image_url, current_stock), supplier, supplier_orders(provider_name)')
                 .not('product_id', 'is', null);
 
             if (iError) throw iError;
@@ -46,12 +46,10 @@ export default function SuppliersScreen({ navigation }) {
                 const seenProducts = new Set();
 
                 itemsData?.forEach(item => {
-                    // Primary match: by supplier_id FK (most reliable)
-                    // Fallback: by name string match (for old records without supplier_id)
-                    const matchById = item.supplier_id && item.supplier_id === s.id;
-                    const matchByName = !item.supplier_id && (item.supplier === s.name || item.supplier_orders?.provider_name === s.name);
+                    // Match by name string match (since supplier_id column doesn't exist on items)
+                    const matchByName = item.supplier === s.name || item.supplier_orders?.provider_name === s.name;
 
-                    if ((matchById || matchByName) && item.products && !seenProducts.has(item.product_id)) {
+                    if (matchByName && item.products && !seenProducts.has(item.product_id)) {
                         seenProducts.add(item.product_id);
                         uniqueProducts.push(item.products);
                     }

@@ -9,7 +9,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { GeminiService } from '../services/geminiService';
 import { useFinanceStore } from '../store/useFinanceStore';
-const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Descuento', 'Pago de Deuda', 'Otro'];
+import { SyncService } from '../services/syncService';
+const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Retiro del Titular', 'Descuento', 'Pago de Deuda', 'Otro'];
 
 export default function ExpensesScreen({ navigation }) {
     const { expenses, supplierOrders: orders, isLoading: storeLoading, addExpenseLocal, setFinanceState, fetchAllData } = useFinanceStore();
@@ -37,55 +38,41 @@ export default function ExpensesScreen({ navigation }) {
             return;
         }
 
+        if (category === 'purchase' || category === 'Inventario compra') {
+            Alert.alert(
+                '⚠️ Categoría No Permitida',
+                'Los costos de inventario ya están descontados automáticamente en el ROI al momento de la venta.'
+            );
+            return;
+        }
+
         const numAmount = parseFloat(amount);
         if (isNaN(numAmount) || numAmount <= 0) {
             Alert.alert('Error', 'Ingresa un monto válido');
             return;
         }
 
-        // Si la categoría es Descuento, guardamos el monto como negativo para que reste de los totales
         const finalAmount = category === 'Descuento' ? -Math.abs(numAmount) : numAmount;
-
-        // Optimistic Update / Rollback Snapshot
-        const prevExpenses = [...expenses];
-        const newExpenseId = `local-${Date.now()}`;
-        
-        addExpenseLocal({
-            id: newExpenseId,
+        const newExpense = {
             description: description.trim(),
             amount: finalAmount,
             category,
             created_at: new Date().toISOString()
-        });
+        };
 
-        // UX Clear Form Early
+        // 1. Optimistic Update (Immediate UI response)
+        addExpenseLocal({ ...newExpense, id: `local-${Date.now()}` });
+
+        // 2. Queue for Sync (Fluidity & Offline support)
+        SyncService.queueAction('expense', newExpense);
+
+        // 3. Reset UI
         setDescription('');
         setAmount('');
         setCategory('General');
-        setAdding(true);
-
-        try {
-            const { error } = await supabase
-                .from('expenses')
-                .insert({
-                    description: description.trim(), // Re-use trimmed val
-                    amount: finalAmount,
-                    category
-                });
-
-            if (error) throw error;
-            // Success! The real fetch will happen naturally over time or you can force refresh, 
-            // but the optimistic update handles the immediate UI need.
-            
-            // Cleanest is to leave it to the next sync
-        } catch (error) {
-            console.log('Error al agregar gasto:', error);
-            // ROLLBACK
-            setFinanceState({ expenses: prevExpenses });
-            Alert.alert('Error', 'No se pudo guardar el gasto: ' + error.message);
-        } finally {
-            setAdding(false);
-        }
+        
+        if (Platform.OS === 'web') alert('✅ Gasto Registrado (se sincronizará en segundo plano)');
+        else Alert.alert('✅ Gasto Registrado', 'Se sincronizará en segundo plano.');
     };
 
     const handleDeleteExpense = async (id) => {

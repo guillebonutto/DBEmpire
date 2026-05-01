@@ -15,10 +15,10 @@ const { width } = Dimensions.get('window');
 const fmt = (n) => `$${Math.abs(n || 0).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`;
 const fmtDelta = (n) => n >= 0 ? `+${fmt(n)}` : `-${fmt(n)}`;
 const ACTION_META = {
-    restock:   { label: 'Reposición',  color: '#3498db', icon: 'package-variant-closed' },
-    pricing:   { label: 'Precios',     color: '#f39c12', icon: 'cash-multiple' },
-    marketing: { label: 'Marketing',   color: '#9b59b6', icon: 'bullhorn' },
-    general:   { label: 'General',     color: '#1abc9c', icon: 'lightning-bolt' },
+    offline: { label: 'Calle / Físico', color: '#e67e22', icon: 'walk' },
+    online:  { label: 'Redes / Content', color: '#3498db', icon: 'web' },
+    hybrid:  { label: 'O2O / Callejero', color: '#9b59b6', icon: 'handshake' },
+    general: { label: 'Táctico',       color: '#1abc9c', icon: 'lightning-bolt' },
 };
 const STATUS_META = {
     evaluated: { color: '#2ecc71', label: 'Evaluada',  icon: 'check-circle' },

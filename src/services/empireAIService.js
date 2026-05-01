@@ -1,105 +1,63 @@
+import { supabase } from './supabase';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useProductStore } from '../store/useProductStore';
-import { supabase } from './supabase';
 
 let cachedResponse = null;
 let lastFetchTime = null;
 
 export const EmpireAIService = {
     // -------------------------------------------------------------
-    // FEEDBACK LOOP & TRACKING
+    // LOGGING AND TRACKING
     // -------------------------------------------------------------
-    
-    // 1. Logs missions directly to DB when they are generated
     logAIActions: async (missions, contextSnapshot) => {
         if (!missions || missions.length === 0) return;
+        
         try {
-            const timestampRounded = Math.floor(Date.now() / (12 * 60 * 60 * 1000)); // Every 12H
+            const logs = missions.map(m => ({
+                action_type: m.type || m.action_type || 'generic',
+                title: m.title || m.action || 'Acción sugerida',
+                reason: m.reason || m.goal || '',
+                target_id: m.target_id || '',
+                context_snapshot: contextSnapshot,
+                executed: false,
+                confidence_score: m.confidence || 0.8
+            }));
 
-            const logs = [];
-            for (const m of missions) {
-                // Generar hash único para evitar spam en BD si se consulta muchas veces lo mismo el mismo día
-                const rawString = `${m.title}_${m.action_type}_${timestampRounded}`;
-                let hashNum = 0;
-                for (let i = 0; i < rawString.length; i++) {
-                    hashNum = Math.imul(31, hashNum) + rawString.charCodeAt(i) | 0;
-                }
-                const action_hash = `hash_${Math.abs(hashNum)}`;
-
-                logs.push({
-                    title: m.title,
-                    description: m.reason,
-                    action_type: m.action_type,
-                    impact_predicted: m.impact,
-                    context_snapshot: contextSnapshot,
-                    executed: false,
-                    evaluation_window_hours: 48,
-                    action_hash: action_hash
-                });
-            }
-
-            // Upsert on conflict allows skipping duplicates safely
-            const { error } = await supabase.from('ai_action_logs').upsert(logs, { onConflict: 'action_hash' });
-            if (error) console.log("Failed to log AI actions (Possible unique constraint):", error.message);
+            const { error } = await supabase.from('ai_action_logs').insert(logs);
+            if (error) console.error("Error logging AI actions:", error);
         } catch (e) {
-            console.log("Error logic AI:", e);
+            console.error("AI Logging Failed:", e);
         }
     },
 
-    // 2. Marks mission as executed by the user (Tap on HomeScreen AI button)
-    markActionExecuted: async (title) => {
-        try {
-            await supabase
-                .from('ai_action_logs')
-                .update({ executed: true, executed_at: new Date().toISOString() })
-                .eq('title', title)
-                .eq('executed', false)
-                .order('created_at', { ascending: false })
-                .limit(1);
-        } catch (e) {
-            console.log("Failed to mark action executed:", e);
-        }
-    },
-
-    // 3. Automated evaluation function (to run on login/Home)
     evaluatePendingActions: async () => {
         try {
-            const { data: logs } = await supabase
+            const { data: pending } = await supabase
                 .from('ai_action_logs')
                 .select('*')
-                .eq('executed', true)
-                .is('profit_delta', null);
+                .eq('executed', false)
+                .limit(5);
 
-            if (!logs || logs.length === 0) return;
+            if (!pending || pending.length === 0) return;
 
             const financeState = useFinanceStore.getState();
-            // We use simple evaluation as requested
-            const thirtyDaysAgo = new Date();
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            
-            const recentSales = (financeState.sales || []).filter(s => new Date(s.created_at) > thirtyDaysAgo);
-            const currentRevenue = recentSales.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
-            const currentProfit = recentSales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
+            const recentSales = financeState.sales || [];
 
-            for (const log of logs) {
-                const executedAt = new Date(log.executed_at);
-                const hrsPassed = Math.abs(new Date() - executedAt) / 36e5;
+            for (const log of pending) {
+                const actionTime = new Date(log.created_at);
+                const salesAfterAction = recentSales.filter(s => new Date(s.created_at) > actionTime);
                 
-                if (hrsPassed >= (log.evaluation_window_hours || 48)) {
-                    // Time is up! Let's evaluate
-                    const prevSnapshot = log.context_snapshot || {};
-                    const prevProfit = prevSnapshot.monthlyProfit || 0;
-                    const prevRevenue = prevSnapshot.monthlyRevenue || 0;
-                    
-                    const profit_delta = currentProfit - prevProfit;
-                    const revenue_delta = currentRevenue - prevRevenue;
+                if (salesAfterAction.length > 0) {
+                    const revDelta = salesAfterAction.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
+                    const profDelta = salesAfterAction.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
 
                     await supabase
                         .from('ai_action_logs')
                         .update({
-                            result_snapshot: { currentProfit, currentRevenue },
-                            profit_delta,
-                            revenue_delta
+                            executed: true,
+                            revenue_delta: revDelta,
+                            profit_delta: profDelta,
+                            execution_date: new Date().toISOString()
                         })
                         .eq('id', log.id);
                 }
@@ -112,30 +70,58 @@ export const EmpireAIService = {
     // -------------------------------------------------------------
     // GENERATION ENGINE
     // -------------------------------------------------------------
-    getInsights: async (forceRefresh = false) => {
-            // Intelligent Caching (2 minutes for agile loop tracking)
+    getInsights: async (forceRefresh = false, userRole = 'seller', onProgress = null) => {
+        const updateProgress = (val) => onProgress && onProgress(val);
+        
+        // Intelligent Caching (15 minutes to respect API limits)
         if (!forceRefresh && cachedResponse && lastFetchTime) {
-            if (Date.now() - lastFetchTime < 2 * 60 * 1000) {
+            if (Date.now() - lastFetchTime < 15 * 60 * 1000) {
+                updateProgress(1);
                 return cachedResponse;
             }
         }
 
         try {
-            // Note: evaluatePendingActions is now handled by the Supabase Edge Function (evaluate-ai-actions)
-            // that runs via cron every hour. No need to trigger it from the client.
+            updateProgress(0.05);
+            // 1. VERIFY PERMISSIONS (SECURITY GATEKEEPER)
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('ai_coach_enabled, role')
+                    .eq('id', user.id)
+                    .single();
+                
+                // Restrict if not admin and AI not explicitly enabled
+                if (profile && profile.role !== 'admin' && !profile.ai_coach_enabled) {
+                    updateProgress(1);
+                    return {
+                        today_plan: null,
+                        strategyA: null,
+                        strategyB: null,
+                        summary: "El Empire AI Coach está desactivado para tu cuenta.",
+                        prediction: "Acceso Restringido",
+                        urgency: "Info",
+                        urgencyReason: "Tu acceso al coach táctico se activará próximamente.",
+                        actionId: "none",
+                        actionText: "VOLVER",
+                        is_restricted: true
+                    };
+                }
+            }
+
+            updateProgress(0.1);
             const financeState = useFinanceStore.getState();
             const productState = useProductStore.getState();
 
-            // 3. Process features for AI (Data Reduction to save tokens and improve context)
             const sales = financeState.sales || [];
             const expenses = financeState.expenses || [];
             const products = productState.products || [];
 
-            // Calculate basic metrics for the prompt
+            updateProgress(0.3);
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
             
-            // 1. Calculate Real Profit and Expenses
             const recentSales = sales.filter(s => new Date(s.created_at) > thirtyDaysAgo && (s.status === 'completed' || s.status === 'exitosa' || s.status === ''));
             const monthlyRevenue = recentSales.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
             const grossProfit = recentSales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
@@ -144,12 +130,8 @@ export const EmpireAIService = {
             const monthlyExpenses = recentExpenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
             const monthlyNetProfit = grossProfit - monthlyExpenses;
 
-            // 2. Identify Top Selling Products from recent sales (Sales Velocity)
-            const recentSaleIds = new Set(recentSales.map(s => s.id));
-            const recentSaleItems = (financeState.saleItems || []).filter(item => recentSaleIds.has(item.sale_id));
-            
             const productSalesMap = {};
-            recentSaleItems.forEach(item => {
+            (financeState.saleItems || []).forEach(item => {
                 const name = item.products?.name || 'Desconocido';
                 if (!productSalesMap[name]) productSalesMap[name] = 0;
                 productSalesMap[name] += (item.quantity || 1);
@@ -159,7 +141,6 @@ export const EmpireAIService = {
                 .slice(0, 5)
                 .map(([name, qty]) => `${name} (Vendidos: ${qty})`);
             
-            // 3. Inventory snapshot
             const lowStockProducts = products
                 .filter(p => p.current_stock > 0 && p.current_stock <= 5)
                 .map(p => ({ build_name: p.name, stock: p.current_stock }));
@@ -168,7 +149,6 @@ export const EmpireAIService = {
                 .filter(p => p.current_stock === 0)
                 .map(p => p.name);
 
-            // Create highly concise payload
             const aiPayload = {
                 metrics: {
                     monthlyRevenue,
@@ -184,9 +164,6 @@ export const EmpireAIService = {
                 }
             };
 
-            // 3.B Fetch Feedback Loop Context (What worked before?)
-            // Note: Since Supabase raw SQL expressions in order() are limited via REST,
-            // we fetch the best performing ones normally and then sort them in JS by profit_delta * confidence_score
             const { data: topActions } = await supabase
                 .from('ai_action_logs')
                 .select('action_type, title, profit_delta, revenue_delta, confidence_score')
@@ -195,132 +172,174 @@ export const EmpireAIService = {
                 .order('profit_delta', { ascending: false })
                 .limit(10);
 
+            updateProgress(0.5);
             let feedbackContext = "";
             if (topActions && topActions.length > 0) {
-                // Sort by true weighted impact (profit * confidence)
                 topActions.sort((a, b) => {
                     const weightA = (a.profit_delta || 0) * (a.confidence_score || 1);
                     const weightB = (b.profit_delta || 0) * (b.confidence_score || 1);
                     return weightB - weightA;
                 });
-                
                 const best3 = topActions.slice(0, 3);
-
                 feedbackContext = `
-                FEEDBACK LOOP DEL NEGOCIO (ESTO FUNCIONÓ ANTES, PRIORÍZALO):
-                ${best3.map(a => `- ${a.title} (${a.action_type}) -> Generó +$${a.profit_delta} de ganancia extra. (Nivel de Confianza de la Estrategia: ${a.confidence_score || 1}/10)`).join('\n')}
-                
-                Basado en estas acciones anteriores exitosas repetidas en este comercio, prioriza estrategias similares si el contexto actual lo permite.
+                FEEDBACK (ESTO FUNCIONÓ ANTES):
+                ${best3.map(a => `- ${a.title} -> Generó extra $${a.profit_delta} (Estrategia: ${a.action_type})`).join('\n')}
+                Prioriza estrategias que repliquen esto.
                 `;
             }
 
-            // 4. Get API Key
-            const { data: settingsData } = await supabase
-                .from('settings')
-                .select('value')
-                .eq('key', 'google_api_key')
-                .single();
-
-            if (!settingsData?.value) {
-                throw new Error("API Key de Gemini no configurada.");
+            let testProductsData = [];
+            let streetMemory = [];
+            let processedHistory = [];
+            
+            if (userRole === 'admin') {
+                const { data: tpd } = await supabase.from('test_products').select('*').order('created_at', { ascending: false }).limit(20);
+                testProductsData = tpd || [];
+                const { data: sm } = await supabase.from('street_test_results').select('*').order('created_at', { ascending: false });
+                streetMemory = sm || [];
             }
 
-            // 5. Build and Send Prompt
-            const prompt = `
-            Eres el CFO y "Empire AI Coach" de "Digital Boost Empire".
-            Analiza los siguientes datos financieros y de inventario de los últimos 30 días y devuelve ÚNICAMENTE un JSON válido con decisiones accionables.
+            processedHistory = (streetMemory || []).map(sm => {
+                const approached = sm.people_approached || 1;
+                const convs = sm.conversations || 0;
+                const sales = sm.sales || 0;
+                const hours = parseFloat(sm.testing_hours) || 1;
+                
+                return {
+                    ...sm,
+                    ratios: { 
+                        approach_efficiency: (convs / approached).toFixed(2),
+                        sales_velocity: (sales / hours).toFixed(2)
+                    }
+                };
+            });
             
-            DATOS ACTUALES DEL NEGOCIO (ÚLTIMOS 30 DÍAS):
-            ${JSON.stringify(aiPayload, null, 2)}
-            
-            ${feedbackContext}
-            
-            FORMATO REQUERIDO (Estrictamente JSON puro, sin markdown de bloques de código):
-            {
-              "missions": [
-                {
-                  "title": "Nombre de la misión o acción clara",
-                  "impact": "high",
-                  "reason": "Por qué debemos hacer esto",
-                  "action_type": "restock",
-                  "target_id": "nombre o id del objetivo"
-                }
-              ],
-              "summary": "Mensaje motivacional (1 línea).",
-              "urgency": "Estable",
-              "urgencyReason": "Razón corta de la urgencia",
-              "trendRadar": "Radar: Qué producto está en tendencia mundial",
-              "trendScore": "87/100",
-              "opportunityIndex": [
-                { "product": "Nombre", "demand": "Alta", "opportunity": "🟢 Promocionar" }
-              ],
-              "strategyA": { "name": "ESTRATEGIA A", "plan": "Vende [X] con [Y]% OFF para liberar capital." },
-              "strategyB": { 
-                  "name": "ESTRATEGIA B", 
-                  "plan": "Invierte tu dinero en X.",
-                  "suggestedInvestment": "$32.000",
-                  "suggestedStock": "18 unidades",
-                  "estimatedMargin": "42%"
-              },
-              "prediction": "Predicción proactiva",
-              "actionId": "create_promo",
-              "actionText": "EJECUTAR PLAN"
-            }`;
+            aiPayload.user_performance = {
+                total_wasted_tests_ars: (streetMemory || []).reduce((sum, sm) => sum + (parseFloat(sm.test_cost_ars) || 0), 0),
+                safe_mode_active: false
+            };
+            aiPayload.test_products = testProductsData;
+            aiPayload.street_memory = processedHistory;
 
+            const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'google_api_key').single();
+            if (!settingsData?.value) throw new Error("API Key missing.");
+
+            updateProgress(0.6);
+            let prompt = "";
+            const commonContext = `
+            CONTEXTO DEL NEGOCIO: ${JSON.stringify(aiPayload, null, 2)}
+            ${feedbackContext}
+            `;
+
+            if (userRole === 'admin') {
+                prompt = `
+                Eres el "Empire AI Coach", el estratega máximo de "Digital Boost Empire" en Jujuy.
+                ${commonContext}
+                TAREAS: Misiones tácticas (offline, online, híbridas), Estrategia A (Liquidación), Estrategia B (Inversión).
+                REQUERIMIENTO: Identifica riesgos, oportunidades de crecimiento y planes de acción concretos.
+                DEVUELVE JSON PURO: {
+                  "today_plan": { "product": "X", "location": "Y", "script": "Z", "reason": "W", "target": "Público", "expected_sales": "N" },
+                  "missions": [
+                    { "type": "offline|online|hybrid", "action": "...", "goal": "...", "priority": "Alta|Media|Baja" }
+                  ],
+                  "strategyA": { "name": "LIQUIDACIÓN", "plan": "...", "risk_level": "..." },
+                  "strategyB": { "name": "INVERSIÓN", "plan": "...", "suggestedInvestment": "$X", "suggestedStock": "N un.", "estimatedMargin": "X%" },
+                  "recommended_bundles": [{ "products": ["A", "B"], "price_strategy": "...", "expected_conversion_boost": "X%" }],
+                  "product_insights": [{ "name": "X", "observation": "...", "bottleneck_alert": "...", "objection_killer_script": "...", "next_step": { "action": "import|discard|test", "risk_level": "low|med|high", "confidence": 0.X, "suggested_units": N, "safe_units": M, "reason": "..." } }],
+                  "pattern_insights": ["Patrón 1", "Patrón 2"],
+                  "positioning_strategy": ["Tip 1", "Tip 2"],
+                  "expansion_strategy": ["Tip 1", "Tip 2"],
+                  "discovery_products": [{ "name": "X", "test_priority": "high|low", "local_fit_score": "X/10", "reason": "...", "estimated_cost": "$X", "suggested_test": { "city": "Jujuy", "location": "...", "script": "...", "goal": "...", "validation_metric": "..." } }],
+                  "performance_summary": "...",
+                  "prediction": "...", "urgency": "...", "urgencyReason": "...", "actionId": "create_promo", "actionText": "EJECUTAR"
+                }`;
+            } else {
+                prompt = `
+                Eres el "Asistente de Marketing Digital" de Digital Boost Empire. Socio espera instrucciones para REDES SOCIALES.
+                ${commonContext}
+                IMPORTANTE: Solo estrategias ONLINE (Instagram, TikTok, WhatsApp).
+                OBJETIVO: Generar ventas mediante contenido viral.
+                DEVUELVE JSON PURO: {
+                  "today_plan": { 
+                    "product": "X", 
+                    "platform": "Instagram|TikTok|WA", 
+                    "best_copy": "Copia este texto: [Copy con emojis y CTA]",
+                    "script": "Guion para video si aplica", 
+                    "reason": "Por qué publicar esto hoy" 
+                  },
+                  "missions": [
+                    { "type": "online", "action": "Ej: Subir 3 historias de X", "goal": "Generar X consultas" }
+                  ],
+                  "strategyA": { "name": "ESTRATEGIA VIRAL (REELS/TIKTOK)", "plan": "..." },
+                  "strategyB": { "name": "ESTRATEGIA WHATSAPP (ESTADOS/GRUPOS)", "plan": "..." },
+                  "summary": "Resumen de lo que debe publicar hoy",
+                  "prediction": "...", "urgency": "Estable", "urgencyReason": "...", "actionId": "create_promo", "actionText": "VER"
+                }`;
+            }
+
+            updateProgress(0.8);
             let response;
             let retries = 3;
-            let backoff = 1000; // start with 1s
-
+            let backoff = 1000;
             while (retries > 0) {
                 response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${settingsData.value}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                 });
-
-                if (response.status === 503 || response.status === 429) {
-                    console.warn(`[EmpireAIService] Gemini API Overloaded (HTTP ${response.status}). Retries left: ${retries - 1}`);
+                if (response.status === 429) {
                     retries--;
-                    if (retries === 0) break;
                     await new Promise(r => setTimeout(r, backoff));
-                    backoff *= 2; // exponential backoff
-                } else {
-                    break;
-                }
+                    backoff *= 2;
+                } else break;
             }
 
-            if (!response.ok) {
-                const errText = await response.text();
-                throw new Error(`Error HTTP ${response.status}: ${errText.substring(0, 150)}`);
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             
+            updateProgress(0.95);
             const data = await response.json();
-            let textReponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const parsedInsights = JSON.parse(text);
             
-            // Clean markdown blocks
-            textReponse = textReponse.replace(/```json/g, '').replace(/```/g, '').trim();
-            
-            const parsedInsights = JSON.parse(textReponse);
-            
-            // Log to Table (Pass the snapshot of metrics used to generate it)
-            await EmpireAIService.logAIActions(parsedInsights.missions, {
-                monthlyRevenue: aiPayload.metrics.monthlyRevenue,
-                monthlyProfit: aiPayload.metrics.monthlyNetProfit
-            });
-
-            // Update Cache
             cachedResponse = parsedInsights;
             lastFetchTime = Date.now();
-            
+            updateProgress(1);
             return parsedInsights;
 
         } catch (error) {
-            console.error("EmpireAIService Error:", error);
-            // Fallback graceful
+            console.error("AI Error:", error);
+            updateProgress(1);
+            const pState = useProductStore.getState();
+            const products = pState.products || [];
+            const critical = products.filter(p => p.current_stock > 0 && p.current_stock <= 3);
+            const stagnant = products.filter(p => p.current_stock > 15);
+            
             return {
-                missions: [],
-                summary: "No pude analizar los datos en este momento. Revisa tu conexión o API Key.",
-                error: true
+                today_plan: userRole === 'admin' ? { 
+                    product: critical[0]?.name || "Gadgets", 
+                    location: "Plaza Belgrano / UNJU / Centro Jujuy", 
+                    script: "¡Últimas unidades! No te quedes sin el tuyo.", 
+                    reason: "Modo contingencia: Foco en rotación física en Jujuy." 
+                } : null,
+                strategyA: { 
+                    name: "ESTRATEGIA A (LIQUIDAR)", 
+                    plan: stagnant[0] ? `Lanza una oferta especial de ${stagnant[0].name} para liberar capital hoy mismo.` : "Identifica productos con stock alto y dales salida con combos." 
+                },
+                strategyB: { 
+                    name: "ESTRATEGIA B (DEMANDAR)", 
+                    plan: critical[0] ? `Es urgente reponer ${critical[0].name}. Hay demanda insatisfecha.` : "Analiza los productos más vendidos y refuerza stock.",
+                    suggestedInvestment: "$45.000 (Estimado)",
+                    suggestedStock: "12 unidades",
+                    estimatedMargin: "45%"
+                },
+                summary: userRole === 'admin' ? "CFO Offline: Generando estrategias basadas en inventario local." : "Resumen de inventario disponible.",
+                prediction: "Estable con tendencia a rotación de stock crítico.",
+                urgency: "Atención",
+                urgencyReason: "Gemini Quota limit o acceso limitado.",
+                actionId: "restock",
+                actionText: "VER INVENTARIO",
+                is_fallback: true
             };
         }
     }
