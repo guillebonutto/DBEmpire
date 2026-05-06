@@ -154,10 +154,7 @@ export default function NewSaleScreen({ navigation, route }) {
     }, [availablePromos, selectedPromo]);
 
     const handleAddProductPress = () => {
-        if (!selectedClient) {
-            setClientError(true);
-            return;
-        }
+        // No client check here anymore! Select product first.
         setProductModalVisible(true);
     };
 
@@ -254,7 +251,7 @@ export default function NewSaleScreen({ navigation, route }) {
         let discount = 0;
         let promoDetail = '';
 
-        cart.forEach(item => {
+        (cart || []).forEach(item => {
             // Skip invalid items or bundles without proper pricing
             if (!item || item.qty === undefined || item.qty === null) {
                 console.log('Invalid item in cart:', item);
@@ -602,11 +599,18 @@ export default function NewSaleScreen({ navigation, route }) {
 
 
     const processCheckout = async (client, checkoutSaleType = saleType) => {
+        if (cart.length === 0) return;
+
+        // Force client selection at the end
+        if (!client) {
+            setClientModalVisible(true);
+            if (Platform.OS === 'web') alert('Selecciona un cliente para finalizar la venta.');
+            else Alert.alert('Cliente requerido', 'Debes seleccionar un cliente para finalizar la venta.');
+            return;
+        }
+
         if (loading) return; // ANTI-DOUBLE SALE LOCK
         setLoading(true);
-
-        // Ensure products is an array
-        const previousProducts = Array.isArray(products) ? [...products] : [];
 
         try {
             console.log('processCheckout started with:', { client, checkoutSaleType, cartLength: cart.length });
@@ -973,6 +977,7 @@ export default function NewSaleScreen({ navigation, route }) {
                 adjustTempQty={adjustTempQty}
                 initiateProductSelection={initiateProductSelection}
                 confirmAddToCart={confirmAddToCart}
+                userRole={currentUserRole}
             />
 
             {/* CLIENT SELECTION MODAL */}
@@ -981,20 +986,22 @@ export default function NewSaleScreen({ navigation, route }) {
                 onClose={() => setClientModalVisible(false)}
                 clients={clients}
                 onSelectClient={(client) => {
-                    setSelectedClient(client); // Save client to state
+                    setSelectedClient(client);
                     setClientModalVisible(false);
-                    
-                    // If we're in selectClientFirst mode, open product modal instead of checkout
                     if (selectClientFirstMode) {
                         setTimeout(() => {
-                            setSelectClientFirstMode(false); // Reset the mode
+                            setSelectClientFirstMode(false);
                             setProductModalVisible(true);
                         }, 300);
                     } else {
-                        // Normal flow: process checkout
-                        // Use ref instead of state to avoid async timing issues
                         setTimeout(() => processCheckout(client, checkoutTypeRef.current), 500);
                     }
+                }}
+                onSelectWithType={(client, type) => {
+                    setSelectedClient(client);
+                    setClientModalVisible(false);
+                    // Saltamos pasos: Procesa directamente con el tipo elegido por el gesto
+                    setTimeout(() => processCheckout(client, type), 500);
                 }}
                 showNewClientForm={showNewClientForm}
                 setShowNewClientForm={setShowNewClientForm}

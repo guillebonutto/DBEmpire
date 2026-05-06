@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ActivityIndicator, ScrollView, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSupplierStore } from '../store/useSupplierStore';
+import { SyncService } from '../services/syncService';
 
 export default function SuppliersScreen({ navigation }) {
-    const [suppliers, setSuppliers] = useState([]);
-    const [filteredSuppliers, setFilteredSuppliers] = useState([]);
-    const [loading, setLoading] = useState(false);
+    const { suppliers, fetchSuppliers, loadingSuppliers } = useSupplierStore();
     const [modalVisible, setModalVisible] = useState(false);
     const [editingSupplier, setEditingSupplier] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
@@ -21,117 +21,60 @@ export default function SuppliersScreen({ navigation }) {
         notes: ''
     });
 
-    const fetchSuppliers = async () => {
-        setLoading(true);
-        try {
-            // 1. Fetch Suppliers
-            const { data: suppliersData, error: sError } = await supabase
-                .from('suppliers')
-                .select('*')
-                .order('name', { ascending: true });
-
-            if (sError) throw sError;
-
-            // 2. Fetch all products linked to these suppliers (checking both item-level and order-level providers)
-            const { data: itemsData, error: iError } = await supabase
-                .from('supplier_order_items')
-                .select('product_id, products(id, name, image_url, current_stock), supplier, supplier_orders(provider_name)')
-                .not('product_id', 'is', null);
-
-            if (iError) throw iError;
-
-            // 3. Map products to their suppliers
-            const suppliersWithProducts = (suppliersData || []).map(s => {
-                const uniqueProducts = [];
-                const seenProducts = new Set();
-
-                itemsData?.forEach(item => {
-                    // Match by name string match (since supplier_id column doesn't exist on items)
-                    const matchByName = item.supplier === s.name || item.supplier_orders?.provider_name === s.name;
-
-                    if (matchByName && item.products && !seenProducts.has(item.product_id)) {
-                        seenProducts.add(item.product_id);
-                        uniqueProducts.push(item.products);
-                    }
-                });
-
-                return {
-                    ...s,
-                    products: uniqueProducts
-                };
-            });
-
-            setSuppliers(suppliersWithProducts);
-            setFilteredSuppliers(suppliersWithProducts);
-        } catch (err) {
-            console.log('Error fetching suppliers:', err);
-            Alert.alert('Error', 'No se pudieron cargar los proveedores.');
-        } finally {
-            setLoading(false);
-        }
-    };
-
     useEffect(() => {
         fetchSuppliers();
     }, []);
 
-    useEffect(() => {
-        if (searchQuery) {
-            const low = searchQuery.toLowerCase();
-            const filtered = suppliers.filter(s =>
-                s.name.toLowerCase().includes(low) ||
-                (s.category && s.category.toLowerCase().includes(low))
-            );
-            setFilteredSuppliers(filtered);
-        } else {
-            setFilteredSuppliers(suppliers);
-        }
+    const filteredSuppliers = useMemo(() => {
+        if (!searchQuery) return suppliers;
+        const low = searchQuery.toLowerCase();
+        return suppliers.filter(s =>
+            s.name.toLowerCase().includes(low) ||
+            (s.category && s.category.toLowerCase().includes(low))
+        );
     }, [searchQuery, suppliers]);
 
     const handleSave = async () => {
         if (!formData.name) return Alert.alert('Error', 'El nombre es obligatorio');
 
         try {
-            setLoading(true);
             if (editingSupplier) {
-                const { error } = await supabase
-                    .from('suppliers')
-                    .update(formData)
-                    .eq('id', editingSupplier.id);
-                if (error) throw error;
+                const updatedSupplier = { ...editingSupplier, ...formData };
+                await SyncService.queueAction('supplier', updatedSupplier, {}, 'UPDATE');
+                // Local state will be updated by SyncService (optimistic)
             } else {
-                const { error } = await supabase
-                    .from('suppliers')
-                    .insert([formData]);
-                if (error) throw error;
+                const newSupplier = {
+                    id: `local-${Date.now()}`,
+                    ...formData,
+                    active: true,
+                    created_at: new Date().toISOString()
+                };
+                await SyncService.queueAction('supplier', newSupplier, {}, 'INSERT');
             }
 
             setModalVisible(false);
             setEditingSupplier(null);
             setFormData({ name: '', category: '', phone: '', email: '', notes: '' });
-            fetchSuppliers();
+            
+            // Re-fetch local to show changes
+            useSupplierStore.getState().initStore();
+
             if (Platform.OS === 'web') alert(`✅ Éxito: ${editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado'}`);
             else Alert.alert('✅ Éxito', editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado');
         } catch (error) {
             if (Platform.OS === 'web') alert(`Falla: ${error.message}`);
             else Alert.alert('Falla', error.message);
-        } finally {
-            setLoading(false);
         }
     };
 
     const handleDelete = (supplier) => {
         const performDelete = async () => {
             try {
-                const { error } = await supabase
-                    .from('suppliers')
-                    .delete()
-                    .eq('id', supplier.id);
-                if (error) throw error;
-                fetchSuppliers();
+                await SyncService.queueAction('supplier', { id: supplier.id }, {}, 'DELETE');
+                useSupplierStore.getState().initStore();
             } catch (err) {
-                if (Platform.OS === 'web') alert('Error: No se puede eliminar (es posible que tenga órdenes asociadas).');
-                else Alert.alert('Error', 'No se puede eliminar (es posible que tenga órdenes asociadas).');
+                if (Platform.OS === 'web') alert('Error: No se puede eliminar.');
+                else Alert.alert('Error', 'No se puede eliminar.');
             }
         };
 
@@ -196,7 +139,7 @@ export default function SuppliersScreen({ navigation }) {
                 </View>
             </View>
 
-            {loading && suppliers.length === 0 ? (
+            {loadingSuppliers && suppliers.length === 0 ? (
                 <ActivityIndicator size="large" color="#d4af37" style={{ marginTop: 50 }} />
             ) : (
                 <FlatList
@@ -224,136 +167,73 @@ export default function SuppliersScreen({ navigation }) {
                                 </View>
                             </TouchableOpacity>
 
-                            {/* Visual Product Gallery */}
-                            <View style={styles.productGalleryContainer}>
-                                <Text style={styles.galleryLabel}>CATÁLOGO DEL PROVEEDOR ({item.products?.length || 0})</Text>
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.productScroll}>
-                                    {item.products && item.products.length > 0 ? (
-                                        item.products.map(p => (
-                                            <TouchableOpacity
-                                                key={p.id}
-                                                style={styles.miniProductCard}
-                                                onPress={() => navigation.navigate('Inventario', { marketingProductId: p.id })}
-                                            >
-                                                {p.image_url ? (
-                                                    <Image source={{ uri: p.image_url }} style={styles.miniImage} />
-                                                ) : (
-                                                    <View style={[styles.miniImage, styles.miniImagePlaceholder]}>
-                                                        <MaterialCommunityIcons name="image-off" size={20} color="#333" />
-                                                    </View>
-                                                )}
-                                                <Text style={styles.miniProductName} numberOfLines={2}>{p.name}</Text>
-                                                <Text style={styles.miniProductStock}>Stock: {p.current_stock}</Text>
-                                                <TouchableOpacity 
-                                                    style={styles.aiGenerateBtn}
-                                                    onPress={() => navigation.navigate('Inventario', { marketingProductId: p.id })}
-                                                >
-                                                    <MaterialCommunityIcons name="robot-excited-outline" size={16} color="#d4af37" />
-                                                    <Text style={styles.aiGenerateText}>IDEAS</Text>
-                                                </TouchableOpacity>
-                                            </TouchableOpacity>
-                                        ))
-                                    ) : (
-                                        <Text style={styles.noProductsText}>Sin productos vinculados aún.</Text>
-                                    )}
-                                </ScrollView>
-                            </View>
-
-                            <View style={styles.cardFooter}>
-                                {(item.phone || item.email) ? (
-                                    <View style={styles.contactRow}>
-                                        {item.phone && (
-                                            <View style={styles.contactItem}>
-                                                <MaterialCommunityIcons name="phone" size={14} color="#666" />
-                                                <Text style={styles.contactText}>{item.phone}</Text>
-                                            </View>
-                                        )}
-                                        {item.email && (
-                                            <View style={styles.contactItem}>
-                                                <MaterialCommunityIcons name="email" size={14} color="#666" />
-                                                <Text style={styles.contactText}>{item.email}</Text>
-                                            </View>
-                                        )}
-                                    </View>
-                                ) : <View />}
-
-                                <TouchableOpacity onPress={() => handleDelete(item)} style={styles.deleteBtn}>
-                                    <MaterialCommunityIcons name="trash-can-outline" size={20} color="#e74c3c" />
+                            <View style={styles.cardActions}>
+                                <TouchableOpacity style={styles.actionBtn} onPress={() => openModal(item)}>
+                                    <MaterialCommunityIcons name="pencil" size={18} color="#d4af37" />
+                                    <Text style={styles.actionText}>Editar</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(item)}>
+                                    <MaterialCommunityIcons name="trash-can-outline" size={18} color="#e74c3c" />
+                                    <Text style={[styles.actionText, styles.deleteText]}>Eliminar</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
                     )}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <MaterialCommunityIcons name="account-search-outline" size={60} color="#222" />
-                            <Text style={styles.emptyText}>No hay proveedores registrados.</Text>
-                        </View>
-                    }
                 />
             )}
 
             <Modal visible={modalVisible} animationType="slide" transparent>
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>{editingSupplier ? 'Editar Proveedor' : 'Nuevo Proveedor'}</Text>
-
-                        <ScrollView showsVerticalScrollIndicator={false}>
-                            <Text style={styles.label}>Nombre de la Empresa *</Text>
+                        <Text style={styles.modalTitle}>{editingSupplier ? 'EDITAR PROVEEDOR' : 'NUEVO PROVEEDOR'}</Text>
+                        
+                        <ScrollView>
                             <TextInput
                                 style={styles.input}
-                                placeholder="Ej: Importadora Global"
-                                placeholderTextColor="#444"
+                                placeholder="Nombre del Proveedor"
+                                placeholderTextColor="#666"
                                 value={formData.name}
-                                onChangeText={(t) => setFormData({ ...formData, name: t })}
+                                onChangeText={(text) => setFormData({...formData, name: text})}
                             />
-
-                            <Text style={styles.label}>Categoría</Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="Ej: Electrónica, Ropa..."
-                                placeholderTextColor="#444"
+                                placeholder="Categoría (Ej: Electrónica)"
+                                placeholderTextColor="#666"
                                 value={formData.category}
-                                onChangeText={(t) => setFormData({ ...formData, category: t })}
+                                onChangeText={(text) => setFormData({...formData, category: text})}
                             />
-
-                            <Text style={styles.label}>Teléfono de Contacto</Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="+54 9 ..."
-                                placeholderTextColor="#444"
+                                placeholder="Teléfono"
+                                placeholderTextColor="#666"
                                 keyboardType="phone-pad"
                                 value={formData.phone}
-                                onChangeText={(t) => setFormData({ ...formData, phone: t })}
+                                onChangeText={(text) => setFormData({...formData, phone: text})}
                             />
-
-                            <Text style={styles.label}>Email</Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="contacto@empresa.com"
-                                placeholderTextColor="#444"
+                                placeholder="Email"
+                                placeholderTextColor="#666"
                                 keyboardType="email-address"
-                                autoCapitalize="none"
                                 value={formData.email}
-                                onChangeText={(t) => setFormData({ ...formData, email: t })}
+                                onChangeText={(text) => setFormData({...formData, email: text})}
                             />
-
-                            <Text style={styles.label}>Notas / Observaciones</Text>
                             <TextInput
-                                style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-                                placeholder="Días de entrega, condiciones de pago..."
-                                placeholderTextColor="#444"
+                                style={[styles.input, { height: 100 }]}
+                                placeholder="Notas adicionales..."
+                                placeholderTextColor="#666"
                                 multiline
                                 value={formData.notes}
-                                onChangeText={(t) => setFormData({ ...formData, notes: t })}
+                                onChangeText={(text) => setFormData({...formData, notes: text})}
                             />
                         </ScrollView>
 
                         <View style={styles.modalButtons}>
                             <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
-                                <Text style={styles.cancelBtnText}>CANCELAR</Text>
+                                <Text style={styles.cancelBtnText}>Cancelar</Text>
                             </TouchableOpacity>
                             <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-                                <Text style={styles.saveBtnText}>GUARDAR</Text>
+                                <Text style={styles.saveBtnText}>Guardar</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -365,60 +245,35 @@ export default function SuppliersScreen({ navigation }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 25, borderBottomWidth: 1, borderBottomColor: '#1a1a1a' },
-    headerLabel: { color: '#666', fontSize: 10, fontWeight: '900', letterSpacing: 2, marginBottom: 5 },
-    title: { fontSize: 24, fontWeight: 'bold', color: '#fff', letterSpacing: 1 },
-
-    addButton: { width: 45, height: 45, borderRadius: 12, overflow: 'hidden' },
-    addBtnGradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-
-    searchContainer: { padding: 20 },
-    searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 12, paddingHorizontal: 15, borderWidth: 1, borderColor: '#222' },
-    searchInput: { flex: 1, color: '#fff', paddingVertical: 12, marginLeft: 10, fontSize: 14 },
-
-    listContent: { paddingHorizontal: 20, paddingBottom: 40 },
-    card: { backgroundColor: '#0a0a0a', borderRadius: 15, padding: 18, marginBottom: 15, borderWidth: 1, borderColor: '#1a1a1a' },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20 },
+    headerLabel: { color: '#666', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 },
+    title: { color: '#d4af37', fontSize: 24, fontWeight: '900', letterSpacing: 1 },
+    addButton: { width: 50, height: 50, borderRadius: 25, overflow: 'hidden' },
+    addBtnGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    searchContainer: { paddingHorizontal: 20, marginBottom: 10 },
+    searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 12, paddingHorizontal: 15, height: 45, borderWidth: 1, borderColor: '#222' },
+    searchInput: { flex: 1, color: '#fff', marginLeft: 10, fontSize: 14 },
+    listContent: { padding: 20 },
+    card: { backgroundColor: '#111', borderRadius: 20, marginBottom: 15, borderWidth: 1, borderColor: '#222', overflow: 'hidden' },
+    cardHeaderArea: { padding: 20 },
     cardMain: { flexDirection: 'row', alignItems: 'center' },
-    iconBox: { width: 45, height: 45, borderRadius: 10, backgroundColor: 'rgba(212, 175, 55, 0.1)', alignItems: 'center', justifyContent: 'center' },
-    supplierName: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+    iconBox: { width: 50, height: 50, borderRadius: 15, backgroundColor: 'rgba(212, 175, 55, 0.1)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.3)' },
+    supplierName: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
     supplierCategory: { color: '#666', fontSize: 12, marginTop: 2 },
-
-    contactRow: { flexDirection: 'row', marginTop: 15, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#1a1a1a', gap: 20 },
-    contactItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    contactText: { color: '#888', fontSize: 12 },
-
-    emptyContainer: { alignItems: 'center', marginTop: 100 },
-    emptyText: { color: '#444', marginTop: 15, fontStyle: 'italic' },
-
-    // Modal
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: '#111', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '90%', borderWidth: 1, borderColor: '#222' },
-    modalTitle: { fontSize: 20, fontWeight: '900', color: '#d4af37', marginBottom: 25, textAlign: 'center', letterSpacing: 1 },
-    label: { color: '#888', fontSize: 11, fontWeight: 'bold', marginBottom: 8, marginLeft: 5 },
-    input: { backgroundColor: '#050505', color: '#fff', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
-
-    modalButtons: { flexDirection: 'row', gap: 15, marginTop: 10, paddingBottom: 20 },
-    cancelBtn: { flex: 1, padding: 18, borderRadius: 12, alignItems: 'center' },
-    cancelBtnText: { color: '#666', fontWeight: 'bold' },
-    saveBtn: { flex: 2, backgroundColor: '#d4af37', padding: 18, borderRadius: 12, alignItems: 'center' },
-    saveBtnText: { color: '#000', fontWeight: '900', letterSpacing: 1 },
-
-    trustBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 204, 113, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, gap: 4 },
-    trustText: { color: '#2ecc71', fontSize: 9, fontWeight: '900' },
-
-    productGalleryContainer: { marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#1a1a1a' },
-    galleryLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 12 },
-    productScroll: { flexDirection: 'row' },
-    miniProductCard: { width: 95, marginRight: 15, alignItems: 'center', backgroundColor: '#0a0a0a', padding: 8, borderRadius: 12, borderWidth: 1, borderColor: '#1a1a1a' },
-    miniImage: { width: 80, height: 80, borderRadius: 10, backgroundColor: '#111', marginBottom: 8 },
-    miniImagePlaceholder: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#222', borderStyle: 'dashed' },
-    miniProductName: { color: '#eee', fontSize: 10, fontWeight: 'bold', textAlign: 'center', height: 28 },
-    miniProductStock: { color: '#666', fontSize: 9, marginTop: 2, marginBottom: 8 },
-    aiGenerateBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#333', paddingVertical: 4, paddingHorizontal: 6, borderRadius: 6, gap: 3 },
-    aiGenerateText: { color: '#d4af37', fontSize: 8, fontWeight: '900' },
-    noProductsText: { color: '#333', fontSize: 11, fontStyle: 'italic', paddingVertical: 10 },
-
-    cardHeaderArea: { paddingBottom: 10 },
-    cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15 },
-    deleteBtn: { padding: 5 }
+    trustBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 204, 113, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    trustText: { color: '#2ecc71', fontSize: 9, fontWeight: 'bold', marginLeft: 4 },
+    cardActions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#222' },
+    actionBtn: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 12, gap: 8 },
+    actionText: { color: '#d4af37', fontSize: 13, fontWeight: 'bold' },
+    deleteBtn: { borderLeftWidth: 1, borderLeftColor: '#222' },
+    deleteText: { color: '#e74c3c' },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
+    modalContent: { backgroundColor: '#111', borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#333', maxHeight: '80%' },
+    modalTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900', textAlign: 'center', marginBottom: 20 },
+    input: { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 15, color: '#fff', marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    modalButtons: { flexDirection: 'row', gap: 15, marginTop: 10 },
+    cancelBtn: { flex: 1, paddingVertical: 15, borderRadius: 12, backgroundColor: '#222', alignItems: 'center' },
+    cancelBtnText: { color: '#fff', fontWeight: 'bold' },
+    saveBtn: { flex: 1, paddingVertical: 15, borderRadius: 12, backgroundColor: '#d4af37', alignItems: 'center' },
+    saveBtnText: { color: '#000', fontWeight: 'bold' }
 });

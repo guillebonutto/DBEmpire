@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, StatusBar, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -21,16 +21,20 @@ export default function RestockAdvisorScreen({ navigation }) {
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
             // 1. Fetch Products
-            const { data: products } = await supabase
+            const { data: products, error: pErr } = await supabase
                 .from('products')
                 .select('id, name, current_stock, image_url')
                 .eq('active', true);
+            
+            if (pErr) throw pErr;
 
             // 2. Fetch Sales Items from last 30 days
-            const { data: saleItems } = await supabase
+            const { data: saleItems, error: sErr } = await supabase
                 .from('sale_items')
-                .select('product_id, quantity, created_at')
-                .gte('created_at', thirtyDaysAgo.toISOString());
+                .select('product_id, quantity, sales!inner(created_at)')
+                .gte('sales.created_at', thirtyDaysAgo.toISOString());
+
+            if (sErr) throw sErr;
 
             if (!products) return;
 
@@ -59,6 +63,7 @@ export default function RestockAdvisorScreen({ navigation }) {
             setRecommendations(processed);
         } catch (error) {
             console.error('Restock calculation error:', error);
+            Alert.alert('Error', 'No se pudieron calcular las reposiciones.');
         } finally {
             setLoading(false);
         }

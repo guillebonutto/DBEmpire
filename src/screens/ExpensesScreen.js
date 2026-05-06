@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, StatusBar, RefreshControl, Linking, Platform } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, StatusBar, RefreshControl, Linking, Platform, ScrollView, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -10,39 +10,29 @@ import * as ImagePicker from 'expo-image-picker';
 import { GeminiService } from '../services/geminiService';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { SyncService } from '../services/syncService';
+import { LocalDbService } from '../services/localDbService';
+
 const CATEGORIAS_GASTOS = ['General', 'Alquiler', 'Servicios', 'Marketing', 'Inventario', 'Salarios', 'Retiro del Titular', 'Descuento', 'Pago de Deuda', 'Otro'];
 
 export default function ExpensesScreen({ navigation }) {
     const { expenses, supplierOrders: orders, isLoading: storeLoading, addExpenseLocal, setFinanceState, fetchAllData } = useFinanceStore();
 
     const [viewMode, setViewMode] = useState('expenses'); // 'expenses' | 'purchases'
-
-    // Expenses State
     const [adding, setAdding] = useState(false);
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState('');
     const [category, setCategory] = useState('General');
     const [scanning, setScanning] = useState(false);
-    const [expandedExpenseId, setExpandedExpenseId] = useState(null);
 
     useFocusEffect(
         useCallback(() => {
-            fetchAllData(); // Smart cached fetch (only runs if data is stale)
+            fetchAllData();
         }, [])
     );
 
-    // --- EXPENSES LOGIC ---
     const handleAddExpense = async () => {
         if (!description || !amount) {
             Alert.alert('Error', 'La descripción y el monto son obligatorios');
-            return;
-        }
-
-        if (category === 'purchase' || category === 'Inventario compra') {
-            Alert.alert(
-                '⚠️ Categoría No Permitida',
-                'Los costos de inventario ya están descontados automáticamente en el ROI al momento de la venta.'
-            );
             return;
         }
 
@@ -54,22 +44,24 @@ export default function ExpensesScreen({ navigation }) {
 
         const finalAmount = category === 'Descuento' ? -Math.abs(numAmount) : numAmount;
         const newExpense = {
+            id: `local-${Date.now()}`,
             description: description.trim(),
             amount: finalAmount,
             category,
             created_at: new Date().toISOString()
         };
 
-        // 1. Optimistic Update (Immediate UI response)
-        addExpenseLocal({ ...newExpense, id: `local-${Date.now()}` });
+        // 1. Optimistic Update
+        addExpenseLocal(newExpense);
 
-        // 2. Queue for Sync (Fluidity & Offline support)
-        SyncService.queueAction('expense', newExpense);
+        // 2. Queue for Sync
+        SyncService.queueAction('expense', newExpense, {}, 'INSERT');
 
         // 3. Reset UI
         setDescription('');
         setAmount('');
         setCategory('General');
+        setAdding(false);
         
         if (Platform.OS === 'web') alert('✅ Gasto Registrado (se sincronizará en segundo plano)');
         else Alert.alert('✅ Gasto Registrado', 'Se sincronizará en segundo plano.');
@@ -78,9 +70,14 @@ export default function ExpensesScreen({ navigation }) {
     const handleDeleteExpense = async (id) => {
         const performDelete = async () => {
             try {
-                const { error } = await supabase.from('expenses').delete().eq('id', id);
-                if (error) throw error;
-                fetchAllData(true);
+                // Optimistic Local Delete
+                setFinanceState({
+                    expenses: expenses.filter(e => e.id !== id)
+                });
+                await LocalDbService.deleteItem('expenses', id);
+
+                // Queue Remote Delete
+                await SyncService.queueAction('expense', { id }, {}, 'DELETE');
             } catch (err) {
                 if (Platform.OS === 'web') alert('Error: No se pudo eliminar el gasto');
                 else Alert.alert('Error', 'No se pudo eliminar el gasto');
@@ -97,128 +94,51 @@ export default function ExpensesScreen({ navigation }) {
                 '¿Estás seguro de que quieres eliminar este gasto?',
                 [
                     { text: 'Cancelar', style: 'cancel' },
-                    {
-                        text: 'Eliminar',
-                        style: 'destructive',
-                        onPress: performDelete
-                    }
+                    { text: 'Eliminar', style: 'destructive', onPress: performDelete }
                 ]
             );
         }
     };
 
-    const handleScanReceipt = async () => {
-        try {
-            const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-            if (permissionResult.granted === false) {
-                Alert.alert("Permiso Denegado", "Se requiere acceso a la cámara para escanear recibos.");
-                return;
-            }
-
-            const result = await ImagePicker.launchCameraAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                allowsEditing: true,
-                quality: 0.5,
-                base64: true,
-            });
-
-            if (!result.canceled) {
-                setScanning(true);
-                try {
-                    const analysis = await GeminiService.analyzeReceipt(result.assets[0].base64);
-
-                    if (analysis.total) setAmount(analysis.total.toString());
-                    if (analysis.vendor && analysis.items) {
-                        setDescription(`${analysis.items} (${analysis.vendor})`);
-                    } else if (analysis.vendor) {
-                        setDescription(`Compra en ${analysis.vendor}`);
-                    } else if (analysis.items) {
-                        setDescription(analysis.items);
-                    }
-
-                    if (analysis.date) {
-                        // Optional: Could set a date state if we had one for expenses
-                    }
-
-                    Alert.alert('✅ Escaneado', 'Datos extraídos correctamente. Verifica y guarda.');
-                } catch (error) {
-                    Alert.alert('Error IA', 'No se pudo analizar el recibo. Intenta sacar la foto más clara.');
-                } finally {
-                    setScanning(false);
-                }
-            }
-        } catch (error) {
-            console.log(error);
-            setScanning(false);
-        }
-    };
-
-    // --- PURCHASES (SUPPLIER ORDERS) LOGIC ---
     const handlePayInstallment = async (item) => {
         const currentPaid = item.installments_paid || 0;
         const total = item.installments_total || 1;
-
         if (currentPaid >= total) return;
 
-        const installmentAmount = item.total_cost / total;
+        const installmentAmount = (item.total_cost || item.total_amount) / total;
 
         const confirmPayment = async () => {
-            setLoading(true);
-            try {
-                // 1. Create Expense Record
-                const newExpense = {
-                    description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name}`,
-                    amount: installmentAmount,
-                    category: 'Pago de Deuda',
-                    created_at: new Date().toISOString()
-                };
+            const newExpense = {
+                id: `local-pay-${Date.now()}`,
+                description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name}`,
+                amount: installmentAmount,
+                category: 'Pago de Deuda',
+                created_at: new Date().toISOString()
+            };
 
-                const prevExpenses = [...expenses];
-                const prevOrders = [...orders];
+            // 1. Optimistic Local State
+            addExpenseLocal(newExpense);
+            const updatedOrder = { ...item, installments_paid: currentPaid + 1 };
+            setFinanceState({
+                supplierOrders: orders.map(o => o.id === item.id ? updatedOrder : o)
+            });
 
-                // Optimistic Local State (Approximation for instant feedback)
-                addExpenseLocal({ ...newExpense, id: `local-${Date.now()}` });
-                setFinanceState({
-                    supplierOrders: orders.map(o => o.id === item.id ? { ...o, installments_paid: currentPaid + 1 } : o)
-                });
+            // 2. Queue Sync Actions
+            await SyncService.queueAction('expense', newExpense, {}, 'INSERT');
+            await SyncService.queueAction('order', updatedOrder, {}, 'UPDATE');
 
-                const { error: expenseError } = await supabase
-                    .from('expenses')
-                    .insert(newExpense);
-
-                if (expenseError) throw expenseError;
-
-                // 2. Update Order Installments
-                const { error: updateError } = await supabase
-                    .from('supplier_orders')
-                    .update({ installments_paid: currentPaid + 1 })
-                    .eq('id', item.id);
-
-                if (updateError) throw updateError;
-
-                if (Platform.OS === 'web') alert('✅ Pago Registrado: Se generó el gasto y se actualizó la cuota.');
-                else Alert.alert('✅ Pago Registrado', 'Se generó el gasto y se actualizó la cuota.');
-            } catch (error) {
-                console.log('Error paying installment:', error);
-                
-                // Rollback
-                setFinanceState({ expenses: prevExpenses, supplierOrders: prevOrders });
-
-                if (Platform.OS === 'web') alert('Error: No se pudo registrar el pago. Intente nuevamente.');
-                else Alert.alert('Error', 'No se pudo registrar el pago. Intente nuevamente.');
-            } finally {
-                setAdding(false); // Using adding boolean since loading is from store
-            }
+            if (Platform.OS === 'web') alert('✅ Pago Registrado: Se sincronizará en segundo plano.');
+            else Alert.alert('✅ Pago Registrado', 'Se sincronizará en segundo plano.');
         };
 
         if (Platform.OS === 'web') {
-            if (window.confirm(`¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}? Se descontará de la caja.`)) {
+            if (window.confirm(`¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}?`)) {
                 confirmPayment();
             }
         } else {
             Alert.alert(
                 'Pagar Cuota',
-                `¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}? Se descontará de la caja.`,
+                `¿Registrar el pago de la Cuota ${currentPaid + 1}/${total} por $${installmentAmount.toLocaleString()}?`,
                 [
                     { text: 'Cancelar', style: 'cancel' },
                     { text: 'Confirmar Pago', onPress: confirmPayment }
@@ -227,590 +147,284 @@ export default function ExpensesScreen({ navigation }) {
         }
     };
 
-    const handleReceiveOrder = async (order) => {
-        if (order.status === 'received') return;
+    const handleAIScan = async () => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') return Alert.alert('Error', 'Necesitamos acceso a la cámara');
 
-        const confirmReception = async () => {
-            setAdding(true);
-            const prevOrders = [...orders];
-            
-            // Optimistic
-            setFinanceState({
-                supplierOrders: orders.map(o => o.id === order.id ? { ...o, status: 'received' } : o)
-            });
+        const result = await ImagePicker.launchCameraAsync({
+            base64: true,
+            quality: 0.5
+        });
 
+        if (!result.canceled) {
+            setScanning(true);
             try {
-                // 1. Update Stock in Parallel
-                if (order.supplier_order_items && order.supplier_order_items.length > 0) {
-                    const updatePromises = order.supplier_order_items.map(async (item) => {
-                        if (item.product_id) {
-                            const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.product_id).single();
-                            if (prod) {
-                                const newStock = (prod.current_stock || 0) + (item.quantity || 0);
-                                return supabase.from('products').update({ current_stock: newStock }).eq('id', item.product_id);
-                            }
-                        }
-                        return Promise.resolve();
-                    });
-                    await Promise.all(updatePromises);
-                }
-
-                // 2. Mark as Received
-                const { error } = await supabase
-                    .from('supplier_orders')
-                    .update({ status: 'received' })
-                    .eq('id', order.id);
-
-                if (error) throw error;
-
-                if (Platform.OS === 'web') alert('✅ Recibido: Stock actualizado.');
-                else Alert.alert('✅ Recibido', 'Stock actualizado.');
+                const data = await GeminiService.analyzeReceipt(result.assets[0].base64);
+                if (data.total) setAmount(data.total.toString());
+                if (data.vendor || data.items) setDescription(`${data.vendor || ''} ${data.items || ''}`.trim());
+                setAdding(true);
             } catch (err) {
-                // Rollback
-                setFinanceState({ supplierOrders: prevOrders });
-                if (Platform.OS === 'web') alert('Error: Falló la recepción: ' + err.message);
-                else Alert.alert('Error', 'Falló la recepción: ' + err.message);
+                Alert.alert('AI Error', 'No se pudo analizar el recibo automáticamente.');
             } finally {
-                setAdding(false);
+                setScanning(false);
             }
-        };
-
-        if (Platform.OS === 'web') {
-            if (window.confirm('¿Confirmar que llegó el pedido? Se sumará el stock automáticamente.')) {
-                confirmReception();
-            }
-        } else {
-            Alert.alert('Recibir Mercadería', '¿Confirmar que llegó el pedido? Se sumará el stock automáticamente.', [
-                { text: 'Cancelar' },
-                { text: 'Confirmar', onPress: confirmReception }
-            ]);
         }
     };
 
-    const handleDeleteOrder = (id) => {
-        Alert.alert('Eliminar', '¿Borrar este pedido del historial?', [
-            { text: 'Cancelar' },
-            {
-                text: 'Borrar',
-                style: 'destructive',
-                onPress: async () => {
-                    const prevOrders = [...orders];
-                    setFinanceState({ supplierOrders: orders.filter(o => o.id !== id) });
-                    const { error } = await supabase.from('supplier_orders').delete().eq('id', id);
-                    if (error) {
-                        setFinanceState({ supplierOrders: prevOrders });
-                    }
-                }
-            }
-        ]);
-    };
+    const renderExpenseItem = ({ item }) => (
+        <View style={styles.expenseCard}>
+            <View style={styles.expenseHeader}>
+                <View style={styles.categoryBadge}>
+                    <Text style={styles.categoryText}>{item.category || 'General'}</Text>
+                </View>
+                <Text style={styles.dateText}>{new Date(item.created_at).toLocaleDateString()}</Text>
+            </View>
+            <View style={styles.expenseMain}>
+                <Text style={styles.descriptionText}>{item.description}</Text>
+                <Text style={[styles.amountText, item.amount < 0 && { color: '#2ecc71' }]}>
+                    {item.amount < 0 ? `+ $${Math.abs(item.amount).toLocaleString()}` : `- $${item.amount.toLocaleString()}`}
+                </Text>
+            </View>
+            <TouchableOpacity style={styles.deleteIcon} onPress={() => handleDeleteExpense(item.id)}>
+                <MaterialCommunityIcons name="trash-can-outline" size={20} color="#555" />
+            </TouchableOpacity>
+        </View>
+    );
 
-    const handleTrack = (order) => {
-        const tracking = order.tracking_number;
-        const provider = (order.provider_name || '').toLowerCase();
-        const courier = (order.notes || '').toLowerCase();
-
-        if (!tracking) {
-            Alert.alert('Sin Seguimiento', 'Este pedido no tiene un número de seguimiento asociado.');
-            return;
-        }
-
-        let url;
-        if (provider.includes('temu')) {
-            if (courier.includes('oca')) {
-                url = `https://www.oca.com.ar/Seguimiento/BuscarEnvio/paquetes/${tracking.trim()}`;
-            } else if (courier.includes('andreani')) {
-                url = `https://seguimiento.andreani.com/envio/${tracking.trim()}`;
-            } else if (courier.includes('via cargo')) {
-                url = `https://www.viacargo.com.ar/tracking`;
-            } else {
-                url = 'https://postal.ninja/es/p/tracking/temu';
-            }
-        } else {
-            url = 'https://parcelsapp.com/es/shops/aliexpress';
-        }
-
-        Linking.openURL(url);
-    };
-
-    // --- RENDER ITEMS ---
-    const renderExpenseItem = useCallback(({ item }) => {
-        const isDiscount = item.category === 'Descuento' || item.amount < 0;
-        const variants = Array.isArray(item.details) ? item.details : (item.details?.variants || []);
-        const hasDetails = variants.length > 0;
-        const isExpanded = expandedExpenseId === item.id;
-
+    const renderOrderItem = ({ item }) => {
+        const paid = item.installments_paid || 0;
+        const total = item.installments_total || 1;
+        const progress = (paid / total) * 100;
+        
         return (
-            <TouchableOpacity
-                activeOpacity={hasDetails ? 0.7 : 1}
-                onPress={() => hasDetails && setExpandedExpenseId(isExpanded ? null : item.id)}
-                style={styles.card}
-            >
-                <View style={styles.cardHeader}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={[styles.categoryBadge, isDiscount && { color: '#2ecc71' }]}>
-                            {item.category}
+            <View style={styles.orderCard}>
+                <View style={styles.orderHeader}>
+                    <Text style={styles.providerName}>{item.provider_name}</Text>
+                    <View style={[styles.statusBadge, item.status === 'received' ? { backgroundColor: '#2ecc7122' } : { backgroundColor: '#3498db22' }]}>
+                        <Text style={[styles.statusText, item.status === 'received' ? { color: '#2ecc71' } : { color: '#3498db' }]}>
+                            {item.status?.toUpperCase() || 'PENDIENTE'}
                         </Text>
-                        {hasDetails && (
-                            <MaterialCommunityIcons
-                                name={isExpanded ? "chevron-up" : "chevron-down"}
-                                size={16}
-                                color="#d4af37"
-                                style={{ marginLeft: 5 }}
-                            />
-                        )}
                     </View>
-                    <Text style={styles.dateText}>
-                        {new Date(item.created_at).toLocaleDateString('es-ES')}
-                    </Text>
                 </View>
-                <View style={styles.cardBody}>
-                    <Text style={styles.description}>{item.description}</Text>
-                    <Text style={[styles.amount, isDiscount && { color: '#2ecc71' }]}>
-                        {isDiscount ? `+$${Math.abs(item.amount).toFixed(2)}` : `-$${parseFloat(item.amount).toFixed(2)}`}
-                    </Text>
+                
+                <View style={styles.orderInfo}>
+                    <View>
+                        <Text style={styles.orderLabel}>TOTAL COMPRA</Text>
+                        <Text style={styles.orderValue}>$${(item.total_cost || item.total_amount || 0).toLocaleString()}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={styles.orderLabel}>CUOTAS</Text>
+                        <Text style={styles.orderValue}>{paid} / {total}</Text>
+                    </View>
                 </View>
 
-                {isExpanded && hasDetails && (
-                    <View style={styles.detailsContainer}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-                            <Text style={styles.detailsTitle}>DESGLOSE POR COLOR:</Text>
-                        </View>
-                        {variants.map((detail, idx) => (
-                            <View key={idx} style={styles.detailItem}>
-                                <Text style={styles.detailText}>{detail.color || 'Sin color'}</Text>
-                                <Text style={styles.detailQty}>x{detail.qty}</Text>
-                            </View>
-                        ))}
-                        {item.details?.total_qty && (
-                            <View style={[styles.detailItem, { borderTopWidth: 1, borderTopColor: '#333', marginTop: 5, paddingTop: 5 }]}>
-                                <Text style={[styles.detailText, { fontWeight: 'bold' }]}>TOTAL:</Text>
-                                <Text style={[styles.detailQty, { fontWeight: 'bold' }]}>x{item.details.total_qty}</Text>
-                            </View>
-                        )}
-                    </View>
+                {/* Progress Bar */}
+                <View style={styles.progressContainer}>
+                    <View style={[styles.progressBar, { width: `${progress}%` }]} />
+                </View>
+
+                {paid < total && (
+                    <TouchableOpacity style={styles.payButton} onPress={() => handlePayInstallment(item)}>
+                        <LinearGradient colors={['#d4af37', '#b8860b']} style={styles.payGradient}>
+                            <MaterialCommunityIcons name="cash-check" size={20} color="#000" />
+                            <Text style={styles.payText}>PAGAR SIGUIENTE CUOTA</Text>
+                        </LinearGradient>
+                    </TouchableOpacity>
                 )}
-
-                <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteExpense(item.id)}>
-                    <Text style={styles.deleteText}>Eliminar</Text>
-                </TouchableOpacity>
-            </TouchableOpacity>
+            </View>
         );
-    }, [expandedExpenseId]);
-
-    const renderOrderItem = useCallback(({ item }) => {
-        const totalInstallments = item.installments_total || 1;
-        const paidInstallments = item.installments_paid || 0;
-        const effectiveTotal = (item.total_cost || 0) - (item.discount || 0);
-        const amountPerInstallment = effectiveTotal / totalInstallments;
-        const isPaidOff = paidInstallments >= totalInstallments;
-
-        return (
-            <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => navigation.navigate('NewSupplierOrder', { orderToEdit: item })}
-            >
-                <View style={[styles.orderCard, isPaidOff && { borderColor: '#2ecc71' }]}>
-                    <View style={styles.cardHeader}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <MaterialCommunityIcons name={item.status === 'received' ? "check-decagram" : "cube-send"} size={24} color={item.status === 'received' ? "#2ecc71" : "#d4af37"} style={{ marginRight: 10 }} />
-                            <View>
-                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                    <Text style={styles.providerName}>{item.provider_name}</Text>
-                                    {item.discount > 0 && (
-                                        <View style={[styles.statusBadge, { backgroundColor: 'rgba(46, 204, 113, 0.2)', marginLeft: 8 }]}>
-                                            <Text style={[styles.statusText, { color: '#2ecc71' }]}>-${item.discount.toFixed(0)}</Text>
-                                        </View>
-                                    )}
-                                </View>
-                                <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
-                            </View>
-                        </View>
-                        <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>
-                            <Text style={styles.statusText}>{item.status === 'received' ? 'RECIBIDO' : 'EN CAMINO'}</Text>
-                        </View>
-                    </View>
-
-                    {/* Tracking Info Row (Always visible for pending) */}
-                    {item.status !== 'received' && (
-                        <View style={styles.trackingRow}>
-                            <MaterialCommunityIcons name="truck-delivery" size={20} color={item.tracking_number ? "#d4af37" : "#444"} />
-                            <View style={{ flex: 1, marginLeft: 10 }}>
-                                <Text style={styles.trackingLabel}>NRO. SEGUIMIENTO</Text>
-                                <Text style={[styles.trackingNumber, !item.tracking_number && { color: '#444' }]}>
-                                    {item.tracking_number || 'Sin asignar'}
-                                </Text>
-                            </View>
-                            <TouchableOpacity
-                                style={[styles.trackBtnFixed, !item.tracking_number && styles.trackBtnDisabled]}
-                                onPress={() => handleTrack(item)}
-                            >
-                                <Text style={styles.trackBtnTextFixed}>RASTREAR</Text>
-                            </TouchableOpacity>
-                        </View>
-                    )}
-
-                    {/* Cost & Installments Summary */}
-                    <View style={styles.summaryContainer}>
-                        <View>
-                            <Text style={styles.summaryLabel}>Total Pagado</Text>
-                            <Text style={styles.summaryValue}>${effectiveTotal.toLocaleString()}</Text>
-                        </View>
-                        <View>
-                            <Text style={styles.summaryLabel}>Plan de Cuotas</Text>
-                            <Text style={styles.summaryValue}>{paidInstallments}/{totalInstallments}</Text>
-                        </View>
-                        <View>
-                            <Text style={styles.summaryLabel}>Valor Cuota</Text>
-                            <Text style={styles.summaryValue}>${amountPerInstallment.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</Text>
-                        </View>
-                    </View>
-
-                    {/* Progress Bar */}
-                    {totalInstallments > 1 && (
-                        <View style={styles.progressContainer}>
-                            <View style={styles.progressBarBg}>
-                                <View
-                                    style={[
-                                        styles.progressBarFill,
-                                        { width: `${(paidInstallments / totalInstallments) * 100}%` },
-                                        isPaidOff && { backgroundColor: '#2ecc71' }
-                                    ]}
-                                />
-                            </View>
-                            <Text style={styles.progressText}>
-                                {isPaidOff ? '¡DEUDA PAGADA!' : `Restan ${totalInstallments - paidInstallments} cuotas`}
-                            </Text>
-                        </View>
-                    )}
-
-                    {/* Quick Action: Pay Next Installment */}
-                    {!isPaidOff && totalInstallments > 1 && (
-                        <TouchableOpacity
-                            style={styles.payBtn}
-                            onPress={() => handlePayInstallment(item)}
-                        >
-                            <Text style={styles.payBtnText}>PAGAR CUOTA DE ESTE MES</Text>
-                        </TouchableOpacity>
-                    )}
-
-                    {/* Receive Button (Critical for Stock) */}
-                    {item.status !== 'received' && (
-                        <TouchableOpacity style={styles.receiveBtn} onPress={() => handleReceiveOrder(item)}>
-                            <Text style={styles.receiveBtnText}>MARCAR COMO RECIBIDO (+ STOCK)</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-            </TouchableOpacity>
-        );
-    }, []);
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <StatusBar barStyle="light-content" />
-
+            
             {/* Header */}
-            <LinearGradient colors={['#000000', '#1a1a1a']} style={styles.header}>
-                <View style={styles.headerTop}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                        <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>ADMINISTRACIÓN</Text>
-                    <View style={{ width: 24 }} />
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+                    <MaterialCommunityIcons name="chevron-left" size={32} color="#d4af37" />
+                </TouchableOpacity>
+                <View>
+                    <Text style={styles.headerLabel}>FINANZAS</Text>
+                    <Text style={styles.title}>GASTOS Y COMPRAS</Text>
                 </View>
+                <TouchableOpacity style={styles.aiButton} onPress={handleAIScan} disabled={scanning}>
+                    {scanning ? (
+                        <ActivityIndicator size="small" color="#d4af37" />
+                    ) : (
+                        <MaterialCommunityIcons name="brain" size={28} color="#d4af37" />
+                    )}
+                </TouchableOpacity>
+            </View>
 
-                {/* Tabs */}
-                <View style={styles.tabContainer}>
-                    <TouchableOpacity
-                        style={[styles.tab, viewMode === 'expenses' && styles.activeTab]}
-                        onPress={() => setViewMode('expenses')}
-                    >
-                        <Text style={[styles.tabText, viewMode === 'expenses' && styles.activeTabText]}>GASTOS</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.tab, viewMode === 'purchases' && styles.activeTab]}
-                        onPress={() => setViewMode('purchases')}
-                    >
-                        <Text style={[styles.tabText, viewMode === 'purchases' && styles.activeTabText]}>COMPRAS</Text>
-                    </TouchableOpacity>
-                </View>
-            </LinearGradient>
+            {/* Mode Selector */}
+            <View style={styles.tabContainer}>
+                <TouchableOpacity 
+                    style={[styles.tab, viewMode === 'expenses' && styles.activeTab]} 
+                    onPress={() => setViewMode('expenses')}
+                >
+                    <Text style={[styles.tabText, viewMode === 'expenses' && styles.activeTabText]}>GASTOS</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                    style={[styles.tab, viewMode === 'purchases' && styles.activeTab]} 
+                    onPress={() => setViewMode('purchases')}
+                >
+                    <Text style={[styles.tabText, viewMode === 'purchases' && styles.activeTabText]}>COMPRAS</Text>
+                </TouchableOpacity>
+            </View>
 
-            {/* LOADING OVERLAY (Optional but helpful if list is empty and loading) */}
-            {storeLoading && expenses.length === 0 && orders.length === 0 && (
-                <View style={styles.loadingOverlay}>
-                    <ActivityIndicator size="large" color="#d4af37" />
-                    <Text style={{ color: '#666', marginTop: 10 }}>Cargando datos...</Text>
-                </View>
-            )}
-
-            {/* EXPENSES VIEW */}
-            {viewMode === 'expenses' && (
-                <>
-                    <View style={styles.formContainer}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
-                            <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Nuevo Gasto</Text>
-                            <TouchableOpacity onPress={handleScanReceipt} style={styles.scanButton}>
-                                {scanning ? <ActivityIndicator color="#000" size="small" /> : <MaterialCommunityIcons name="camera" size={20} color="#000" />}
-                                {!scanning && <Text style={styles.scanButtonText}>ESCANEAR</Text>}
-                            </TouchableOpacity>
-                        </View>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Descripción (ej. Factura de Internet)"
-                            placeholderTextColor="#666"
-                            value={description}
-                            onChangeText={setDescription}
-                        />
-                        <View style={styles.row}>
-                            <TextInput
-                                style={[styles.input, { flex: 1, marginRight: 10 }]}
-                                placeholder="Monto ($)"
-                                placeholderTextColor="#666"
-                                keyboardType="numeric"
-                                value={amount}
-                                onChangeText={setAmount}
-                            />
-                            <TouchableOpacity style={styles.categorySelector}>
-                                <Text style={styles.categoryText}>{category}</Text>
-                            </TouchableOpacity>
-                        </View>
-
-                        {/* Category Pills */}
-                        <View style={styles.categoryList}>
-                            {CATEGORIAS_GASTOS.map(cat => (
-                                <TouchableOpacity
-                                    key={cat}
-                                    style={[styles.catPill, category === cat && styles.catPillActive]}
-                                    onPress={() => setCategory(cat)}
-                                >
-                                    <Text style={[styles.catPillText, category === cat && styles.catPillTextActive]}>{cat}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-
-                        <TouchableOpacity
-                            style={styles.addButton}
-                            onPress={handleAddExpense}
-                            disabled={adding}
-                        >
-                            {adding ? <ActivityIndicator color="#000" /> : <Text style={styles.addButtonText}>AGREGAR GASTO</Text>}
-                        </TouchableOpacity>
-                    </View>
-
+            {/* Main Content */}
+            <View style={{ flex: 1 }}>
+                {viewMode === 'expenses' ? (
                     <FlatList
                         data={expenses}
                         keyExtractor={item => item.id}
                         renderItem={renderExpenseItem}
                         contentContainerStyle={styles.listContent}
-                        ListHeaderComponent={<Text style={styles.listTitle}>Historial Reciente</Text>}
-                        ListEmptyComponent={!storeLoading ? <Text style={styles.emptyText}>No hay gastos registrados</Text> : null}
-                        refreshControl={
-                            <RefreshControl refreshing={storeLoading} onRefresh={() => fetchAllData(true)} tintColor="#d4af37" colors={['#d4af37']} />
+                        ListEmptyComponent={
+                            <View style={styles.emptyBox}>
+                                <MaterialCommunityIcons name="cash-off" size={60} color="#333" />
+                                <Text style={styles.emptyText}>No hay gastos registrados este mes</Text>
+                            </View>
                         }
-                        initialNumToRender={10}
-                        maxToRenderPerBatch={10}
-                        windowSize={5}
-                        removeClippedSubviews={true}
+                        refreshControl={
+                            <RefreshControl refreshing={storeLoading} onRefresh={fetchAllData} tintColor="#d4af37" />
+                        }
                     />
-                </>
-            )}
-
-            {/* PURCHASES VIEW */}
-            {viewMode === 'purchases' && (
-                <>
-                    <View style={styles.actionContainer}>
-                        <TouchableOpacity
-                            style={styles.newOrderBtn}
-                            onPress={() => navigation.navigate('NewSupplierOrder')}
-                        >
-                            <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.btnGradient}>
-                                <MaterialCommunityIcons name="plus" size={24} color="#000" />
-                                <Text style={styles.newOrderText}>NUEVA ORDEN DE COMPRA</Text>
-                            </LinearGradient>
-                        </TouchableOpacity>
-                    </View>
-
+                ) : (
                     <FlatList
                         data={orders}
                         keyExtractor={item => item.id}
                         renderItem={renderOrderItem}
                         contentContainerStyle={styles.listContent}
-                        ListEmptyComponent={!storeLoading ? <Text style={styles.emptyText}>No hay órdenes de compra.</Text> : null}
-                        refreshControl={
-                            <RefreshControl refreshing={storeLoading} onRefresh={() => fetchAllData(true)} tintColor="#d4af37" colors={['#d4af37']} />
+                        ListEmptyComponent={
+                            <View style={styles.emptyBox}>
+                                <MaterialCommunityIcons name="truck-outline" size={60} color="#333" />
+                                <Text style={styles.emptyText}>No hay órdenes de compra registradas</Text>
+                            </View>
                         }
-                        initialNumToRender={5}
-                        maxToRenderPerBatch={5}
-                        windowSize={3}
-                        removeClippedSubviews={true}
+                        refreshControl={
+                            <RefreshControl refreshing={storeLoading} onRefresh={fetchAllData} tintColor="#d4af37" />
+                        }
                     />
-                </>
-            )}
+                )}
+            </View>
+
+            {/* Floating Action Button */}
+            <TouchableOpacity style={styles.fab} onPress={() => setAdding(true)}>
+                <LinearGradient colors={['#d4af37', '#b8860b']} style={styles.fabGradient}>
+                    <MaterialCommunityIcons name="plus" size={32} color="#000" />
+                </LinearGradient>
+            </TouchableOpacity>
+
+            {/* Add Modal */}
+            <Modal visible={adding} animationType="slide" transparent>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>REGISTRAR GASTO</Text>
+                            <TouchableOpacity onPress={() => setAdding(false)}>
+                                <MaterialCommunityIcons name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            <Text style={styles.inputLabel}>DESCRIPCIÓN</Text>
+                            <TextInput 
+                                style={styles.input} 
+                                placeholder="Ej: Pago de Luz Edesur" 
+                                placeholderTextColor="#444"
+                                value={description}
+                                onChangeText={setDescription}
+                            />
+
+                            <Text style={styles.inputLabel}>MONTO ($$)</Text>
+                            <TextInput 
+                                style={styles.input} 
+                                placeholder="0.00" 
+                                placeholderTextColor="#444"
+                                keyboardType="numeric"
+                                value={amount}
+                                onChangeText={setAmount}
+                            />
+
+                            <Text style={styles.inputLabel}>CATEGORÍA</Text>
+                            <View style={styles.categoryGrid}>
+                                {CATEGORIAS_GASTOS.map(cat => (
+                                    <TouchableOpacity 
+                                        key={cat} 
+                                        style={[styles.catBtn, category === cat && styles.catBtnActive]}
+                                        onPress={() => setCategory(cat)}
+                                    >
+                                        <Text style={[styles.catBtnText, category === cat && styles.catBtnTextActive]}>{cat}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <TouchableOpacity style={styles.saveButton} onPress={handleAddExpense}>
+                                <LinearGradient colors={['#d4af37', '#b8860b']} style={styles.saveGradient}>
+                                    <Text style={styles.saveText}>CONFIRMAR GASTO</Text>
+                                </LinearGradient>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000000' },
-    header: {
-        paddingTop: 10,
-        borderBottomWidth: 1,
-        borderBottomColor: '#333',
-    },
-    headerTop: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        marginBottom: 15
-    },
-    backButton: { padding: 5 },
-    headerTitle: { fontSize: 18, fontWeight: '900', color: '#d4af37', letterSpacing: 2 },
-
-    tabContainer: { flexDirection: 'row' },
-    tab: { flex: 1, paddingVertical: 15, alignItems: 'center', borderBottomWidth: 3, borderBottomColor: 'transparent' },
+    container: { flex: 1, backgroundColor: '#000' },
+    header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 10 },
+    backBtn: { marginRight: 10 },
+    headerLabel: { color: '#666', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 },
+    title: { color: '#d4af37', fontSize: 20, fontWeight: '900' },
+    aiButton: { marginLeft: 'auto', width: 45, height: 45, borderRadius: 22.5, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
+    tabContainer: { flexDirection: 'row', paddingHorizontal: 20, marginTop: 10, gap: 15 },
+    tab: { paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: 'transparent' },
     activeTab: { borderBottomColor: '#d4af37' },
-    tabText: { color: '#666', fontWeight: 'bold', letterSpacing: 1 },
-    activeTabText: { color: '#d4af37', fontWeight: '900' },
-
-    formContainer: {
-        padding: 20,
-        backgroundColor: '#111',
-        borderBottomWidth: 1,
-        borderBottomColor: '#333'
-    },
-    sectionTitle: { color: '#d4af37', fontSize: 14, marginBottom: 15, fontWeight: '900', letterSpacing: 1 },
-    input: {
-        backgroundColor: '#222',
-        color: '#fff',
-        padding: 15,
-        borderRadius: 12,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#333',
-        fontSize: 16
-    },
-    row: { flexDirection: 'row', alignItems: 'center' },
-    categoryList: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 15 },
-    catPill: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 20,
-        backgroundColor: '#1e1e1e',
-        marginRight: 8,
-        marginBottom: 8,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    catPillActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
-    catPillText: { color: '#888', fontSize: 12, fontWeight: '600' },
-    catPillTextActive: { color: '#000', fontWeight: '900' },
-
-    addButton: {
-        backgroundColor: '#d4af37',
-        padding: 18,
-        borderRadius: 12,
-        alignItems: 'center',
-    },
-    addButtonText: { color: '#000', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
-
-    categorySelector: {
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 15,
-        backgroundColor: '#1e1e1e',
-        borderRadius: 12,
-        height: 52,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    categoryText: {
-        color: '#d4af37',
-        fontWeight: 'bold',
-        fontSize: 14
-    },
-
+    tabText: { color: '#444', fontSize: 14, fontWeight: 'bold' },
+    activeTabText: { color: '#fff' },
     listContent: { padding: 20, paddingBottom: 100 },
-    listTitle: { color: '#888', marginBottom: 15, fontSize: 12, textTransform: 'uppercase', fontWeight: '900', letterSpacing: 1 },
-    emptyText: { textAlign: 'center', color: '#666', marginTop: 50, fontStyle: 'italic' },
-
-    card: {
-        backgroundColor: '#1e1e1e',
-        borderRadius: 15,
-        padding: 20,
-        marginBottom: 15,
-        borderWidth: 1,
-        borderColor: '#333'
-    },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-    categoryBadge: { color: '#d4af37', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1 },
-    dateText: { color: '#666', fontSize: 12 },
-    cardBody: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-    description: { color: '#fff', fontSize: 16, fontWeight: '600', flex: 1 },
-    amount: { color: '#e74c3c', fontSize: 20, fontWeight: '900' },
-    deleteButton: { alignSelf: 'flex-end' },
-    deleteText: { color: '#666', fontSize: 13, fontWeight: '600' },
-
-    // Purchases Styles
-    actionContainer: { padding: 20 },
-    newOrderBtn: { borderRadius: 12, overflow: 'hidden' },
-    btnGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 15, gap: 10 },
-    newOrderText: { color: '#000', fontWeight: '900', letterSpacing: 1 },
-
-    orderCard: { backgroundColor: '#1e1e1e', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
-    providerName: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-    statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 5 },
-    statusText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-
-    summaryContainer: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#252525', padding: 10, borderRadius: 8, marginBottom: 15 },
-    summaryLabel: { color: '#888', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 },
-    summaryValue: { color: '#d4af37', fontSize: 14, fontWeight: 'bold' },
-
-    progressContainer: { marginBottom: 15 },
-    progressBarBg: { height: 6, backgroundColor: '#333', borderRadius: 3, marginBottom: 5 },
-    progressBarFill: { height: '100%', backgroundColor: '#d4af37', borderRadius: 3 },
-    progressText: { color: '#666', fontSize: 11, fontStyle: 'italic', textAlign: 'right' },
-
-    payBtn: { backgroundColor: '#222', padding: 12, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#d4af37', marginBottom: 15 },
-    payBtnText: { color: '#d4af37', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
-
-    receiveBtn: { backgroundColor: '#333', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#2ecc71' },
-    receiveBtnText: { color: '#2ecc71', fontWeight: '900', fontSize: 12, letterSpacing: 1 },
-
-    trackingRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#151515',
-        padding: 12,
-        borderRadius: 10,
-        marginBottom: 15,
-        borderWidth: 1,
-        borderColor: '#222'
-    },
-    trackingLabel: { color: '#666', fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
-    trackingNumber: { color: '#d4af37', fontSize: 13, fontWeight: 'bold' },
-    trackBtnFixed: { backgroundColor: '#d4af37', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
-    trackBtnDisabled: { backgroundColor: '#333' },
-    trackBtnTextFixed: { color: '#000', fontSize: 11, fontWeight: '900' },
-
-    date: { color: '#666', fontSize: 12 },
-
-    scanButton: { backgroundColor: '#d4af37', flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, alignItems: 'center', gap: 5 },
-    scanButtonText: { fontSize: 10, fontWeight: '900', color: '#000' },
-    loadingOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
-
-    detailsContainer: {
-        backgroundColor: '#151515',
-        padding: 12,
-        borderRadius: 10,
-        marginTop: 5,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#222'
-    },
-    detailsTitle: { color: '#666', fontSize: 10, fontWeight: '900', marginBottom: 8, letterSpacing: 1 },
-    detailItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#222' },
-    detailText: { color: '#aaa', fontSize: 13 },
-    detailQty: { color: '#d4af37', fontWeight: 'bold', fontSize: 13 }
+    expenseCard: { backgroundColor: '#111', borderRadius: 20, padding: 20, marginBottom: 15, borderWidth: 1, borderColor: '#222' },
+    expenseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+    categoryBadge: { backgroundColor: 'rgba(212, 175, 55, 0.1)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+    categoryText: { color: '#d4af37', fontSize: 10, fontWeight: 'bold' },
+    dateText: { color: '#444', fontSize: 11 },
+    expenseMain: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+    descriptionText: { color: '#fff', fontSize: 16, fontWeight: '600', flex: 1, marginRight: 10 },
+    amountText: { color: '#ff6b6b', fontSize: 18, fontWeight: '900' },
+    deleteIcon: { position: 'absolute', right: 10, top: 10, padding: 5 },
+    orderCard: { backgroundColor: '#111', borderRadius: 24, padding: 20, marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+    orderHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+    providerName: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+    statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+    statusText: { fontSize: 10, fontWeight: 'bold' },
+    orderInfo: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+    orderLabel: { color: '#555', fontSize: 10, fontWeight: 'bold', marginBottom: 4 },
+    orderValue: { color: '#fff', fontSize: 15, fontWeight: '700' },
+    progressContainer: { height: 6, backgroundColor: '#222', borderRadius: 3, marginBottom: 15, overflow: 'hidden' },
+    progressBar: { height: '100%', backgroundColor: '#d4af37' },
+    payButton: { borderRadius: 12, overflow: 'hidden', marginTop: 5 },
+    payGradient: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 12, gap: 10 },
+    payText: { color: '#000', fontSize: 13, fontWeight: '900' },
+    emptyBox: { marginTop: 60, alignItems: 'center' },
+    emptyText: { color: '#444', fontSize: 14, marginTop: 15 },
+    fab: { position: 'absolute', bottom: 30, right: 30, width: 64, height: 64, borderRadius: 32, elevation: 8, shadowColor: '#d4af37', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
+    fabGradient: { flex: 1, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'flex-end' },
+    modalContent: { backgroundColor: '#000', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '90%', borderWidth: 1, borderColor: '#222' },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25 },
+    modalTitle: { color: '#d4af37', fontSize: 18, fontWeight: '900' },
+    inputLabel: { color: '#555', fontSize: 12, fontWeight: 'bold', marginBottom: 8, marginTop: 15 },
+    input: { backgroundColor: '#111', borderRadius: 15, padding: 15, color: '#fff', fontSize: 16, borderWidth: 1, borderColor: '#222' },
+    categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 5 },
+    catBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#111', borderWidth: 1, borderColor: '#222' },
+    catBtnActive: { backgroundColor: '#d4af37', borderColor: '#d4af37' },
+    catBtnText: { color: '#666', fontSize: 12, fontWeight: 'bold' },
+    catBtnTextActive: { color: '#000' },
+    saveButton: { marginTop: 30, borderRadius: 15, overflow: 'hidden', marginBottom: 20 },
+    saveGradient: { paddingVertical: 18, alignItems: 'center' },
+    saveText: { color: '#000', fontSize: 16, fontWeight: '900' }
 });

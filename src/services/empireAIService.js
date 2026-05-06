@@ -237,8 +237,17 @@ export const EmpireAIService = {
                 ${commonContext}
                 TAREAS: Misiones tácticas (offline, online, híbridas), Estrategia A (Liquidación), Estrategia B (Inversión).
                 REQUERIMIENTO: Identifica riesgos, oportunidades de crecimiento y planes de acción concretos.
+                IMPORTANTE PARA ADMIN: El "today_plan" debe ser una HOJA DE RUTA LOGÍSTICA.
                 DEVUELVE JSON PURO: {
-                  "today_plan": { "product": "X", "location": "Y", "script": "Z", "reason": "W", "target": "Público", "expected_sales": "N" },
+                  "today_plan": { 
+                    "product": "Nombre del producto estrella", 
+                    "schedule": "Horarios recomendados (ej: 10:00 a 12:30 y 17:00 a 20:00)",
+                    "location": "Lugares exactos (ej: Peatonal Belgrano, Salida UNJU, Plaza de los Inmigrantes)", 
+                    "script": "GUION EXACTO PARA COPIAR O DECIR (Potente y cerrador)", 
+                    "reason": "Por qué este producto y estos lugares hoy", 
+                    "target": "A quién acercarse", 
+                    "expected_sales": "N unidades" 
+                  },
                   "missions": [
                     { "type": "offline|online|hybrid", "action": "...", "goal": "...", "priority": "Alta|Media|Baja" }
                   ],
@@ -255,24 +264,24 @@ export const EmpireAIService = {
                 }`;
             } else {
                 prompt = `
-                Eres el "Asistente de Marketing Digital" de Digital Boost Empire. Socio espera instrucciones para REDES SOCIALES.
+                Eres el "Asistente de Ventas Estratégicas" de Digital Boost Empire. Tu socio espera instrucciones tácticas para REDES SOCIALES.
                 ${commonContext}
-                IMPORTANTE: Solo estrategias ONLINE (Instagram, TikTok, WhatsApp).
-                OBJETIVO: Generar ventas mediante contenido viral.
+                IMPORTANTE: Define dos planes claros de venta ONLINE.
+                OBJETIVO: Maximizar flujo de caja y limpiar inventario.
                 DEVUELVE JSON PURO: {
                   "today_plan": { 
                     "product": "X", 
                     "platform": "Instagram|TikTok|WA", 
-                    "best_copy": "Copia este texto: [Copy con emojis y CTA]",
-                    "script": "Guion para video si aplica", 
-                    "reason": "Por qué publicar esto hoy" 
+                    "best_copy": "Copy para vender YA",
+                    "script": "Guion viral", 
+                    "reason": "Por qué es tendencia hoy" 
                   },
                   "missions": [
-                    { "type": "online", "action": "Ej: Subir 3 historias de X", "goal": "Generar X consultas" }
+                    { "type": "online", "action": "Subir X a redes", "goal": "Generar X consultas" }
                   ],
-                  "strategyA": { "name": "ESTRATEGIA VIRAL (REELS/TIKTOK)", "plan": "..." },
-                  "strategyB": { "name": "ESTRATEGIA WHATSAPP (ESTADOS/GRUPOS)", "plan": "..." },
-                  "summary": "Resumen de lo que debe publicar hoy",
+                  "strategyA": { "name": "PLAN A: TRACCIÓN (VENDER YA)", "plan": "Enfócate en este producto que tiene alta rotación..." },
+                  "strategyB": { "name": "PLAN B: LIQUIDACIÓN / PIVOTE", "plan": "Remata este stock estancado con este combo..." },
+                  "summary": "Resumen táctico del día",
                   "prediction": "...", "urgency": "Estable", "urgencyReason": "...", "actionId": "create_promo", "actionText": "VER"
                 }`;
             }

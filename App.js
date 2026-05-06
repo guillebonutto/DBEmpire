@@ -13,13 +13,21 @@ import { useClientStore } from './src/store/useClientStore';
 
 export default function App() {
   React.useEffect(() => {
-    DatabaseInitService.init();
-    GlobalDataService.preloadAll(); // Download and cache all DB
-    
-    // Initialize Stores from local cache
-    useFinanceStore.getState().initStore();
-    useProductStore.getState().initStore();
-    useClientStore.getState().initStore();
+    const initApp = async () => {
+      try {
+        await DatabaseInitService.init();
+        await GlobalDataService.preloadAll(); // Download and cache all DB
+        
+        // Initialize Stores sequentially from local cache
+        await useFinanceStore.getState().initStore();
+        await useProductStore.getState().initStore();
+        await useClientStore.getState().initStore();
+        console.log('🚀 Empire App Initialized Successfully');
+      } catch (err) {
+        console.error('Initialization failed:', err);
+      }
+    };
+    initApp();
   }, []);
 
   return (

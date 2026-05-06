@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { supabase } from '../services/supabase';
+import NetInfo from '@react-native-community/netinfo';
 
 const { width } = Dimensions.get('window');
 import { DeviceAuthService } from '../services/deviceAuth';
@@ -76,20 +77,35 @@ export default function LoginScreen({ navigation, route }) {
 
             // SECURITY CHECK 2: Remote role verification for all roles (block global access)
             if (role === 'seller') {
-                const { data: seller, error: sErr } = await supabase
-                    .from('profiles')
-                    .select('role')
-                    .eq('full_name', 'Vendedor (Primo)')
-                    .single();
+                const netInfo = await NetInfo.fetch();
+                if (netInfo.isConnected) {
+                    const { data: seller, error: sErr } = await supabase
+                        .from('profiles')
+                        .select('role')
+                        .eq('full_name', 'Vendedor (Primo)')
+                        .single();
 
-                if (seller?.role === 'blocked') {
-                    setLoading(false);
-                    Alert.alert(
-                        '🔒 ACCESO SUSPENDIDO',
-                        'Tu acceso temporal ha sido revocado por el Líder.\n\nIntenta más tarde.',
-                        [{ text: 'Entendido' }]
-                    );
-                    return;
+                    if (seller?.role === 'blocked') {
+                        setLoading(false);
+                        Alert.alert(
+                            '🔒 ACCESO SUSPENDIDO',
+                            'Tu acceso temporal ha sido revocado por el Líder.\n\nIntenta más tarde.',
+                            [{ text: 'Entendido' }]
+                        );
+                        return;
+                    }
+                } else {
+                    // Offline mode: check if role was previously saved
+                    const savedRole = await AsyncStorage.getItem('user_role');
+                    if (savedRole !== 'seller') {
+                        setLoading(false);
+                        Alert.alert(
+                            '🌐 SIN CONEXIÓN',
+                            'No se pudo verificar tu acceso. Por favor, conéctate a internet para el primer inicio de sesión.',
+                            [{ text: 'Entendido' }]
+                        );
+                        return;
+                    }
                 }
             }
 

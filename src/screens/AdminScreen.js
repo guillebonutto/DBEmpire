@@ -11,6 +11,7 @@ import { useFinanceStore } from '../store/useFinanceStore';
 import { supabase } from '../services/supabase';
 import * as Clipboard from 'expo-clipboard';
 import NetInfo from '@react-native-community/netinfo';
+import { useFocusEffect } from '@react-navigation/native';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -90,6 +91,14 @@ export default function AdminScreen({ navigation }) {
             fetchAIPerformance();
         });
     }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            fetchAllData(true); // Force refresh from cloud/local on focus
+            useProductStore.getState().fetchProducts();
+            fetchAIPerformance();
+        }, [])
+    );
 
     const fetchAIPerformance = async () => {
         try {
@@ -230,7 +239,7 @@ export default function AdminScreen({ navigation }) {
         }
 
         let debt = 0, monthly = 0;
-        supplierOrders.forEach(order => {
+        (supplierOrders || []).forEach(order => {
             const isConsignment = (order.status || '').toLowerCase().includes('consign');
             
             // Consignments are full debts until paid/received
@@ -304,9 +313,9 @@ export default function AdminScreen({ navigation }) {
         // ── Charts — build index Map for O(1) bucket lookup ────────────────────
         const timeline = generateTimeline(currentFilter, currentDateObj, currentViewAllMonths);
         const bucketIndex = new Map();
-        timeline.forEach((t, i) => bucketIndex.set(t.key, i));
+        (timeline || []).forEach((t, i) => bucketIndex.set(t.key, i));
 
-        finalSales.forEach(sale => {
+        (finalSales || []).forEach(sale => {
             const d = new Date(sale.created_at);
             const key = getBucketKey(d, currentFilter, currentViewAllMonths);
             const idx = bucketIndex.get(key);
@@ -317,7 +326,7 @@ export default function AdminScreen({ navigation }) {
             }
         });
 
-        currentExpenses.forEach(e => {
+        (currentExpenses || []).forEach(e => {
             const d = new Date(e.created_at);
             const key = getBucketKey(d, currentFilter, currentViewAllMonths);
             const idx = bucketIndex.get(key);
@@ -756,17 +765,17 @@ export default function AdminScreen({ navigation }) {
 
                     <Text style={styles.categoryLabel}>⚙️ Configuración y Herramientas</Text>
                     <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Settings')}>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Gestión de Ajustes próximamente disponible en esta versión.')}>
                             <MaterialCommunityIcons name="cog" size={32} color="#d4af37" />
                             <Text style={styles.quickAccessTitle}>Ajustes</Text>
                             <Text style={styles.quickAccessSubtitle}>Generales</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Users')}>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Gestión de Usuarios próximamente disponible.')}>
                             <MaterialCommunityIcons name="account-group" size={32} color="#95a5a6" />
                             <Text style={styles.quickAccessTitle}>Usuarios</Text>
                             <Text style={styles.quickAccessSubtitle}>Roles</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Backup')}>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Copia de seguridad en la nube activada automáticamente.')}>
                             <MaterialCommunityIcons name="cloud-upload" size={32} color="#3498db" />
                             <Text style={styles.quickAccessTitle}>Backup</Text>
                             <Text style={styles.quickAccessSubtitle}>Datos</Text>

@@ -9,40 +9,45 @@ export const SyncService = {
      * Queues an action to be performed when online.
      * Uses SQLite (LocalDbService) as the primary queue.
      */
-    queueAction: async (type, payload, metadata = {}) => {
+    queueAction: async (type, payload, metadata = {}, action = 'INSERT') => {
         try {
             // Mapping table_name based on action type
             const tableMap = {
                 'sale': 'sales',
                 'expense': 'expenses',
                 'order': 'supplier_orders',
-                'client': 'clients'
+                'client': 'clients',
+                'supplier': 'suppliers'
             };
             
             const tableName = tableMap[type] || type;
 
             // 1. Save locally for immediate UI consistency (Optimistic)
             if (tableName !== 'pending_sync') {
-                await LocalDbService.saveItem(tableName, payload);
-                if (type === 'sale' && metadata.items) {
-                    // Save items locally too if they exist
-                    for (const item of metadata.items) {
-                        await LocalDbService.saveItem('sale_items', {
-                            sale_id: payload.id,
-                            product_id: item.id,
-                            quantity: item.qty,
-                            unit_price_at_sale: item.sale_price || item.unit_price || 0,
-                            subtotal: (item.sale_price || item.unit_price || 0) * item.qty,
-                            color: item.color || item.selectedColor || null
-                        });
+                if (action === 'DELETE') {
+                    await LocalDbService.deleteItem(tableName, payload.id);
+                } else {
+                    await LocalDbService.saveItem(tableName, payload);
+                    if (type === 'sale' && metadata.items && action === 'INSERT') {
+                        // Save items locally too if they exist
+                        for (const item of metadata.items) {
+                            await LocalDbService.saveItem('sale_items', {
+                                sale_id: payload.id,
+                                product_id: item.id,
+                                quantity: item.qty,
+                                unit_price_at_sale: item.sale_price || item.unit_price || 0,
+                                subtotal: (item.sale_price || item.unit_price || 0) * item.qty,
+                                color: item.color || item.selectedColor || null
+                            });
+                        }
                     }
                 }
             }
 
             // 2. Queue for remote sync
-            await LocalDbService.queueForSync(tableName, 'INSERT', payload, metadata);
+            await LocalDbService.queueForSync(tableName, action, payload, metadata);
             
-            console.log(`[SyncService] Queued ${type} action in SQLite.`);
+            console.log(`[SyncService] Queued ${type} ${action} action in SQLite.`);
             
             // 3. Try to sync immediately
             SyncService.syncPending();
@@ -82,22 +87,26 @@ export const SyncService = {
                     const metadata = JSON.parse(item.metadata);
                     let success = false;
 
-                    switch (item.table_name) {
-                        case 'sales':
-                            success = await SyncService._processSaleSync(payload, metadata);
-                            break;
-                        case 'expenses':
-                            success = await SyncService._processGenericSync('expenses', payload);
-                            break;
-                        case 'supplier_orders':
-                            success = await SyncService._processGenericSync('supplier_orders', payload);
-                            break;
-                        case 'clients':
-                            success = await SyncService._processGenericSync('clients', payload);
-                            break;
-                        default:
-                            console.warn(`[SyncService] Unknown table: ${item.table_name}`);
-                            success = true;
+                    // Handle different actions
+                    if (item.action === 'INSERT') {
+                        switch (item.table_name) {
+                            case 'sales':
+                                success = await SyncService._processSaleSync(payload, metadata);
+                                break;
+                            case 'expenses':
+                            case 'supplier_orders':
+                            case 'clients':
+                            case 'suppliers':
+                                success = await SyncService._processGenericInsert(item.table_name, payload);
+                                break;
+                            default:
+                                console.warn(`[SyncService] Unknown table for INSERT: ${item.table_name}`);
+                                success = true;
+                        }
+                    } else if (item.action === 'UPDATE') {
+                        success = await SyncService._processGenericUpdate(item.table_name, payload);
+                    } else if (item.action === 'DELETE') {
+                        success = await SyncService._processGenericDelete(item.table_name, payload.id);
                     }
 
                     if (success) {
@@ -149,8 +158,21 @@ export const SyncService = {
         return true;
     },
 
-    _processGenericSync: async (tableName, payload) => {
+    _processGenericInsert: async (tableName, payload) => {
         const { error } = await supabase.from(tableName).insert(payload);
+        if (error) throw error;
+        return true;
+    },
+
+    _processGenericUpdate: async (tableName, payload) => {
+        const { id, ...updateData } = payload;
+        const { error } = await supabase.from(tableName).update(updateData).eq('id', id);
+        if (error) throw error;
+        return true;
+    },
+
+    _processGenericDelete: async (tableName, id) => {
+        const { error } = await supabase.from(tableName).delete().eq('id', id);
         if (error) throw error;
         return true;
     },
@@ -167,4 +189,3 @@ NetInfo.addEventListener(state => {
         SyncService.syncPending();
     }
 });
-

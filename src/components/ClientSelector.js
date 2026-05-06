@@ -1,6 +1,62 @@
-import React from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useRef } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, PanResponder, Animated } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+const ClientItem = ({ client, onSelectWithType }) => {
+    const pan = useRef(new Animated.ValueXY()).current;
+
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: (evt, gestureState) => {
+                // Only activate if movement is significant to avoid blocking scroll
+                return Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10;
+            },
+            onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
+            onPanResponderRelease: (e, gestureState) => {
+                let type = null;
+                if (gestureState.dx > 50) type = 'completed';
+                else if (gestureState.dx < -50) type = 'budget';
+                else if (gestureState.dy > 50) type = 'pending';
+
+                if (type) {
+                    // Pequeño delay para que Android no explote al desmontar la vista
+                    setTimeout(() => onSelectWithType(client, type), 60);
+                }
+                
+                Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+            }
+        })
+    ).current;
+
+    const backgroundColor = pan.x.interpolate({
+        inputRange: [-100, 0, 100],
+        outputRange: ['#3498db', 'transparent', '#2ecc71'], 
+    });
+
+    const overlayColor = pan.y.interpolate({
+        inputRange: [0, 100],
+        outputRange: ['transparent', '#e74c3c'], 
+    });
+
+    return (
+        <Animated.View 
+            {...panResponder.panHandlers}
+            collapsable={false}
+            style={[
+                styles.searchResultItem, 
+                { transform: [{ translateX: pan.x }, { translateY: pan.y }], backgroundColor }
+            ]}
+        >
+            <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: overlayColor, opacity: 0.2 }]} />
+            <MaterialCommunityIcons name="account" size={20} color="#d4af37" />
+            <View style={{ flex: 1, marginLeft: 15 }}>
+                <Text style={styles.resultText}>{client.name}</Text>
+                <Text style={styles.gestureHint}>↔ Venta/Presupuesto  ↓ Deuda</Text>
+            </View>
+        </Animated.View>
+    );
+};
 
 const ClientSelector = ({
     selectedClient,
@@ -12,8 +68,17 @@ const ClientSelector = ({
     onSelectClient,
     onCreateClient,
     onRemoveClient,
-    creatingClient
+    creatingClient,
+    onSelectWithType // New prop for gestures
 }) => {
+    const handleSelect = (client, type) => {
+        if (onSelectWithType) {
+            onSelectWithType(client, type);
+        } else {
+            onSelectClient(client);
+        }
+    };
+
     return (
         <View style={styles.searchContainer}>
             {!selectedClient ? (
@@ -36,9 +101,10 @@ const ClientSelector = ({
                             </TouchableOpacity>
                         )}
                     </View>
+                    
                     {clientError && (
                         <Text style={styles.errorText}>
-                            Por favor busque o seleccione cliente antes de continuar
+                            Por favor seleccione cliente con un gesto (Der: Venta, Izq: Presu, Aba: Deuda)
                         </Text>
                     )}
 
@@ -57,14 +123,11 @@ const ClientSelector = ({
                             )}
 
                             {filteredClients.map(client => (
-                                <TouchableOpacity
-                                    key={client.id}
-                                    style={styles.searchResultItem}
-                                    onPress={() => onSelectClient(client)}
-                                >
-                                    <MaterialCommunityIcons name="account" size={20} color="#d4af37" />
-                                    <Text style={styles.resultText}>{client.name}</Text>
-                                </TouchableOpacity>
+                                <ClientItem 
+                                    key={client.id} 
+                                    client={client} 
+                                    onSelectWithType={handleSelect} 
+                                />
                             ))}
                         </View>
                     )}
@@ -102,20 +165,13 @@ const styles = StyleSheet.create({
         borderColor: '#222'
     },
     searchInput: { flex: 1, color: '#fff', marginLeft: 10, fontSize: 14 },
-    errorText: { color: '#ff4d4d', fontSize: 12, marginTop: 5, marginLeft: 5 },
+    errorText: { color: '#ff4d4d', fontSize: 11, marginTop: 5, marginLeft: 5, fontWeight: 'bold' },
     searchResults: {
-        position: 'absolute',
-        top: 55,
-        left: 0,
-        right: 0,
+        marginTop: 5,
         backgroundColor: '#1a1a1a',
         borderRadius: 12,
         borderWidth: 1,
         borderColor: '#333',
-        elevation: 5,
-        shadowColor: '#000',
-        shadowOpacity: 0.5,
-        shadowRadius: 10,
         overflow: 'hidden'
     },
     searchResultItem: {
@@ -125,7 +181,8 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#222'
     },
-    resultText: { color: '#fff', marginLeft: 15, fontSize: 14 },
+    resultText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+    gestureHint: { color: '#555', fontSize: 10, marginTop: 2, fontWeight: 'bold' },
     createOption: {
         flexDirection: 'row',
         alignItems: 'center',

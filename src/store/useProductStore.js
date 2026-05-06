@@ -58,4 +58,11 @@ export const useProductStore = create((set, get) => ({
             set({ loadingProducts: false });
         }
     },
+    updateProductStock: (productId, newStock) => {
+        set(state => ({
+            products: state.products.map(p => 
+                p.id === productId ? { ...p, current_stock: newStock } : p
+            )
+        }));
+    },
 }));

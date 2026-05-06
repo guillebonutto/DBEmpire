@@ -1,37 +1,30 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Linking, ActivityIndicator, Alert, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
+import { useFinanceStore } from '../store/useFinanceStore';
+import { useClientStore } from '../store/useClientStore';
 
 export default function DebtsScreen({ navigation }) {
-    const [debts, setDebts] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const { sales, fetchAllData, isLoading } = useFinanceStore();
+    const { clients } = useClientStore();
 
-    const fetchDebts = async () => {
-        setLoading(true);
-        try {
-            const { data, error } = await supabase
-                .from('sales')
-                .select(`id, total_amount, created_at, status, clients ( id, name, phone )`)
-                .eq('status', 'pending')
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-            setDebts(data || []);
-        } catch (e) {
-            console.error(e);
-            Alert.alert('Error', 'No se pudieron cargar las deudas.');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const debts = useMemo(() => {
+        return sales
+            .filter(sale => sale.status === 'pending')
+            .map(sale => ({
+                ...sale,
+                clients: clients.find(c => c.id === sale.client_id)
+            }))
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    }, [sales, clients]);
 
     useFocusEffect(
         useCallback(() => {
-            fetchDebts();
+            fetchAllData();
         }, [])
     );
 
@@ -49,7 +42,7 @@ export default function DebtsScreen({ navigation }) {
                             .update({ status: 'completed' })
                             .eq('id', saleId);
 
-                        if (!error) fetchDebts();
+                        if (!error) fetchAllData(true);
                     }
                 }
             ]
@@ -105,7 +98,7 @@ export default function DebtsScreen({ navigation }) {
                     )}
                 </View>
 
-                {loading ? (
+                {isLoading && debts.length === 0 ? (
                     <ActivityIndicator color="#d4af37" size="large" style={{ marginTop: 50 }} />
                 ) : debts.length === 0 ? (
                     <View style={styles.emptyContainer}>

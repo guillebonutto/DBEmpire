@@ -34,27 +34,39 @@ export default function PromotionsScreen({ navigation }) {
     }, []);
 
     const fetchProducts = async () => {
-        const { data } = await supabase.from('products').select('id, name').eq('active', true).order('name');
-        if (data) setProducts(data);
+        try {
+            const { data, error } = await supabase.from('products').select('id, name').eq('active', true).order('name');
+            if (error) throw error;
+            if (data) setProducts(data);
+        } catch (e) {
+            console.error('[Promotions] Error fetching products:', e.message);
+        }
     };
 
     const fetchPromos = async () => {
         setLoading(true);
-        const { data, error } = await supabase
-            .from('promotions')
-            .select(`
-                *,
-                promotion_products (
-                    product_id,
-                    products (
-                        name
+        try {
+            const { data, error } = await supabase
+                .from('promotions')
+                .select(`
+                    *,
+                    promotion_products (
+                        product_id,
+                        products (
+                            name
+                        )
                     )
-                )
-            `)
-            .order('created_at', { ascending: false });
+                `)
+                .order('created_at', { ascending: false });
 
-        if (data) setPromos(data);
-        setLoading(false);
+            if (error) throw error;
+            if (data) setPromos(data);
+        } catch (e) {
+            console.error('[Promotions] Error fetching promos:', e.message);
+            Alert.alert('Error', 'No se pudieron cargar las promociones. Revisa tu conexión.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleSavePromo = async () => {

@@ -14,7 +14,8 @@ const ProductModal = ({
     setSelectedColor,
     adjustTempQty,
     initiateProductSelection,
-    confirmAddToCart
+    confirmAddToCart,
+    userRole // New prop
 }) => {
     const [searchQuery, setSearchQuery] = React.useState('');
 
@@ -61,8 +62,13 @@ const ProductModal = ({
                     renderItem={({ item }) => {
                         const inCartItem = cart.find(c => c.id === item.id);
                         const inCartQty = inCartItem ? inCartItem.qty : 0;
-                        const available = (item.current_stock || 0) - inCartQty;
+                        
+                        // Use Córdoba stock for everyone except admin
+                        const baseStock = userRole === 'admin' ? (item.stock_local || item.current_stock || 0) : (item.stock_cordoba || 0);
+                        const available = baseStock - inCartQty;
+                        
                         const isExpanded = expandedProductId === item.id;
+                        const displayPrice = userRole === 'admin' ? item.sale_price : (item.sale_price_cordoba || item.sale_price);
 
                         // Calculate detailed availability if variant is selected
                         const selectedVariant = isExpanded && selectedColor ? item.variants?.find(v => v.color === selectedColor) : null;
@@ -77,17 +83,17 @@ const ProductModal = ({
                                     >
                                         <View>
                                             <Text style={styles.rowTitle}>{item.name}</Text>
-                                            <Text style={[styles.rowSubtitle, { color: available < 5 ? '#e74c3c' : '#888' }]}>
-                                                Disp: {available}
+                                            <Text style={[styles.rowSubtitle, { color: available <= 0 ? '#e74c3c' : '#888' }]}>
+                                                Disp: {available} {userRole !== 'admin' && <Text style={{ fontSize: 9, color: '#d4af37' }}>(STOCK CBA)</Text>}
                                             </Text>
                                         </View>
-                                        <Text style={styles.rowPrice}>${item.sale_price}</Text>
+                                        <Text style={styles.rowPrice}>${displayPrice}</Text>
                                     </TouchableOpacity>
                                 ) : (
                                     <View>
                                         <View style={styles.expandedHeader}>
                                             <Text style={styles.expandedTitle}>{item.name}</Text>
-                                            <Text style={styles.expandedPrice}>${item.sale_price}</Text>
+                                            <Text style={styles.expandedPrice}>${displayPrice}</Text>
                                         </View>
 
                                         <View style={styles.qtyContainer}>

@@ -10,6 +10,8 @@ export const useFinanceStore = create((set, get) => ({
     supplierOrderItems: [],
     saleItems: [],
     settings: [],
+    cartItems: [], // 🛒 RESTORED
+    manualOverrides: {}, // 🛠️ RESTORED
     isLoading: false,
     isInitialized: false,
     lastFetch: null,
@@ -84,4 +86,67 @@ export const useFinanceStore = create((set, get) => ({
             set({ isLoading: false });
         }
     },
+
+    // 🛒 CART ACTIONS (RESTORED)
+    addToCart: (product, qty = 1, clientId = null, color = null) => {
+        const currentCart = get().cartItems;
+        // Check if item with same ID and COLOR exists
+        const existingIndex = currentCart.findIndex(item => item.id === product.id && item.color === color);
+
+        if (existingIndex >= 0) {
+            const newCart = [...currentCart];
+            newCart[existingIndex].qty += qty;
+            set({ cartItems: newCart });
+        } else {
+            set({ cartItems: [...currentCart, { ...product, qty, color, clientId }] });
+        }
+    },
+
+    removeFromCart: (productId, color = null) => {
+        set({ 
+            cartItems: get().cartItems.filter(item => !(item.id === productId && item.color === color)) 
+        });
+    },
+
+    updateCartQty: (productId, newQty, color = null) => {
+        if (newQty <= 0) return get().removeFromCart(productId, color);
+        set({
+            cartItems: get().cartItems.map(item => 
+                (item.id === productId && item.color === color) ? { ...item, qty: newQty } : item
+            )
+        });
+    },
+
+    splitCartItem: (productId, color = null) => {
+        const currentCart = get().cartItems;
+        const itemIndex = currentCart.findIndex(item => item.id === productId && item.color === color);
+        if (itemIndex >= 0 && currentCart[itemIndex].qty > 1) {
+            const newCart = [...currentCart];
+            newCart[itemIndex].qty -= 1;
+            // Add a duplicate with qty 1
+            newCart.push({ ...newCart[itemIndex], qty: 1 });
+            set({ cartItems: newCart });
+        }
+    },
+
+    resetCart: () => set({ cartItems: [], manualOverrides: {} }),
+
+    setManualOverride: (productId, field, value) => {
+        set({
+            manualOverrides: {
+                ...get().manualOverrides,
+                [`${productId}_${field}`]: value
+            }
+        });
+    },
+
+    setFinanceState: (newState) => set(newState),
+
+    addSaleLocal: (newSale) => set((state) => ({ 
+        sales: [newSale, ...state.sales] 
+    })),
+
+    addExpenseLocal: (newExpense) => set((state) => ({ 
+        expenses: [newExpense, ...state.expenses] 
+    })),
 }));

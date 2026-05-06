@@ -67,29 +67,41 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                         <View style={{ flex: 1 }}>
                             <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                <Text style={styles.salePrice}>${item.sale_price}</Text>
-                                {item.sale_price_cordoba && parseFloat(item.sale_price_cordoba) !== parseFloat(item.sale_price) && (
-                                    <View style={{ backgroundColor: '#d4af3720', paddingHorizontal: 4, borderRadius: 4 }}>
-                                        <Text style={{ color: '#d4af37', fontSize: 10, fontWeight: 'bold' }}>CBA: ${item.sale_price_cordoba}</Text>
-                                    </View>
+                                {(userRole?.toLowerCase() === 'admin' || userRole === 'leader' || !userRole) ? (
+                                    <>
+                                        <Text style={[styles.salePrice, { color: '#2ecc71', fontSize: 18, fontWeight: 'bold' }]}>${item.sale_price}</Text>
+                                        {item.sale_price_cordoba && (
+                                            <View style={{ backgroundColor: '#d4af3720', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 0.5, borderColor: '#d4af3740' }}>
+                                                <Text style={{ color: '#d4af37', fontSize: 10, fontWeight: 'bold' }}>CBA: ${item.sale_price_cordoba}</Text>
+                                            </View>
+                                        )}
+                                    </>
+                                ) : (
+                                    <Text style={[styles.salePrice, { color: item.sale_price_cordoba ? '#d4af37' : '#555', fontSize: 18, fontWeight: 'bold' }]}>
+                                        {item.sale_price_cordoba ? `$${item.sale_price_cordoba}` : 'SIN PRECIO CBA'}
+                                    </Text>
                                 )}
                             </View>
                         </View>
                     </View>
 
                     <View style={styles.locationStockRow}>
+                        {(userRole?.toLowerCase() === 'admin' || userRole === 'leader' || !userRole) && (
+                            <>
+                                <View style={styles.locationItem}>
+                                    <MaterialCommunityIcons name="home-map-marker" size={14} color="#555" />
+                                    <Text style={styles.locationLabel}>Jujuy: </Text>
+                                    <Text style={[styles.locationQty, (parseInt(item.stock_local) || 0) <= 0 && { color: '#ff3b3b' }]}>
+                                        {item.stock_local || 0}
+                                    </Text>
+                                </View>
+                                <View style={styles.locationDivider} />
+                            </>
+                        )}
                         <View style={styles.locationItem}>
-                            <MaterialCommunityIcons name="home-map-marker" size={14} color="#555" />
-                            <Text style={styles.locationLabel}>Jujuy: </Text>
-                            <Text style={[styles.locationQty, (parseInt(item.stock_local) || 0) <= 0 && { color: '#ff3b3b' }]}>
-                                {item.stock_local || 0}
-                            </Text>
-                        </View>
-                        <View style={styles.locationDivider} />
-                        <View style={styles.locationItem}>
-                            <MaterialCommunityIcons name="map-marker-distance" size={14} color="#555" />
-                            <Text style={styles.locationLabel}>Cba: </Text>
-                            <Text style={[styles.locationQty, (parseInt(item.stock_cordoba) || 0) > 0 ? { color: '#d4af37' } : { color: '#444' }]}>
+                            <MaterialCommunityIcons name="map-marker-distance" size={14} color={(userRole?.toLowerCase() !== 'admin' && userRole !== 'leader' && userRole) ? "#d4af37" : "#555"} />
+                            <Text style={[styles.locationLabel, (userRole?.toLowerCase() !== 'admin' && userRole !== 'leader' && userRole) && { color: '#d4af37' }]}>Cba: </Text>
+                            <Text style={[styles.locationQty, (parseInt(item.stock_cordoba) || 0) > 0 ? { color: '#d4af37', fontWeight: 'bold' } : { color: '#444' }]}>
                                 {item.stock_cordoba || 0}
                             </Text>
                         </View>

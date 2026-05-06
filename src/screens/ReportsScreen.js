@@ -57,19 +57,24 @@ export default function ReportsScreen() {
         for (let i = 6; i >= 0; i--) {
             const d = new Date();
             d.setDate(today.getDate() - i);
-            const key = d.toISOString().split('T')[0];
-            last7Days[key] = 0;
+            // Get local date string YYYY-MM-DD
+            const offset = d.getTimezoneOffset() * 60000;
+            const localDate = new Date(d.getTime() - offset).toISOString().split('T')[0];
+            last7Days[localDate] = 0;
         }
 
         sales.forEach(sale => {
             const status = (sale.status || '').toLowerCase();
             const isFinalized = status === 'completed' || status === 'exitosa' || status === 'vended' || status === '';
 
-            if (!isFinalized) return; // Skip budgets/pending from financial reports
+            if (!isFinalized) return; 
 
             const date = new Date(sale.created_at);
             const dateKey = date.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
-            const isoDate = date.toISOString().split('T')[0];
+            
+            // Get local date string for the sale
+            const offset = date.getTimezoneOffset() * 60000;
+            const isoDate = new Date(date.getTime() - offset).toISOString().split('T')[0];
 
             // Monthly Total
             if (date.getMonth() === currentMonth) {
