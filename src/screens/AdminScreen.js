@@ -12,6 +12,7 @@ import { supabase } from '../services/supabase';
 import * as Clipboard from 'expo-clipboard';
 import NetInfo from '@react-native-community/netinfo';
 import { useFocusEffect } from '@react-navigation/native';
+import { EmpireAIService } from '../services/empireAIService';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -61,6 +62,10 @@ export default function AdminScreen({ navigation }) {
     });
     const [screenReady, setScreenReady] = useState(false);
 
+    // ── Empire AI Coach ───────────────────────────────────────────────
+    const [coachPlan, setCoachPlan] = useState(null);
+    const [generatingCoach, setGeneratingCoach] = useState(false);
+
     const { sales, expenses, supplierOrders, saleItems, settings, isLoading: storeLoading, fetchAllData } = useFinanceStore();
 
     // ── Keep a ref copy of filter state so processLocalData can read them sync ─
@@ -75,7 +80,7 @@ export default function AdminScreen({ navigation }) {
             if (role) setUserRole(role);
             
             // AHORA TANTO ADMIN COMO SELLER (SOCIO) TIENEN ACCESO TOTAL
-            if (role !== 'admin' && role !== 'seller') {
+            if (role !== 'admin' && role !== 'seller' && role !== 'leader') {
                 Alert.alert('Acceso Denegado', 'No tienes permisos de administrador.');
                 navigation.replace('Main');
             }
@@ -99,6 +104,20 @@ export default function AdminScreen({ navigation }) {
             fetchAIPerformance();
         }, [])
     );
+
+    // ── Empire AI Coach: generate plan from EmpireAIService ──────────
+    const generateCoachPlan = useCallback(async () => {
+        if (generatingCoach) return;
+        setGeneratingCoach(true);
+        try {
+            const plan = await EmpireAIService.getInsights(true, 'admin');
+            setCoachPlan(plan);
+        } catch (e) {
+            console.log('Coach plan error:', e.message);
+        } finally {
+            setGeneratingCoach(false);
+        }
+    }, [generatingCoach]);
 
     const fetchAIPerformance = async () => {
         try {
@@ -812,6 +831,224 @@ export default function AdminScreen({ navigation }) {
                     </View>
                 )}
 
+                {/* ── EMPIRE AI COACH — ADMIN/LEADER ONLY ──────────── */}
+                {(userRole === 'admin' || userRole === 'leader') && (
+                    <View style={styles.coachSection}>
+                        {/* Header */}
+                        <View style={styles.coachHeader}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                <MaterialCommunityIcons name="brain" size={22} color="#d4af37" />
+                                <View>
+                                    <Text style={styles.coachTitle}>EMPIRE AI COACH</Text>
+                                    <Text style={styles.coachSubtitle}>Análisis Estratégico en Vivo</Text>
+                                </View>
+                            </View>
+                            <TouchableOpacity
+                                onPress={generateCoachPlan}
+                                disabled={generatingCoach}
+                                style={styles.coachRefreshBtn}
+                            >
+                                {generatingCoach
+                                    ? <ActivityIndicator size="small" color="#d4af37" />
+                                    : <MaterialCommunityIcons name="refresh" size={20} color="#d4af37" />}
+                            </TouchableOpacity>
+                        </View>
+
+                        {!coachPlan && !generatingCoach && (
+                            <TouchableOpacity style={styles.coachInitBtn} onPress={generateCoachPlan}>
+                                <MaterialCommunityIcons name="robot-excited" size={28} color="#d4af37" />
+                                <Text style={styles.coachInitText}>Inicializar Coach IA</Text>
+                                <Text style={styles.coachInitSub}>Analiza tu negocio y genera estrategias</Text>
+                            </TouchableOpacity>
+                        )}
+
+                        {generatingCoach && !coachPlan && (
+                            <View style={styles.coachLoadingBox}>
+                                <ActivityIndicator size="large" color="#d4af37" />
+                                <Text style={styles.coachLoadingText}>Analizando datos del Imperio...</Text>
+                            </View>
+                        )}
+
+                        {coachPlan && !coachPlan.is_restricted && (
+                            <>
+                                {/* Urgency banner */}
+                                <View style={[
+                                    styles.coachUrgencyBanner,
+                                    (coachPlan.urgency || 'Estable') === 'Crítico' ? { borderColor: '#e74c3c', backgroundColor: '#e74c3c18' } :
+                                    (coachPlan.urgency || 'Estable') === 'Atención' ? { borderColor: '#f39c12', backgroundColor: '#f39c1218' } :
+                                    { borderColor: '#2ecc71', backgroundColor: '#2ecc7118' }
+                                ]}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                        <View style={[
+                                            styles.coachUrgencyDot,
+                                            (coachPlan.urgency || 'Estable') === 'Crítico' ? { backgroundColor: '#e74c3c' } :
+                                            (coachPlan.urgency || 'Estable') === 'Atención' ? { backgroundColor: '#f39c12' } :
+                                            { backgroundColor: '#2ecc71' }
+                                        ]} />
+                                        <Text style={[
+                                            styles.coachUrgencyLabel,
+                                            (coachPlan.urgency || 'Estable') === 'Crítico' ? { color: '#e74c3c' } :
+                                            (coachPlan.urgency || 'Estable') === 'Atención' ? { color: '#f39c12' } :
+                                            { color: '#2ecc71' }
+                                        ]}>{String(coachPlan.urgency || 'ESTABLE').toUpperCase()}</Text>
+                                    </View>
+                                    <Text style={styles.coachUrgencyReason}>{coachPlan.urgencyReason || 'El Imperio avanza según lo esperado.'}</Text>
+                                </View>
+
+                                {/* Prediction */}
+                                {coachPlan.prediction && (
+                                    <View style={styles.coachPredictionBox}>
+                                        <MaterialCommunityIcons name="crystal-ball" size={18} color="#9b59b6" />
+                                        <Text style={styles.coachPredictionText}>{coachPlan.prediction}</Text>
+                                    </View>
+                                )}
+
+                                {/* Today Plan */}
+                                {coachPlan.today_plan && (
+                                    <View style={styles.coachPlanCard}>
+                                        <Text style={styles.coachPlanCardTitle}>🔥 MISIÓN CERO: PLAN DEL DÍA</Text>
+
+                                        {/* PRODUCTO ESTRELLA */}
+                                        <View style={styles.coachPlanRow}>
+                                            <MaterialCommunityIcons name="star-shooting" size={16} color="#d4af37" />
+                                            <Text style={styles.coachPlanPrimary}>{coachPlan.today_plan.product}</Text>
+                                        </View>
+
+                                        {/* HORARIO - destacado */}
+                                        {coachPlan.today_plan.schedule && (
+                                            <View style={styles.coachScheduleBox}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                                    <MaterialCommunityIcons name="clock-time-four" size={14} color="#f39c12" />
+                                                    <Text style={styles.coachScheduleLabel}>HORARIO</Text>
+                                                </View>
+                                                <Text style={styles.coachScheduleText}>{coachPlan.today_plan.schedule}</Text>
+                                            </View>
+                                        )}
+
+                                        {/* LUGAR */}
+                                        {coachPlan.today_plan.location && (
+                                            <View style={styles.coachPlanRow}>
+                                                <MaterialCommunityIcons name="map-marker" size={16} color="#e74c3c" />
+                                                <Text style={styles.coachPlanDetail}>{coachPlan.today_plan.location}</Text>
+                                            </View>
+                                        )}
+
+                                        {/* TARGET */}
+                                        {coachPlan.today_plan.target && (
+                                            <View style={styles.coachPlanRow}>
+                                                <MaterialCommunityIcons name="account-group" size={16} color="#3498db" />
+                                                <Text style={[styles.coachPlanDetail, { color: '#3498db' }]}>
+                                                    {coachPlan.today_plan.target}
+                                                    {coachPlan.today_plan.expected_sales ? ` → ${coachPlan.today_plan.expected_sales}` : ''}
+                                                </Text>
+                                            </View>
+                                        )}
+
+                                        {/* GUIÓN */}
+                                        {coachPlan.today_plan.script && (
+                                            <View style={styles.coachScriptBox}>
+                                                <Text style={styles.coachScriptLabel}>GUIÓN EXACTO (DECILO ASÍ):</Text>
+                                                <Text style={styles.coachScriptText}>"{coachPlan.today_plan.script}"</Text>
+                                            </View>
+                                        )}
+
+                                        {/* RAZÓN */}
+                                        {coachPlan.today_plan.reason && (
+                                            <Text style={{ color: '#555', fontSize: 11, marginTop: 8, fontStyle: 'italic' }}>
+                                                💡 {coachPlan.today_plan.reason}
+                                            </Text>
+                                        )}
+                                    </View>
+                                )}
+
+                                {/* Strategy A */}
+                                {coachPlan.strategyA && (
+                                    <View style={[styles.coachStratCard, { borderLeftColor: '#f39c12' }]}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                            <MaterialCommunityIcons name="lightning-bolt" size={18} color="#f39c12" />
+                                            <Text style={[styles.coachStratTitle, { color: '#f39c12' }]}>
+                                                {coachPlan.strategyA.name || 'PLAN A: TRACCIÓN'}
+                                            </Text>
+                                        </View>
+                                        <Text style={styles.coachStratBody}>{coachPlan.strategyA.plan}</Text>
+                                        {coachPlan.strategyA.risk_level && (
+                                            <Text style={styles.coachStratMeta}>⚠️ Riesgo: {coachPlan.strategyA.risk_level}</Text>
+                                        )}
+                                    </View>
+                                )}
+
+                                {/* Strategy B */}
+                                {coachPlan.strategyB && (
+                                    <View style={[styles.coachStratCard, { borderLeftColor: '#3498db' }]}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                            <MaterialCommunityIcons name="trending-up" size={18} color="#3498db" />
+                                            <Text style={[styles.coachStratTitle, { color: '#3498db' }]}>
+                                                {coachPlan.strategyB.name || 'PLAN B: INVERSIÓN'}
+                                            </Text>
+                                        </View>
+                                        <Text style={styles.coachStratBody}>{coachPlan.strategyB.plan}</Text>
+                                        {(coachPlan.strategyB.suggestedInvestment || coachPlan.strategyB.estimatedMargin) && (
+                                            <View style={{ flexDirection: 'row', gap: 16, marginTop: 8 }}>
+                                                {coachPlan.strategyB.suggestedInvestment && (
+                                                    <Text style={styles.coachStratMeta}>💰 Inversión: {coachPlan.strategyB.suggestedInvestment}</Text>
+                                                )}
+                                                {coachPlan.strategyB.estimatedMargin && (
+                                                    <Text style={styles.coachStratMeta}>📈 Margen: {coachPlan.strategyB.estimatedMargin}</Text>
+                                                )}
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
+
+                                {/* Missions */}
+                                {coachPlan.missions && coachPlan.missions.length > 0 && (
+                                    <View style={{ marginTop: 8 }}>
+                                        <Text style={styles.coachMissionsLabel}>⚔️ MISIONES DEL DÍA</Text>
+                                        {coachPlan.missions.slice(0, 4).map((m, idx) => (
+                                            <View key={idx} style={styles.coachMissionRow}>
+                                                <View style={[
+                                                    styles.coachMissionDot,
+                                                    (m.priority || m.expected_impact) === 'Alta' || (m.priority || m.expected_impact) === 'high'
+                                                        ? { backgroundColor: '#e74c3c' }
+                                                        : (m.priority || m.expected_impact) === 'Media' || (m.priority || m.expected_impact) === 'medium'
+                                                        ? { backgroundColor: '#f39c12' }
+                                                        : { backgroundColor: '#2ecc71' }
+                                                ]} />
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.coachMissionTitle}>{m.action || m.titulo || '—'}</Text>
+                                                    <Text style={styles.coachMissionDesc}>{m.goal || m.descripcion || ''}</Text>
+                                                </View>
+                                                <View style={styles.coachMissionBadge}>
+                                                    <Text style={styles.coachMissionBadgeText}>
+                                                        {(m.type || m.tipo || 'general').toUpperCase()}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        ))}
+                                    </View>
+                                )}
+
+                                {/* Pattern insights */}
+                                {coachPlan.pattern_insights && coachPlan.pattern_insights.length > 0 && (
+                                    <View style={styles.coachPatternBox}>
+                                        <Text style={styles.coachPatternLabel}>🧬 PATRONES DETECTADOS</Text>
+                                        {coachPlan.pattern_insights.map((p, i) => (
+                                            <Text key={i} style={styles.coachPatternItem}>• {p}</Text>
+                                        ))}
+                                    </View>
+                                )}
+                            </>
+                        )}
+
+                        {coachPlan?.is_restricted && (
+                            <View style={styles.coachLoadingBox}>
+                                <MaterialCommunityIcons name="lock" size={28} color="#555" />
+                                <Text style={[styles.coachLoadingText, { color: '#555' }]}>Coach IA restringido para este rol.</Text>
+                            </View>
+                        )}
+                    </View>
+                )}
+
                 {/* Charts Section */}
                 <View style={styles.chartSection}>
                     <Text style={styles.sectionTitle}>GRÁFICOS Y ANÁLISIS</Text>
@@ -1296,5 +1533,271 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
         lineHeight: 18,
+    },
+
+    // ── Empire AI Coach Styles ──────────────────────────────────────────
+    coachSection: {
+        marginTop: 20,
+        backgroundColor: '#0d0d0d',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#d4af3740',
+        padding: 18,
+        marginBottom: 4,
+    },
+    coachHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    coachTitle: {
+        color: '#d4af37',
+        fontSize: 14,
+        fontWeight: '900',
+        letterSpacing: 1.5,
+    },
+    coachSubtitle: {
+        color: '#555',
+        fontSize: 11,
+        marginTop: 2,
+    },
+    coachRefreshBtn: {
+        padding: 6,
+        backgroundColor: '#d4af3718',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#d4af3740',
+    },
+    coachInitBtn: {
+        alignItems: 'center',
+        paddingVertical: 24,
+        gap: 8,
+    },
+    coachInitText: {
+        color: '#d4af37',
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    coachInitSub: {
+        color: '#555',
+        fontSize: 12,
+        textAlign: 'center',
+    },
+    coachLoadingBox: {
+        alignItems: 'center',
+        paddingVertical: 24,
+        gap: 10,
+    },
+    coachLoadingText: {
+        color: '#666',
+        fontSize: 13,
+    },
+    coachUrgencyBanner: {
+        borderRadius: 10,
+        borderWidth: 1,
+        padding: 12,
+        marginBottom: 12,
+        gap: 6,
+    },
+    coachUrgencyDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+    },
+    coachUrgencyLabel: {
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    coachUrgencyReason: {
+        color: '#bbb',
+        fontSize: 12,
+        lineHeight: 18,
+        marginLeft: 18,
+    },
+    coachPredictionBox: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        backgroundColor: '#1a0d2e',
+        borderRadius: 10,
+        padding: 12,
+        gap: 10,
+        marginBottom: 12,
+    },
+    coachPredictionText: {
+        flex: 1,
+        color: '#c8a8f0',
+        fontSize: 12,
+        fontStyle: 'italic',
+        lineHeight: 18,
+    },
+    coachPlanCard: {
+        backgroundColor: '#1a0505',
+        borderRadius: 12,
+        borderWidth: 1.5,
+        borderColor: '#e74c3c50',
+        padding: 14,
+        marginBottom: 12,
+    },
+    coachPlanCardTitle: {
+        color: '#e74c3c',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1,
+        marginBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e74c3c30',
+        paddingBottom: 8,
+    },
+    coachPlanRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+        marginBottom: 6,
+    },
+    coachScheduleBox: {
+        backgroundColor: '#f39c1215',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#f39c1240',
+        padding: 10,
+        marginBottom: 8,
+    },
+    coachScheduleLabel: {
+        color: '#f39c12',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    coachScheduleText: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '600',
+        lineHeight: 20,
+    },
+    coachPlanPrimary: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: 'bold',
+        marginBottom: 4,
+    },
+    coachPlanDetail: {
+        color: '#f39c12',
+        fontSize: 12,
+        fontWeight: '600',
+        marginBottom: 2,
+    },
+    coachScriptBox: {
+        backgroundColor: '#e74c3c18',
+        borderRadius: 8,
+        padding: 10,
+        marginTop: 8,
+    },
+    coachScriptLabel: {
+        color: '#e74c3c',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1,
+        marginBottom: 4,
+    },
+    coachScriptText: {
+        color: '#fff',
+        fontSize: 12,
+        fontStyle: 'italic',
+        lineHeight: 18,
+    },
+    coachStratCard: {
+        backgroundColor: '#050a0f',
+        borderRadius: 12,
+        borderWidth: 0,
+        borderLeftWidth: 3,
+        padding: 14,
+        marginBottom: 10,
+    },
+    coachStratTitle: {
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    coachStratBody: {
+        color: '#bbb',
+        fontSize: 12,
+        lineHeight: 18,
+    },
+    coachStratMeta: {
+        color: '#888',
+        fontSize: 11,
+        fontWeight: '600',
+        marginTop: 6,
+    },
+    coachMissionsLabel: {
+        color: '#555',
+        fontSize: 11,
+        fontWeight: '700',
+        letterSpacing: 1.5,
+        marginBottom: 10,
+    },
+    coachMissionRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        backgroundColor: '#050505',
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#1a1a1a',
+        gap: 10,
+    },
+    coachMissionDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        marginTop: 5,
+        flexShrink: 0,
+    },
+    coachMissionTitle: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    coachMissionDesc: {
+        color: '#888',
+        fontSize: 11,
+        marginTop: 2,
+        lineHeight: 16,
+    },
+    coachMissionBadge: {
+        backgroundColor: '#d4af3718',
+        borderRadius: 6,
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+        alignSelf: 'flex-start',
+        flexShrink: 0,
+    },
+    coachMissionBadgeText: {
+        color: '#d4af37',
+        fontSize: 9,
+        fontWeight: '900',
+    },
+    coachPatternBox: {
+        backgroundColor: '#0a1512',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#1abc9c30',
+        padding: 12,
+        marginTop: 8,
+    },
+    coachPatternLabel: {
+        color: '#1abc9c',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 1,
+        marginBottom: 8,
+    },
+    coachPatternItem: {
+        color: '#88ceb9',
+        fontSize: 12,
+        lineHeight: 20,
     },
 });

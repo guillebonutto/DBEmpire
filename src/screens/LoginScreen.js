@@ -63,12 +63,14 @@ export default function LoginScreen({ navigation, route }) {
         try {
             // SECURITY CHECK 1: Admin hardware verification (already exists)
             if (role === 'admin') {
-                const hardwareRole = await DeviceAuthService.checkAuthorization();
-                if (hardwareRole !== 'admin') {
+                const hRole = await DeviceAuthService.checkAuthorization();
+                const hardwareRole = (hRole || '').toLowerCase();
+                if (hardwareRole !== 'admin' && hardwareRole !== 'leader') {
+                    const sig = await DeviceAuthService.getDeviceSignature();
                     setLoading(false);
                     Alert.alert(
                         '🛑 ACCESO DENEGADO',
-                        'Este dispositivo no está autorizado para el rol de LÍDER.\n\nSi eres el dueño, autoriza esta firma en Supabase.',
+                        `Este dispositivo no está autorizado como LÍDER.\n\nDetectado: ${hRole || 'NINGUNO'}\nFirma: ${sig || 'ERROR'}\n\nSi eres el dueño, autoriza esta firma en Supabase.`,
                         [{ text: 'Ver Firma', onPress: showSecretSignature }, { text: 'Entendido' }]
                     );
                     return;

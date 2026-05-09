@@ -4,6 +4,7 @@ import { useProductStore } from '../store/useProductStore';
 
 let cachedResponse = null;
 let lastFetchTime = null;
+let cachedResponseRole = null;
 
 export const EmpireAIService = {
     // -------------------------------------------------------------
@@ -74,7 +75,7 @@ export const EmpireAIService = {
         const updateProgress = (val) => onProgress && onProgress(val);
         
         // Intelligent Caching (15 minutes to respect API limits)
-        if (!forceRefresh && cachedResponse && lastFetchTime) {
+        if (!forceRefresh && cachedResponse && lastFetchTime && cachedResponseRole === userRole) {
             if (Date.now() - lastFetchTime < 15 * 60 * 1000) {
                 updateProgress(1);
                 return cachedResponse;
@@ -93,7 +94,7 @@ export const EmpireAIService = {
                     .single();
                 
                 // Restrict if not admin and AI not explicitly enabled
-                if (profile && profile.role !== 'admin' && !profile.ai_coach_enabled) {
+                if (profile && profile.role !== 'admin' && profile.role !== 'leader' && !profile.ai_coach_enabled) {
                     updateProgress(1);
                     return {
                         today_plan: null,
@@ -192,7 +193,7 @@ export const EmpireAIService = {
             let streetMemory = [];
             let processedHistory = [];
             
-            if (userRole === 'admin') {
+            if (userRole === 'admin' || userRole === 'leader') {
                 const { data: tpd } = await supabase.from('test_products').select('*').order('created_at', { ascending: false }).limit(20);
                 testProductsData = tpd || [];
                 const { data: sm } = await supabase.from('street_test_results').select('*').order('created_at', { ascending: false });
@@ -214,12 +215,49 @@ export const EmpireAIService = {
                 };
             });
             
+            // -------------------------------------------------------------
+            // PAYLOAD COMPRESSION & TEMPORAL ANALYSIS
+            // -------------------------------------------------------------
+            const daysOfWeek = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+            const dayCounts = {};
+            const hourCounts = {};
+            
+            recentSales.forEach(s => {
+                if (s.created_at) {
+                    const date = new Date(s.created_at);
+                    const day = daysOfWeek[date.getDay()];
+                    const hour = date.getHours();
+                    dayCounts[day] = (dayCounts[day] || 0) + 1;
+                    hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+                }
+            });
+            
+            const bestDay = Object.entries(dayCounts).sort((a,b) => b[1] - a[1])[0]?.[0] || 'Indeterminado';
+            const peakHourNum = Object.entries(hourCounts).sort((a,b) => b[1] - a[1])[0]?.[0];
+            const peakHourStr = peakHourNum ? `${peakHourNum}:00 - ${parseInt(peakHourNum)+1}:00` : 'Indeterminado';
+
             aiPayload.user_performance = {
                 total_wasted_tests_ars: (streetMemory || []).reduce((sum, sm) => sum + (parseFloat(sm.test_cost_ars) || 0), 0),
                 safe_mode_active: false
             };
-            aiPayload.test_products = testProductsData;
-            aiPayload.street_memory = processedHistory;
+            
+            aiPayload.time_stats = {
+                best_sales_day: bestDay,
+                peak_sales_hour: peakHourStr
+            };
+
+            // Compress arrays to save tokens
+            aiPayload.test_products = testProductsData.slice(0, 8).map(p => ({
+                name: p.product_name,
+                status: p.status,
+                score: p.validation_score
+            }));
+            
+            aiPayload.street_memory = processedHistory.slice(0, 8).map(sm => ({
+                location: sm.location_name,
+                ratios: sm.ratios,
+                sales: sm.sales
+            }));
 
             const { data: settingsData } = await supabase.from('settings').select('value').eq('key', 'google_api_key').single();
             if (!settingsData?.value) throw new Error("API Key missing.");
@@ -231,58 +269,72 @@ export const EmpireAIService = {
             ${feedbackContext}
             `;
 
-            if (userRole === 'admin') {
+            if (userRole === 'admin' || userRole === 'leader') {
                 prompt = `
-                Eres el "Empire AI Coach", el estratega máximo de "Digital Boost Empire" en Jujuy.
+                Eres el "Empire AI Coach", el estratega máximo de "Digital Boost Empire" en Jujuy, Argentina.
                 ${commonContext}
-                TAREAS: Misiones tácticas (offline, online, híbridas), Estrategia A (Liquidación), Estrategia B (Inversión).
-                REQUERIMIENTO: Identifica riesgos, oportunidades de crecimiento y planes de acción concretos.
-                IMPORTANTE PARA ADMIN: El "today_plan" debe ser una HOJA DE RUTA LOGÍSTICA.
-                DEVUELVE JSON PURO: {
-                  "today_plan": { 
-                    "product": "Nombre del producto estrella", 
-                    "schedule": "Horarios recomendados (ej: 10:00 a 12:30 y 17:00 a 20:00)",
-                    "location": "Lugares exactos (ej: Peatonal Belgrano, Salida UNJU, Plaza de los Inmigrantes)", 
-                    "script": "GUION EXACTO PARA COPIAR O DECIR (Potente y cerrador)", 
-                    "reason": "Por qué este producto y estos lugares hoy", 
-                    "target": "A quién acercarse", 
-                    "expected_sales": "N unidades" 
+
+                REGLA CRÍTICA: Sé EXTREMADAMENTE CONCRETO. Nada de frases vagas. El dueño necesita saber exactamente QUÉ hacer, DÓNDE ir y CUÁNDO.
+
+                DEVUELVE ÚNICAMENTE JSON PURO (sin markdown, sin texto extra):
+                {
+                  "today_plan": {
+                    "product": "Nombre exacto del producto que más conviene vender HOY basado en stock y margen",
+                    "schedule": "Horarios EXACTOS separados por zonas, ej: '10:00-12:30 → Peatonal Belgrano (flujo universitario). 17:00-20:00 → Salida UNJU (regreso de estudiantes)'",
+                    "location": "Dirección o zona concreta en Jujuy capital, ej: 'Peatonal Belgrano entre Álvarez Prado y Lamadrid, frente al Banco Nación' — NO decir solo 'el centro'",
+                    "target": "Descripción del cliente ideal a abordar, ej: 'Jóvenes 18-25 con auriculares puestos o mirando el celular'",
+                    "script": "GUIÓN LISTO PARA DECIR en voz alta, natural y cerrador. Mínimo 3 oraciones. Ej: 'Perdón, ¿tienes un segundo? Tengo [producto] a $X, es el mismo que vende [tienda conocida] a $Y. Te lo dejo con garantía y hoy tengo las últimas unidades. ¿Te lo muestro?'",
+                    "reason": "Por qué este producto, este lugar y este horario específicamente hoy",
+                    "expected_sales": "Número estimado de unidades"
                   },
                   "missions": [
-                    { "type": "offline|online|hybrid", "action": "...", "goal": "...", "priority": "Alta|Media|Baja" }
+                    { "type": "offline|online|hybrid", "action": "Acción concreta con verbo y objeto", "goal": "Resultado esperado medible", "priority": "Alta|Media|Baja" }
                   ],
-                  "strategyA": { "name": "LIQUIDACIÓN", "plan": "...", "risk_level": "..." },
-                  "strategyB": { "name": "INVERSIÓN", "plan": "...", "suggestedInvestment": "$X", "suggestedStock": "N un.", "estimatedMargin": "X%" },
-                  "recommended_bundles": [{ "products": ["A", "B"], "price_strategy": "...", "expected_conversion_boost": "X%" }],
-                  "product_insights": [{ "name": "X", "observation": "...", "bottleneck_alert": "...", "objection_killer_script": "...", "next_step": { "action": "import|discard|test", "risk_level": "low|med|high", "confidence": 0.X, "suggested_units": N, "safe_units": M, "reason": "..." } }],
-                  "pattern_insights": ["Patrón 1", "Patrón 2"],
-                  "positioning_strategy": ["Tip 1", "Tip 2"],
-                  "expansion_strategy": ["Tip 1", "Tip 2"],
-                  "discovery_products": [{ "name": "X", "test_priority": "high|low", "local_fit_score": "X/10", "reason": "...", "estimated_cost": "$X", "suggested_test": { "city": "Jujuy", "location": "...", "script": "...", "goal": "...", "validation_metric": "..." } }],
-                  "performance_summary": "...",
-                  "prediction": "...", "urgency": "...", "urgencyReason": "...", "actionId": "create_promo", "actionText": "EJECUTAR"
+                  "strategyA": { "name": "PLAN A: TRACCIÓN INMEDIATA", "plan": "Qué hacer exactamente para generar caja hoy/esta semana", "risk_level": "Bajo|Medio|Alto" },
+                  "strategyB": { "name": "PLAN B: INVERSIÓN ESTRATÉGICA", "plan": "En qué reinvertir y por qué", "suggestedInvestment": "$X.XXX", "suggestedStock": "N unidades", "estimatedMargin": "X%" },
+                  "pattern_insights": ["Patrón detectado 1 basado en los datos reales", "Patrón 2"],
+                  "recommended_bundles": [{ "products": ["Producto A", "Producto B"], "price_strategy": "Estrategia concreta de precio combo", "expected_conversion_boost": "X%" }],
+                  "product_insights": [{ "name": "Nombre exacto", "observation": "Observación basada en los datos", "bottleneck_alert": "Cuello de botella si aplica o 'Ninguno'", "objection_killer_script": "Script para matar objeciones o 'N/A'", "next_step": { "action": "import|discard|test", "risk_level": "low|med|high", "confidence": 0.8, "suggested_units": 5, "safe_units": 3, "reason": "Razón basada en datos" } }],
+                  "positioning_strategy": ["Tip concreto 1", "Tip 2"],
+                  "expansion_strategy": ["Paso concreto 1", "Paso 2"],
+                  "discovery_products": [{ "name": "Producto", "test_priority": "high|low", "local_fit_score": "X/10", "reason": "Por qué encaja en Jujuy", "estimated_cost": "$X", "suggested_test": { "city": "Jujuy", "location": "Lugar exacto", "script": "Script de prueba", "goal": "Meta medible", "validation_metric": "Métrica de validación" } }],
+                  "performance_summary": "Evaluación breve del rendimiento actual",
+                  "prediction": "Predicción fundamentada en los datos",
+                  "urgency": "Estable|Atención|Crítico",
+                  "urgencyReason": "Razón específica de la urgencia",
+                  "actionId": "create_promo",
+                  "actionText": "EJECUTAR"
                 }`;
             } else {
                 prompt = `
-                Eres el "Asistente de Ventas Estratégicas" de Digital Boost Empire. Tu socio espera instrucciones tácticas para REDES SOCIALES.
+                Eres el "Director de Ventas Virales" de Digital Boost Empire. Tu socio espera instrucciones tácticas para CREAR CONTENIDO EN REDES SOCIALES.
                 ${commonContext}
-                IMPORTANTE: Define dos planes claros de venta ONLINE.
-                OBJETIVO: Maximizar flujo de caja y limpiar inventario.
+                IMPORTANTE: Define un plan claro de venta ONLINE enfocado en VIDEOS CORTOS (Reels/TikTok).
+                OBJETIVO: Maximizar flujo de caja con el mínimo esfuerzo de grabación.
+                
+                REGLA CRÍTICA: Tienes que investigar/analizar los hooks virales actuales de la plataforma. Dale ideas exactas de cómo grabar el video para que tenga alta retención.
+
                 DEVUELVE JSON PURO: {
                   "today_plan": { 
-                    "product": "X", 
-                    "platform": "Instagram|TikTok|WA", 
-                    "best_copy": "Copy para vender YA",
-                    "script": "Guion viral", 
-                    "reason": "Por qué es tendencia hoy" 
+                    "product": "Nombre del producto", 
+                    "platform": "Instagram Reels | TikTok", 
+                    "video_direction": {
+                        "visual_hook": "Qué MOSTRAR en los primeros 3 segundos. Ej: 'Dejá caer hielo en el café y hacé zoom al vapor.'",
+                        "verbal_hook": "Qué DECIR/TEXTO en pantalla en los primeros 3 segundos. Ej: 'POV: Encontraste el gadget que salvó tus mañanas.'",
+                        "structure": "Estructura: 0-3s [Gancho], 4-10s [Demo], 11-15s [CTA].",
+                        "spoken_script": "Guión palabra por palabra para hablar a la cámara o locutar. Ej: '¿Harto de que tu café se convierta en frappé? Esta taza...'"
+                    },
+                    "best_copy": "El caption exacto para poner en la descripción del video, con emojis y hashtags.",
+                    "script": "Guión OFFLINE por si vende cara a cara. Ej: 'Gancho: ¿Seguís tomando el café frío? (Muestra cara de asco)...'",
+                    "reason": "Por qué este tipo de video funciona hoy" 
                   },
                   "missions": [
                     { "type": "online", "action": "Subir X a redes", "goal": "Generar X consultas" }
                   ],
-                  "strategyA": { "name": "PLAN A: TRACCIÓN (VENDER YA)", "plan": "Enfócate en este producto que tiene alta rotación..." },
-                  "strategyB": { "name": "PLAN B: LIQUIDACIÓN / PIVOTE", "plan": "Remata este stock estancado con este combo..." },
+                  "strategyA": { "name": "PLAN A: VIRALIZAR PRODUCTO ESTRELLA", "plan": "Enfócate en este producto..." },
+                  "strategyB": { "name": "PLAN B: VENTA DIRECTA WHATSAPP", "plan": "Sube esta historia con este link..." },
                   "summary": "Resumen táctico del día",
-                  "prediction": "...", "urgency": "Estable", "urgencyReason": "...", "actionId": "create_promo", "actionText": "VER"
+                  "prediction": "Predicción de vistas/ventas", "urgency": "Estable", "urgencyReason": "...", "actionId": "create_promo", "actionText": "GRABAR AHORA"
                 }`;
             }
 
@@ -313,6 +365,7 @@ export const EmpireAIService = {
             
             cachedResponse = parsedInsights;
             lastFetchTime = Date.now();
+            cachedResponseRole = userRole;
             updateProgress(1);
             return parsedInsights;
 
@@ -325,7 +378,7 @@ export const EmpireAIService = {
             const stagnant = products.filter(p => p.current_stock > 15);
             
             return {
-                today_plan: userRole === 'admin' ? { 
+                today_plan: (userRole === 'admin' || userRole === 'leader') ? { 
                     product: critical[0]?.name || "Gadgets", 
                     location: "Plaza Belgrano / UNJU / Centro Jujuy", 
                     script: "¡Últimas unidades! No te quedes sin el tuyo.", 
