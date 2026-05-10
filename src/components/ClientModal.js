@@ -1,27 +1,35 @@
-import React, { useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator, PanResponder, Animated } from 'react-native';
+import React, { useRef, useState, useMemo } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator, PanResponder, Animated, SafeAreaView } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const GestureClientRow = ({ item, onSelectWithType }) => {
     const pan = useRef(new Animated.ValueXY()).current;
 
+    const [actionLabel, setActionLabel] = useState('');
+
     const panResponder = useRef(
         PanResponder.create({
-            onStartShouldSetPanResponder: () => true,
+            onStartShouldSetPanResponder: () => false,
             onMoveShouldSetPanResponder: (evt, gestureState) => {
-                return Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10;
+                // Solo activamos el pan responder si el movimiento horizontal es muy claro (evita bloquear scroll vertical)
+                return Math.abs(gestureState.dx) > 30 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy);
             },
-            onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
+            onPanResponderMove: (evt, gestureState) => {
+                pan.x.setValue(gestureState.dx);
+                if (gestureState.dx > 50) setActionLabel('COBRAR VENTA');
+                else if (gestureState.dx < -50) setActionLabel('PRESUPUESTO');
+                else setActionLabel('');
+            },
             onPanResponderRelease: (e, gestureState) => {
                 let type = null;
-                if (gestureState.dx > 60) type = 'completed';
-                else if (gestureState.dx < -60) type = 'budget';
-                else if (gestureState.dy > 60) type = 'pending';
+                if (gestureState.dx > 80) type = 'completed';
+                else if (gestureState.dx < -80) type = 'budget';
 
                 if (type) {
                     setTimeout(() => onSelectWithType(item, type), 60);
                 }
                 
+                setActionLabel('');
                 Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
             }
         })
@@ -40,20 +48,30 @@ const GestureClientRow = ({ item, onSelectWithType }) => {
     return (
         <Animated.View 
             {...panResponder.panHandlers}
-            collapsable={false}
-            style={[styles.clientRow, { transform: [{ translateX: pan.x }, { translateY: pan.y }], backgroundColor }]}
+            style={{ marginBottom: 10 }}
         >
-            <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: overlayColor, opacity: 0.3 }]} />
-            <View style={styles.clientInfo}>
-                <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{item ? item.name.charAt(0) : '?'}</Text>
-                </View>
-                <View>
-                    <Text style={styles.rowTitle}>{item ? item.name : 'Cliente Anónimo'}</Text>
-                    <Text style={styles.gestureHint}>↔ Venta/Presu  ↓ Deuda</Text>
-                </View>
-            </View>
-            <MaterialCommunityIcons name="gesture-swipe" size={20} color="#333" />
+            <TouchableOpacity 
+                activeOpacity={0.8}
+                onPress={() => onSelectWithType(item, 'selected_only')}
+            >
+                <Animated.View style={[styles.clientRow, { transform: [{ translateX: pan.x }], backgroundColor }]}>
+                    <View style={styles.clientInfo}>
+                        <View style={styles.avatar}>
+                            <Text style={styles.avatarText}>{item ? item.name.charAt(0).toUpperCase() : '?'}</Text>
+                        </View>
+                        <View>
+                            <Text style={styles.rowTitle}>{item ? item.name : 'Cliente Anónimo (Venta de mostrador)'}</Text>
+                            <Text style={styles.gestureHint}>Toca para elegir • Desliza ↔ para acción rápida</Text>
+                        </View>
+                    </View>
+                    
+                    {actionLabel ? (
+                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 12 }}>{actionLabel}</Text>
+                    ) : (
+                        <MaterialCommunityIcons name="gesture-swipe-horizontal" size={20} color="#555" />
+                    )}
+                </Animated.View>
+            </TouchableOpacity>
         </Animated.View>
     );
 };
@@ -73,15 +91,43 @@ const ClientModal = ({
     handleCreateClient,
     creatingClient
 }) => {
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const filteredClients = useMemo(() => {
+        if (!searchQuery) return clients;
+        const lowQuery = searchQuery.toLowerCase();
+        return clients.filter(c => c.name?.toLowerCase().includes(lowQuery) || c.phone?.includes(lowQuery));
+    }, [searchQuery, clients]);
+
     return (
         <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-            <View style={styles.modalContent}>
-                <View style={styles.modalHeader}>
-                    <Text style={styles.modalTitle}>Seleccionar Cliente</Text>
-                    <TouchableOpacity onPress={onClose}>
-                        <MaterialCommunityIcons name="close" size={24} color="#fff" />
-                    </TouchableOpacity>
-                </View>
+            <SafeAreaView style={styles.safeArea}>
+                <View style={styles.modalContent}>
+                    <View style={styles.modalHeader}>
+                        <Text style={styles.modalTitle}>Seleccionar Cliente</Text>
+                        <TouchableOpacity onPress={onClose} style={{ padding: 5 }}>
+                            <MaterialCommunityIcons name="close" size={24} color="#fff" />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* SEARCH BAR */}
+                    {!showNewClientForm && (
+                        <View style={styles.searchContainer}>
+                            <MaterialCommunityIcons name="magnify" size={20} color="#888" style={styles.searchIcon} />
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder="Buscar cliente por nombre o teléfono..."
+                                placeholderTextColor="#666"
+                                value={searchQuery}
+                                onChangeText={setSearchQuery}
+                            />
+                            {searchQuery.length > 0 && (
+                                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                                    <MaterialCommunityIcons name="close-circle" size={20} color="#888" />
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    )}
 
                 {showNewClientForm ? (
                     <View style={styles.newClientForm}>
@@ -137,23 +183,41 @@ const ClientModal = ({
                 />
 
                 <FlatList
-                    data={clients}
+                    data={filteredClients}
                     keyExtractor={item => item.id}
                     contentContainerStyle={{ paddingBottom: 50 }}
+                    keyboardShouldPersistTaps="handled"
                     renderItem={({ item }) => (
                         <GestureClientRow 
                             item={item} 
-                            onSelectWithType={(c, t) => onSelectWithType ? onSelectWithType(item, t) : onSelectClient(item)} 
+                            onSelectWithType={(c, t) => {
+                                if (t === 'selected_only') {
+                                    onSelectClient(item);
+                                    onClose();
+                                } else {
+                                    onSelectWithType ? onSelectWithType(item, t) : onSelectClient(item);
+                                }
+                            }} 
                         />
                     )}
+                    ListEmptyComponent={
+                        <View style={{ padding: 20, alignItems: 'center' }}>
+                            <Text style={{ color: '#888' }}>No se encontraron clientes</Text>
+                        </View>
+                    }
                 />
             </View>
+            </SafeAreaView>
         </Modal>
     );
 };
 
 const styles = StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: '#000' },
     modalContent: { flex: 1, backgroundColor: '#000', padding: 20 },
+    searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderRadius: 10, paddingHorizontal: 15, marginBottom: 15, borderWidth: 1, borderColor: '#222', height: 45 },
+    searchIcon: { marginRight: 10 },
+    searchInput: { flex: 1, color: '#fff', fontSize: 14, height: '100%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
     modalTitle: { color: '#d4af37', fontSize: 20, fontWeight: 'bold' },
     newClientForm: { backgroundColor: '#111', padding: 20, borderRadius: 15, marginBottom: 20 },

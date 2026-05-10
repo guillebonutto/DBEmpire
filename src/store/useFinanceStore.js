@@ -57,7 +57,7 @@ export const useFinanceStore = create((set, get) => ({
 
         try {
             const [salesRes, expRes, debtRes, dItemsRes, itemsRes, settingsRes] = await Promise.all([
-                supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(500),
+                supabase.from('sales').select('*, clients(name), profiles(full_name), sale_items(*, products(name))').order('created_at', { ascending: false }).limit(500),
                 supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(500),
                 supabase.from('supplier_orders').select('*').order('created_at', { ascending: false }),
                 supabase.from('supplier_order_items').select('*'),
@@ -148,5 +148,13 @@ export const useFinanceStore = create((set, get) => ({
 
     addExpenseLocal: (newExpense) => set((state) => ({ 
         expenses: [newExpense, ...state.expenses] 
+    })),
+
+    addSupplierOrderLocal: (newOrder) => set((state) => ({ 
+        supplierOrders: [newOrder, ...state.supplierOrders] 
+    })),
+
+    updateSupplierOrderLocal: (updatedOrder) => set((state) => ({
+        supplierOrders: state.supplierOrders.map(o => o.id === updatedOrder.id ? { ...o, ...updatedOrder } : o)
     })),
 }));

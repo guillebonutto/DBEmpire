@@ -85,6 +85,23 @@ export const SyncService = {
                 try {
                     const payload = JSON.parse(item.payload);
                     const metadata = JSON.parse(item.metadata);
+                    
+                    // --- AUTO-FIX INVALID IDS ---
+                    // If the payload has a 'local-...' ID, Supabase will reject it as a UUID.
+                    // We replace it with a valid UUID on the fly to unblock the sync queue.
+                    if (payload && payload.id && typeof payload.id === 'string' && payload.id.startsWith('local')) {
+                        const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                            const r = Math.random() * 16 | 0;
+                            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                        });
+                        const oldId = payload.id;
+                        const newId = generateUUID();
+                        payload.id = newId;
+                        console.log(`[SyncService] Auto-fixing invalid ID ${oldId} -> ${newId}`);
+                        
+                        // If it's a sale, we might need to fix it in metadata too, though usually processed in _processSaleSync
+                    }
+
                     let success = false;
 
                     // Handle different actions

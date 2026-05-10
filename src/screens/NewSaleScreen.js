@@ -78,6 +78,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const [manualDiscountType, setManualDiscountType] = useState('fixed'); // 'fixed' or 'percent'
     const [loading, setLoading] = useState(false);
     const [isLeaderSale, setIsLeaderSale] = useState(false);
+    const [assignToPartner, setAssignToPartner] = useState(false);
 
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
@@ -428,35 +429,42 @@ export default function NewSaleScreen({ navigation, route }) {
 
         setCreatingClient(true);
         try {
-            const { data, error } = await supabase
-                .from('clients')
-                .insert([{
-                    name: newClientName.trim(),
-                    phone: newClientPhone.trim(),
-                    status: 'active'
-                }])
-                .select()
-                .single();
+            // Generar UUID válido para soportar modo offline y referencias en ventas
+            const generateUUID = () => {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            };
 
-            if (error) throw error;
+            const clientPayload = {
+                id: generateUUID(),
+                name: newClientName.trim(),
+                phone: newClientPhone.trim() || '',
+                status: 'active',
+                created_at: new Date().toISOString()
+            };
+
+            // Cola offline-first
+            await SyncService.queueAction('client', clientPayload);
 
             // Update local list (Optimistic UI)
-            addClientLocally(data);
+            addClientLocally(clientPayload);
 
             // UX: Select automatically, clear form, and proceed to checkout
-            setSelectedClient(data);
+            setSelectedClient(clientPayload);
             setShowNewClientForm(false);
             setNewClientName('');
             setNewClientPhone('');
 
             setClientModalVisible(false);
             setTimeout(() => {
-                processCheckout(data);
+                processCheckout(clientPayload);
             }, 500);
 
         } catch (error) {
             console.log('Error creating client:', error);
-            Alert.alert('Error', 'No se pudo crear el cliente');
+            Alert.alert('Error', 'No se pudo crear el cliente de forma offline');
         } finally {
             setCreatingClient(false);
         }
@@ -465,21 +473,25 @@ export default function NewSaleScreen({ navigation, route }) {
     const createClientInline = async (name) => {
         setCreatingClient(true);
         try {
-            const { data, error } = await supabase
-                .from('clients')
-                .insert([{
-                    name: name.trim(),
-                    // status: 'active' // Ensure your DB has this column, or remove if not migrated yet. User has script.
-                    phone: '', // Optional default
-                    status: 'active'
-                }])
-                .select()
-                .single();
+            const generateUUID = () => {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            };
 
-            if (error) throw error;
+            const clientPayload = {
+                id: generateUUID(),
+                name: name.trim(),
+                phone: '',
+                status: 'active',
+                created_at: new Date().toISOString()
+            };
 
-            addClientLocally(data);
-            setSelectedClient(data);
+            await SyncService.queueAction('client', clientPayload);
+
+            addClientLocally(clientPayload);
+            setSelectedClient(clientPayload);
             setSearchQuery('');
 
         } catch (error) {
@@ -646,15 +658,28 @@ export default function NewSaleScreen({ navigation, route }) {
 
             // Logic for Seller ID and Device Signature
             console.log('Fetching profiles...');
-            const { data: profiles } = await supabase.from('profiles').select('id').eq('role', currentUserRole).limit(1);
+            
+            let targetRole = currentUserRole;
+            if ((currentUserRole === 'admin' || currentUserRole === 'leader') && assignToPartner) {
+                targetRole = 'seller';
+            }
+
+            const { data: profiles } = await supabase.from('profiles').select('id').eq('role', targetRole).limit(1);
             let sellerId = profiles && profiles.length > 0 ? profiles[0].id : null;
-            console.log('Seller ID:', sellerId);
+            console.log('Seller ID assigned:', sellerId);
 
             console.log('Getting device signature...');
             const deviceSig = await require('../services/deviceAuth').DeviceAuthService.getDeviceSignature();
             console.log('Device signature obtained');
 
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
+            const saleId = generateUUID();
             let salePayload = {
+                id: saleId,
                 seller_id: sellerId || null,
                 client_id: client ? client.id : null,
                 total_amount: typeof total === 'number' ? total : 0,
@@ -696,7 +721,7 @@ export default function NewSaleScreen({ navigation, route }) {
             if (checkoutSaleType !== 'budget') {
                 const optSale = {
                     ...salePayload,
-                    id: `local-${Date.now()}`,
+                    id: saleId,
                     created_at: new Date().toISOString()
                 };
                 const optItems = cart.map(item => ({
@@ -897,17 +922,29 @@ export default function NewSaleScreen({ navigation, route }) {
                             </View>
                         )}
                         
-                        {/* LIDER SPLIT (SIEMPRE VISIBLE PARA LIDER/ADMIN) */}
+                        {/* LIDER SPLIT / ASSIGN TO PARTNER (SIEMPRE VISIBLE PARA LIDER/ADMIN) */}
                         {(currentUserRole === 'admin' || currentUserRole === 'leader') && (
-                            <TouchableOpacity
-                                style={[styles.leaderToggleSmall, isLeaderSale && styles.leaderToggleActive]}
-                                onPress={() => setIsLeaderSale(!isLeaderSale)}
-                            >
-                                <MaterialCommunityIcons name="star-circle" size={18} color={isLeaderSale ? "#00ff88" : "#444"} />
-                                <Text style={[styles.leaderToggleText, isLeaderSale && { color: '#00ff88' }]}>
-                                    VENDE GUILLE (Comisión 5%)
-                                </Text>
-                            </TouchableOpacity>
+                            <View style={{ gap: 8, marginTop: 10 }}>
+                                <TouchableOpacity
+                                    style={[styles.leaderToggleSmall, assignToPartner && { borderColor: '#d4af37', backgroundColor: 'rgba(212, 175, 55, 0.1)' }]}
+                                    onPress={() => setAssignToPartner(!assignToPartner)}
+                                >
+                                    <MaterialCommunityIcons name="account-arrow-right" size={18} color={assignToPartner ? "#d4af37" : "#666"} />
+                                    <Text style={[styles.leaderToggleText, assignToPartner && { color: '#d4af37' }]}>
+                                        ASIGNAR VENTA AL SOCIO
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.leaderToggleSmall, isLeaderSale && styles.leaderToggleActive]}
+                                    onPress={() => setIsLeaderSale(!isLeaderSale)}
+                                >
+                                    <MaterialCommunityIcons name="star-circle" size={18} color={isLeaderSale ? "#00ff88" : "#666"} />
+                                    <Text style={[styles.leaderToggleText, isLeaderSale && { color: '#00ff88' }]}>
+                                        CERRÓ LÍDER (Socio cobra 5%)
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
                         )}
 
                         <View style={{ height: 100 }} />

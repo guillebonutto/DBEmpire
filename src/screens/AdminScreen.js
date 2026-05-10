@@ -319,6 +319,27 @@ export default function AdminScreen({ navigation }) {
             }
         }
 
+        // Add supplier orders as initial investments for ROI
+        for (const order of (supplierOrders || [])) {
+            const oMs = new Date(order.created_at).getTime();
+            const val = parseFloat(order.total_cost) || 0;
+            // Only include orders created after April 1st to avoid double-counting historical manual entries
+            if (oMs > new Date('2026-04-01T00:00:00Z').getTime()) {
+                if (oMs < startMs) {
+                    prevExpROI += val;
+                } else if (!endMs || oMs <= endMs) {
+                    currentExpenses.push({
+                        id: order.id,
+                        created_at: order.created_at,
+                        amount: val,
+                        category: 'Compra de Mercadería',
+                        description: `Pedido de Stock: ${order.provider_name}`,
+                        isPurchase: true
+                    });
+                }
+            }
+        }
+
         const histBalCaja = prevIncome - prevExpCaja;
         // ROI usa el ingreso total para recuperar la gigantesca inversión de stock inicial
         const histBalROI = prevIncome - prevExpROI;
@@ -614,6 +635,26 @@ export default function AdminScreen({ navigation }) {
                     </View>
                 ) : (
                     <>
+                        {/* ── Sync Queue Monitor ─────────────────────────────── */}
+                        <TouchableOpacity 
+                            style={{ marginHorizontal: 15, marginBottom: 15, backgroundColor: '#1a1a1a', borderRadius: 12, padding: 15, borderWidth: 1, borderColor: '#333', flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                            onPress={async () => {
+                                const count = await require('../services/syncService').SyncService.getQueueCount();
+                                if (count > 0) {
+                                    Alert.alert('Sincronizando', `Forzando subida de ${count} ítems...`);
+                                    await require('../services/syncService').SyncService.syncPending();
+                                } else {
+                                    Alert.alert('Todo al día', 'No hay ítems pendientes de sincronizar.');
+                                }
+                            }}
+                        >
+                            <MaterialCommunityIcons name="cloud-sync" size={24} color="#d4af37" />
+                            <View style={{ flex: 1 }}>
+                                <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>Monitor de Sincronización</Text>
+                                <Text style={{ color: '#aaa', fontSize: 12 }}>Toca aquí para ver los ítems pendientes (ventas, gastos) y forzar la subida a Supabase.</Text>
+                            </View>
+                        </TouchableOpacity>
+
                         {/* Stats Cards */}
                 <View style={styles.statsGrid}>
                     <View style={styles.statCard}>
@@ -659,6 +700,33 @@ export default function AdminScreen({ navigation }) {
                         <Text style={[styles.statLabel, { color: getProfitColor(stats.netProfit) }]}>Rentabilidad (ROI)</Text>
                     </View>
                 </View>
+
+                {/* ── Cuota Mensual a Pagar ─────────────────────────────── */}
+                {(() => {
+                    const pendingOrders = (supplierOrders || []).filter(o => (o.installments_paid || 0) < (o.installments_total || 1));
+                    const totalDueThisMonth = pendingOrders.reduce((sum, o) => {
+                        const total = o.installments_total || 1;
+                        const installmentAmt = (o.total_cost || o.total_amount || 0) / total;
+                        return sum + installmentAmt;
+                    }, 0);
+
+                    if (pendingOrders.length === 0) return null;
+
+                    return (
+                        <TouchableOpacity
+                            style={{ marginHorizontal: 15, marginBottom: 15, backgroundColor: '#1a0f00', borderRadius: 16, padding: 18, borderWidth: 1.5, borderColor: '#f39c12', flexDirection: 'row', alignItems: 'center', gap: 15 }}
+                            onPress={() => navigation.navigate('Expenses')}
+                        >
+                            <MaterialCommunityIcons name="calendar-clock" size={36} color="#f39c12" />
+                            <View style={{ flex: 1 }}>
+                                <Text style={{ color: '#f39c12', fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>CUOTAS PENDIENTES ({pendingOrders.length} orden{pendingOrders.length > 1 ? 'es' : ''})</Text>
+                                <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginTop: 4 }}>{formatCurrency(totalDueThisMonth)}</Text>
+                                <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>Tocá para ir a Gastos → Compras y pagar</Text>
+                            </View>
+                            <MaterialCommunityIcons name="chevron-right" size={24} color="#f39c12" />
+                        </TouchableOpacity>
+                    );
+                })()}
 
                 {/* ── Smart Alert Panel ───────────────────────────────────── */}
                 {stats.alerts && stats.alerts.length > 0 && (

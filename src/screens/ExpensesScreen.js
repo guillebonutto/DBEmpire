@@ -42,9 +42,14 @@ export default function ExpensesScreen({ navigation }) {
             return;
         }
 
+        const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+
         const finalAmount = category === 'Descuento' ? -Math.abs(numAmount) : numAmount;
         const newExpense = {
-            id: `local-${Date.now()}`,
+            id: generateUUID(),
             description: description.trim(),
             amount: finalAmount,
             category,
@@ -108,11 +113,17 @@ export default function ExpensesScreen({ navigation }) {
         const installmentAmount = (item.total_cost || item.total_amount) / total;
 
         const confirmPayment = async () => {
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
             const newExpense = {
-                id: `local-pay-${Date.now()}`,
-                description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name}`,
+                id: generateUUID(),
+                description: `Cuota ${currentPaid + 1}/${total}: ${item.provider_name} (Pedido #${item.id.slice(0, 4)})`,
                 amount: installmentAmount,
                 category: 'Pago de Deuda',
+                details: item.id, // Vínculo con el pedido de proveedor
                 created_at: new Date().toISOString()
             };
 
@@ -311,7 +322,16 @@ export default function ExpensesScreen({ navigation }) {
             </View>
 
             {/* Floating Action Button */}
-            <TouchableOpacity style={styles.fab} onPress={() => setAdding(true)}>
+            <TouchableOpacity 
+                style={styles.fab} 
+                onPress={() => {
+                    if (viewMode === 'purchases') {
+                        navigation.navigate('NewSupplierOrder');
+                    } else {
+                        setAdding(true);
+                    }
+                }}
+            >
                 <LinearGradient colors={['#d4af37', '#b8860b']} style={styles.fabGradient}>
                     <MaterialCommunityIcons name="plus" size={32} color="#000" />
                 </LinearGradient>

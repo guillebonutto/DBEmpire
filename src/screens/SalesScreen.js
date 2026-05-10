@@ -49,7 +49,7 @@ export default function SalesScreen({ navigation }) {
                     
                     <div style="margin-bottom: 30px; font-size: 14px; line-height: 1.6;">
                         <p style="margin: 2px 0;"><strong>Fecha:</strong> ${new Date(saleData.created_at).toLocaleString()}</p>
-                        <p style="margin: 2px 0;"><strong>Operación:</strong> #SC-${saleData.id.slice(0, 8).toUpperCase()}</p>
+                        <p style="margin: 2px 0;"><strong>Operación:</strong> #SC-${(saleData.id || '????????').slice(0, 8).toUpperCase()}</p>
                         <p style="margin: 2px 0;"><strong>Cliente:</strong> ${saleData.clients?.name || 'Anónimo'}</p>
                     </div>
 
@@ -143,7 +143,7 @@ export default function SalesScreen({ navigation }) {
         const lowQuery = searchQuery.toLowerCase();
         return list.filter(sale => {
             const clientName = (sale.clients?.name || 'anónimo').toLowerCase();
-            const saleIdShort = sale.id.slice(0, 4).toLowerCase();
+            const saleIdShort = (sale.id || '').slice(0, 4).toLowerCase();
             return clientName.includes(lowQuery) || saleIdShort.includes(lowQuery);
         });
     }, [searchQuery, recentSales, viewType]);
@@ -305,7 +305,7 @@ export default function SalesScreen({ navigation }) {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <View style={{ flex: 1 }}>
                         <View style={styles.saleHeader}>
-                            <Text style={styles.saleId}>Venta #{item.id.slice(0, 4)}</Text>
+                            <Text style={styles.saleId}>Venta #{(item.id || '????').slice(0, 4)}</Text>
                             {isBudget && <View style={styles.budgetBadge}><Text style={styles.budgetText}>PRESUPUESTO</Text></View>}
                             {isPending && <View style={[styles.budgetBadge, { backgroundColor: '#ff4444' }]}><Text style={styles.budgetText}>DEUDA</Text></View>}
                         </View>
@@ -316,6 +316,13 @@ export default function SalesScreen({ navigation }) {
                         </Text>
 
                         {item.profiles && <Text style={styles.sellerName}>Por: {item.profiles.full_name}</Text>}
+
+                        {/* Mostrar Fecha de Pago si fue una deuda cobrada posteriormente */}
+                        {item.notes && item.notes.includes('[PAGADO:') && (
+                            <Text style={[styles.saleDate, { color: '#2ecc71', marginTop: 4, fontWeight: 'bold' }]}>
+                                💰 Pagado: {new Date(item.notes.match(/\[PAGADO:\s*(.*?)\]/)[1]).toLocaleDateString()} - {new Date(item.notes.match(/\[PAGADO:\s*(.*?)\]/)[1]).toLocaleTimeString()}
+                            </Text>
+                        )}
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                         <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${item.total_amount}</Text>
@@ -365,7 +372,45 @@ export default function SalesScreen({ navigation }) {
                                     disabled={loading}
                                 >
                                     <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
-                                    <Text style={styles.convertBtnText}>COBRAR AHORA</Text>
+                                    <Text style={styles.convertBtnText}>COBRAR PRESUPUESTO</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {isPending && (
+                                <TouchableOpacity
+                                    style={styles.convertBtn}
+                                    onPress={async () => {
+                                        Alert.alert(
+                                            'Cobrar Deuda',
+                                            '¿Confirmas que el cliente saldó esta deuda? Se marcará como completada manteniendo la fecha original de entrega del producto.',
+                                            [
+                                                { text: 'Cancelar', style: 'cancel' },
+                                                {
+                                                    text: 'SÍ, COBRAR',
+                                                    onPress: async () => {
+                                                        try {
+                                                            const paymentDateStr = `[PAGADO: ${new Date().toISOString()}]`;
+                                                            const newNotes = item.notes ? `${item.notes}\n${paymentDateStr}` : paymentDateStr;
+
+                                                            const { error: updateError } = await supabase
+                                                                .from('sales')
+                                                                .update({ status: 'completed', notes: newNotes })
+                                                                .eq('id', item.id);
+                                                            if (updateError) throw updateError;
+                                                            Alert.alert('✅ Pagado', 'Deuda saldada correctamente.');
+                                                            fetchSalesData();
+                                                        } catch (err) {
+                                                            Alert.alert('Error', 'No se pudo actualizar la deuda.');
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        );
+                                    }}
+                                    disabled={loading}
+                                >
+                                    <MaterialCommunityIcons name="cash-check" size={14} color="#000" />
+                                    <Text style={styles.convertBtnText}>COBRAR DEUDA</Text>
                                 </TouchableOpacity>
                             )}
 

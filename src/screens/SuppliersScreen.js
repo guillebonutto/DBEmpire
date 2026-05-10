@@ -28,7 +28,7 @@ export default function SuppliersScreen({ navigation }) {
     const filteredSuppliers = useMemo(() => {
         if (!searchQuery) return suppliers;
         const low = searchQuery.toLowerCase();
-        return suppliers.filter(s =>
+        return (suppliers || []).filter(s =>
             s.name.toLowerCase().includes(low) ||
             (s.category && s.category.toLowerCase().includes(low))
         );
@@ -43,8 +43,12 @@ export default function SuppliersScreen({ navigation }) {
                 await SyncService.queueAction('supplier', updatedSupplier, {}, 'UPDATE');
                 // Local state will be updated by SyncService (optimistic)
             } else {
+                const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                    const r = Math.random() * 16 | 0;
+                    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                });
                 const newSupplier = {
-                    id: `local-${Date.now()}`,
+                    id: generateUUID(),
                     ...formData,
                     active: true,
                     created_at: new Date().toISOString()
@@ -139,7 +143,7 @@ export default function SuppliersScreen({ navigation }) {
                 </View>
             </View>
 
-            {loadingSuppliers && suppliers.length === 0 ? (
+            {loadingSuppliers && (!suppliers || suppliers.length === 0) ? (
                 <ActivityIndicator size="large" color="#d4af37" style={{ marginTop: 50 }} />
             ) : (
                 <FlatList

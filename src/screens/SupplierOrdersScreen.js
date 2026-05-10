@@ -68,7 +68,10 @@ export default function SupplierOrdersScreen({ navigation }) {
         const isPaidOff = paidInstallments >= totalInstallments;
 
         return (
-            <View style={[styles.card, isPaidOff && { borderColor: '#2ecc71' }]}>
+            <TouchableOpacity 
+                style={[styles.card, isPaidOff && { borderColor: '#2ecc71' }]}
+                onPress={() => navigation.navigate('NewSupplierOrder', { orderToEdit: item })}
+            >
                 <View style={styles.cardHeader}>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <MaterialCommunityIcons name="cube-send" size={24} color="#d4af37" style={{ marginRight: 10 }} />
@@ -104,7 +107,7 @@ export default function SupplierOrdersScreen({ navigation }) {
                         <Text style={styles.trackBtnTextFixed}>RASTREAR ENVÍO</Text>
                     </TouchableOpacity>
                 )}
-            </View>
+            </TouchableOpacity>
         );
     }, [allItems]);
 
