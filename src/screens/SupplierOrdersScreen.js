@@ -20,15 +20,47 @@ export default function SupplierOrdersScreen({ navigation }) {
     const [payNote, setPayNote] = useState('');
 
     useEffect(() => {
-        // Find orders with status 'received' that might need the Wizard (items without product_id)
-        const receivedIds = orders.filter(o => o.status === 'received').map(o => o.id);
         const pending = orders.filter(order => {
             if (order.status !== 'received') return false;
             const items = allItems.filter(i => i.supplier_order_id === order.id);
+            // Only need wizard if at least one item is NOT linked to a product_id
             return items.some(i => !i.product_id);
         });
         setPendingWizardOrders(pending);
     }, [orders, allItems]);
+
+    const handleMarkReceived = async (order) => {
+        try {
+            const { error } = await supabase
+                .from('supplier_orders')
+                .update({ status: 'received' })
+                .eq('id', order.id);
+
+            if (error) throw error;
+            
+            Alert.alert('📦 Recibido', 'El pedido fue marcado como recibido. ¿Querés vincular los productos al stock ahora?', [
+                { text: 'Más tarde', style: 'cancel' },
+                { text: 'SÍ, VINCULAR', onPress: () => handleStartWizard(order) }
+            ]);
+            
+            fetchAllData(true);
+        } catch (err) {
+            Alert.alert('Error', 'No se pudo actualizar el estado.');
+        }
+    };
+
+    const handleStartWizard = (order) => {
+        const itemsToLink = allItems.filter(i => i.supplier_order_id === order.id && !i.product_id);
+        if (itemsToLink.length === 0) {
+            Alert.alert('Listo', 'Todos los productos de este pedido ya están vinculados.');
+            return;
+        }
+
+        navigation.navigate('AddProduct', {
+            importQueue: itemsToLink,
+            importIndex: 0
+        });
+    };
 
     const handleTrack = (order) => {
         const tracking = order.tracking_number;
@@ -96,9 +128,20 @@ export default function SupplierOrdersScreen({ navigation }) {
                     </View>
                 </View>
 
-                {item.status === 'consigned' && (
-                    <TouchableOpacity style={styles.payConsignBtn} onPress={() => handleOpenPayModal(item)}>
-                        <Text style={styles.payConsignBtnText}>💸 PAGAR CONSIGNACIÓN</Text>
+                {item.status !== 'received' && (
+                    <TouchableOpacity 
+                        style={[styles.receiveBtn, item.status === 'consigned' && { backgroundColor: '#2ecc71' }]} 
+                        onPress={() => handleMarkReceived(item)}
+                    >
+                        <MaterialCommunityIcons name="package-variant" size={20} color="#000" />
+                        <Text style={styles.receiveBtnText}>MARCAR COMO RECIBIDO</Text>
+                    </TouchableOpacity>
+                )}
+
+                {item.status === 'received' && allItems.filter(i => i.supplier_order_id === item.id && !i.product_id).length > 0 && (
+                    <TouchableOpacity style={styles.wizardBtn} onPress={() => handleStartWizard(item)}>
+                        <MaterialCommunityIcons name="auto-fix" size={20} color="#000" />
+                        <Text style={styles.wizardBtnText}>✨ VINCULAR AL STOCK (WIZARD)</Text>
                     </TouchableOpacity>
                 )}
                 
@@ -174,6 +217,10 @@ const styles = StyleSheet.create({
     summaryValue: { color: '#fff', fontWeight: 'bold' },
     payConsignBtn: { backgroundColor: '#d4af37', padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 10 },
     payConsignBtnText: { fontWeight: '900', color: '#000' },
+    receiveBtn: { backgroundColor: '#d4af37', padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 10, flexDirection: 'row', justifyContent: 'center', gap: 10 },
+    receiveBtnText: { fontWeight: '900', color: '#000', fontSize: 12 },
+    wizardBtn: { backgroundColor: '#9b59b6', padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 10, flexDirection: 'row', justifyContent: 'center', gap: 10 },
+    wizardBtnText: { fontWeight: '900', color: '#fff', fontSize: 12 },
     trackBtnFixed: { backgroundColor: '#222', padding: 12, borderRadius: 10, alignItems: 'center', marginTop: 10, borderWidth: 1, borderColor: '#333' },
     trackBtnTextFixed: { color: '#d4af37', fontWeight: 'bold' },
     emptyText: { color: '#444', textAlign: 'center', marginTop: 50 },

@@ -63,12 +63,12 @@ const ProductModal = ({
                         const inCartItem = cart.find(c => c.id === item.id);
                         const inCartQty = inCartItem ? inCartItem.qty : 0;
                         
-                        // Use Córdoba stock for everyone except admin
-                        const baseStock = userRole === 'admin' ? (item.stock_local || item.current_stock || 0) : (item.stock_cordoba || 0);
+                        // Use Córdoba stock for everyone except admin/leader
+                        const baseStock = (userRole === 'admin' || userRole === 'leader') ? (item.stock_local || item.current_stock || 0) : (item.stock_cordoba || 0);
                         const available = baseStock - inCartQty;
                         
                         const isExpanded = expandedProductId === item.id;
-                        const displayPrice = userRole === 'admin' ? item.sale_price : (item.sale_price_cordoba || item.sale_price);
+                        const displayPrice = (userRole === 'admin' || userRole === 'leader') ? item.sale_price : (item.sale_price_cordoba || item.sale_price);
 
                         // Calculate detailed availability if variant is selected
                         const selectedVariant = isExpanded && selectedColor ? item.variants?.find(v => v.color === selectedColor) : null;
@@ -84,7 +84,7 @@ const ProductModal = ({
                                         <View>
                                             <Text style={styles.rowTitle}>{item.name}</Text>
                                             <Text style={[styles.rowSubtitle, { color: available <= 0 ? '#e74c3c' : '#888' }]}>
-                                                Disp: {available} {userRole !== 'admin' && <Text style={{ fontSize: 9, color: '#d4af37' }}>(STOCK CBA)</Text>}
+                                                Disp: {available} {!(userRole === 'admin' || userRole === 'leader') && <Text style={{ fontSize: 9, color: '#d4af37' }}>(STOCK CBA)</Text>}
                                             </Text>
                                         </View>
                                         <Text style={styles.rowPrice}>${displayPrice}</Text>

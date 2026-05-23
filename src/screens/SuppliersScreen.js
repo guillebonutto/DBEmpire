@@ -26,11 +26,12 @@ export default function SuppliersScreen({ navigation }) {
     }, []);
 
     const filteredSuppliers = useMemo(() => {
-        if (!searchQuery) return suppliers;
+        const list = suppliers || [];
+        if (!searchQuery) return list;
         const low = searchQuery.toLowerCase();
-        return (suppliers || []).filter(s =>
-            s.name.toLowerCase().includes(low) ||
-            (s.category && s.category.toLowerCase().includes(low))
+        return list.filter(s =>
+            (s?.name && s.name.toLowerCase().includes(low)) ||
+            (s?.category && s.category.toLowerCase().includes(low))
         );
     }, [searchQuery, suppliers]);
 
@@ -61,7 +62,7 @@ export default function SuppliersScreen({ navigation }) {
             setFormData({ name: '', category: '', phone: '', email: '', notes: '' });
             
             // Re-fetch local to show changes
-            useSupplierStore.getState().initStore();
+            await useSupplierStore.getState().initStore(true);
 
             if (Platform.OS === 'web') alert(`✅ Éxito: ${editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado'}`);
             else Alert.alert('✅ Éxito', editingSupplier ? 'Proveedor actualizado' : 'Proveedor agregado');
@@ -75,7 +76,7 @@ export default function SuppliersScreen({ navigation }) {
         const performDelete = async () => {
             try {
                 await SyncService.queueAction('supplier', { id: supplier.id }, {}, 'DELETE');
-                useSupplierStore.getState().initStore();
+                await useSupplierStore.getState().initStore(true);
             } catch (err) {
                 if (Platform.OS === 'web') alert('Error: No se puede eliminar.');
                 else Alert.alert('Error', 'No se puede eliminar.');
@@ -150,6 +151,13 @@ export default function SuppliersScreen({ navigation }) {
                     data={filteredSuppliers}
                     keyExtractor={(item) => item.id}
                     contentContainerStyle={styles.listContent}
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <MaterialCommunityIcons name="factory" size={60} color="#333" />
+                            <Text style={styles.emptyText}>No hay proveedores registrados</Text>
+                            <Text style={styles.emptySubtext}>Agregá un proveedor tocando el botón "+" de arriba</Text>
+                        </View>
+                    }
                     renderItem={({ item }) => (
                         <View style={styles.card}>
                             <TouchableOpacity
@@ -279,5 +287,24 @@ const styles = StyleSheet.create({
     cancelBtn: { flex: 1, paddingVertical: 15, borderRadius: 12, backgroundColor: '#222', alignItems: 'center' },
     cancelBtnText: { color: '#fff', fontWeight: 'bold' },
     saveBtn: { flex: 1, paddingVertical: 15, borderRadius: 12, backgroundColor: '#d4af37', alignItems: 'center' },
-    saveBtnText: { color: '#000', fontWeight: 'bold' }
+    saveBtnText: { color: '#000', fontWeight: 'bold' },
+    emptyContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 80,
+        paddingHorizontal: 30,
+    },
+    emptyText: {
+        color: '#d4af37',
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginTop: 15,
+        textAlign: 'center',
+    },
+    emptySubtext: {
+        color: '#666',
+        fontSize: 12,
+        marginTop: 8,
+        textAlign: 'center',
+    },
 });

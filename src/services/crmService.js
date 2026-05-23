@@ -14,6 +14,7 @@ export const CRMService = {
             const productName = product.name.trim(); // e.g. "Nike Air"
             const searchTerms = productName.split(' ').filter(t => t.length > 3);
 
+            // Apply filters: Same ID OR Similar Name (using ilike for broad match)
             let query = supabase
                 .from('sale_items')
                 .select(`
@@ -26,9 +27,17 @@ export const CRMService = {
                     )
                 `);
 
-            // Apply filters: Same ID OR Similar Name
-            // For Simplicity in JS: fetch and then filter or use or() in Supabase
-            const { data, error } = await query;
+            if (product.id && !product.id.toString().includes('temp')) {
+                // If it's an existing product, search for previous buyers of this specific ID
+                query = query.or(`product_id.eq.${product.id},product_name.ilike.%${searchTerms[0] || ''}%`);
+            } else if (searchTerms.length > 0) {
+                // If new product, search by name similarity
+                query = query.ilike('product_name', `%${searchTerms[0]}%`);
+            } else {
+                return [];
+            }
+
+            const { data, error } = await query.limit(100);
             if (error) throw error;
 
             if (!data) return [];

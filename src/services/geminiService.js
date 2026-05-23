@@ -1,7 +1,7 @@
 
 import { supabase } from './supabase';
 
-const handleGeminiRequest = async (prompt, imageBase64 = null) => {
+const handleGeminiRequest = async (prompt, imageBase64 = null, jsonMode = false, responseSchema = null) => {
     try {
         // 1. Fetch API Key from Settings
         const { data: settingsData, error } = await supabase
@@ -15,7 +15,7 @@ const handleGeminiRequest = async (prompt, imageBase64 = null) => {
         }
 
         const apiKey = settingsData.value;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
 
         // Construct payload
         const contents = [
@@ -36,6 +36,17 @@ const handleGeminiRequest = async (prompt, imageBase64 = null) => {
             });
         }
 
+        const body = { contents };
+
+        if (jsonMode) {
+            body.generationConfig = {
+                responseMimeType: "application/json"
+            };
+            if (responseSchema) {
+                body.generationConfig.responseSchema = responseSchema;
+            }
+        }
+
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -43,7 +54,7 @@ const handleGeminiRequest = async (prompt, imageBase64 = null) => {
                 // Adding Accept for better browser compatibility
                 'Accept': 'application/json'
             },
-            body: JSON.stringify({ contents })
+            body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -96,16 +107,19 @@ export const GeminiService = {
     },
 
     analyzeReceipt: async (imageBase64) => {
-        const prompt = `Analiza esta imagen de recibo/factura y extrae los siguientes datos en formato JSON puro (sin markdown, solo el objeto JSON):
-        {
-          "total": number (el monto total pagado),
-          "date": string (fecha en formato YYYY-MM-DD, si no hay año asume el actual),
-          "vendor": string (nombre del comercio),
-          "items": string (descripción resumida de lo comprado, ej: "Cuadernos y lapiceras")
-        }
-        Si no encuentras un dato, usa null.`;
+        const prompt = `Analiza esta imagen de recibo/factura y extrae los datos del total, la fecha, el comercio y los items comprados.`;
 
-        const result = await handleGeminiRequest(prompt, imageBase64);
+        const schema = {
+            type: "OBJECT",
+            properties: {
+                total: { type: "NUMBER", description: "el monto total pagado, o null si no se encuentra" },
+                date: { type: "STRING", description: "fecha en formato YYYY-MM-DD, o null si no se encuentra" },
+                vendor: { type: "STRING", description: "nombre del comercio, o null si no se encuentra" },
+                items: { type: "STRING", description: "descripción resumida de lo comprado, ej: 'Cuadernos y lapiceras', o null si no se encuentra" }
+            }
+        };
+
+        const result = await handleGeminiRequest(prompt, imageBase64, true, schema);
 
         // Clean result if it comes with markdown code blocks
         const cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();

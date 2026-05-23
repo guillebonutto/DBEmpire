@@ -308,7 +308,7 @@ export default function AdminScreen({ navigation }) {
             const val = parseFloat(e.amount) || 0;
             const isDebtPayment = e.category === 'Pago de Deuda';
             const desc = (e.description || '').toLowerCase();
-            const isInitialCreditStock = desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado');
+            const isInitialCreditStock = desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado') || desc.startsWith('inventario:');
 
             if (eMs < startMs) {
                 if (!isInitialCreditStock) prevExpCaja += val;
@@ -316,27 +316,6 @@ export default function AdminScreen({ navigation }) {
                 if (!isDebtPayment) prevExpROI += val;
             } else if (!endMs || eMs <= endMs) {
                 currentExpenses.push(e);
-            }
-        }
-
-        // Add supplier orders as initial investments for ROI
-        for (const order of (supplierOrders || [])) {
-            const oMs = new Date(order.created_at).getTime();
-            const val = parseFloat(order.total_cost) || 0;
-            // Only include orders created after April 1st to avoid double-counting historical manual entries
-            if (oMs > new Date('2026-04-01T00:00:00Z').getTime()) {
-                if (oMs < startMs) {
-                    prevExpROI += val;
-                } else if (!endMs || oMs <= endMs) {
-                    currentExpenses.push({
-                        id: order.id,
-                        created_at: order.created_at,
-                        amount: val,
-                        category: 'Compra de Mercadería',
-                        description: `Pedido de Stock: ${order.provider_name}`,
-                        isPurchase: true
-                    });
-                }
             }
         }
 
@@ -414,7 +393,12 @@ export default function AdminScreen({ navigation }) {
             isDebtPayment(e) ? sum + (parseFloat(e.amount) || 0) : sum, 0);
         const bankYields        = currentExpenses.reduce((sum, e) =>
             isBankYield(e) ? sum + (parseFloat(e.amount) || 0) : sum, 0);
-        const totalExpensesCaja = operatingExpenses + debtPayments; // yields are income, not expense
+        const operatingExpensesForCaja = currentExpenses.reduce((sum, e) => {
+            const isInitialCreditStock = (e.description || '').toLowerCase().includes('crédito') || (e.description || '').toLowerCase().includes('consolidado') || (e.description || '').toLowerCase().startsWith('inventario:');
+            return isDebtPayment(e) || isBankYield(e) || isInitialCreditStock ? sum : sum + (parseFloat(e.amount) || 0);
+        }, 0);
+            
+        const totalExpensesCaja = operatingExpensesForCaja + debtPayments; // yields are income, not expense
 
         // ROI balance: histórico (ingresos - gastos incl. stock) + current ingresos - current operatingExp
         const netCaja   = histBalCaja + totalSales + bankYields - totalExpensesCaja;
@@ -751,6 +735,21 @@ export default function AdminScreen({ navigation }) {
                 )}
 
                 {/* ── Margin & Efficiency row ─────────────────────────────── */}
+                <TouchableOpacity
+                    style={{ marginHorizontal: 15, marginBottom: 15, backgroundColor: '#0a0a0a', borderRadius: 16, padding: 18, borderWidth: 1, borderColor: '#d4af37', flexDirection: 'row', alignItems: 'center', gap: 15 }}
+                    onPress={() => navigation.navigate('Clientes')}
+                >
+                    <View style={{ width: 45, height: 45, borderRadius: 12, backgroundColor: '#d4af3720', justifyContent: 'center', alignItems: 'center' }}>
+                        <MaterialCommunityIcons name="account-group" size={28} color="#d4af37" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#d4af37', fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>GESTIÓN DE CLIENTES</Text>
+                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 2 }}>Base de Datos CRM</Text>
+                        <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>Fidelización, deudas y perfiles VIP</Text>
+                    </View>
+                    <MaterialCommunityIcons name="chevron-right" size={24} color="#d4af37" />
+                </TouchableOpacity>
+
                 {stats.totalSales > 0 && (
                     <View style={[styles.statsGrid, { marginTop: 5, marginBottom: 5 }]}>
                         <View style={[styles.statCard, { borderColor: stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c' }]}>
@@ -791,6 +790,11 @@ export default function AdminScreen({ navigation }) {
                             <Text style={styles.quickAccessTitle}>Inventario</Text>
                             <Text style={styles.quickAccessSubtitle}>Stock</Text>
                         </TouchableOpacity>
+                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Clientes')}>
+                            <MaterialCommunityIcons name="account-group" size={32} color="#d4af37" />
+                            <Text style={styles.quickAccessTitle}>Clientes</Text>
+                            <Text style={styles.quickAccessSubtitle}>CRM / VIP</Text>
+                        </TouchableOpacity>
                     </View>
 
                     <Text style={styles.categoryLabel}>💰 Gestión Financiera</Text>
@@ -824,7 +828,7 @@ export default function AdminScreen({ navigation }) {
                             <Text style={styles.quickAccessTitle}>Analíticas</Text>
                             <Text style={styles.quickAccessSubtitle}>Generales</Text>
                         </TouchableOpacity>
-                        {userRole === 'admin' && (
+                        {(userRole === 'admin' || userRole === 'leader') && (
                             <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ProductTester')}>
                                 <MaterialCommunityIcons name="flask" size={32} color="#e74c3c" />
                                 <Text style={styles.quickAccessTitle}>Testing</Text>
@@ -841,7 +845,7 @@ export default function AdminScreen({ navigation }) {
                             <Text style={styles.quickAccessTitle}>Promociones</Text>
                             <Text style={styles.quickAccessSubtitle}>Activas</Text>
                         </TouchableOpacity>
-                        {userRole === 'admin' && (
+                        {(userRole === 'admin' || userRole === 'leader') && (
                             <TouchableOpacity style={[styles.quickAccessCard, { borderColor: '#d4af37', borderWidth: 1.5 }]} onPress={() => navigation.navigate('AIDashboard')}>
                                 <MaterialCommunityIcons name="brain" size={32} color="#d4af37" />
                                 <Text style={[styles.quickAccessTitle, { color: '#d4af37' }]}>Empire AI</Text>
@@ -871,7 +875,7 @@ export default function AdminScreen({ navigation }) {
                 </View>
 
                 {/* AI Performance Section - ADMIN ONLY */}
-                {userRole === 'admin' && (
+                {(userRole === 'admin' || userRole === 'leader') && (
                     <View style={styles.aiPerformanceSection}>
                         <Text style={styles.sectionTitle}>RENDIMIENTO EMPIRE AI</Text>
                         <View style={styles.aiStatsGrid}>

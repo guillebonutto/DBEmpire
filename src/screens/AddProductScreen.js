@@ -24,7 +24,7 @@ export default function AddProductScreen({ navigation, route }) {
     useEffect(() => {
         const checkRole = async () => {
             const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
+            if (role !== 'admin' && role !== 'leader') {
                 Alert.alert('Acceso Denegado', 'Solo los Líderes pueden agregar productos.');
                 navigation.replace('Main');
             }
@@ -86,7 +86,8 @@ export default function AddProductScreen({ navigation, route }) {
         stock_cordoba: '',
         defect_notes: '',
         barcode: route.params?.scannedBarcode || '',
-        is_individual: false
+        is_individual: false,
+        register_expense: false
     });
 
 
@@ -316,53 +317,98 @@ export default function AddProductScreen({ navigation, route }) {
         Alert.alert('💡 Precio Promediado', `Se calculó un costo promedio de $${ppp.toFixed(2)} basado en las compras seleccionadas.`);
     };
 
-    // Wizard Mode: Pre-fill from Import Queue
+    // Unified Form Initialization (Handles direct edits, wizard creations, and wizard linked stock increments)
     useEffect(() => {
-        if (queueItem) {
-            setFormData(prev => ({
-                ...prev,
-                name: queueItem.name || queueItem.temp_product_name || productToEdit?.name || prev.name,
-                cost_price: queueItem.cost?.toString() || queueItem.cost_per_unit?.toString() || prev.cost_price,
-                stock_local: queueItem.quantity?.toString() || prev.stock_local,
-                provider: queueItem.provider || queueItem.supplier || queueItem.supplier_orders?.provider_name || prev.provider
-            }));
+        let name = '';
+        let description = '';
+        let provider = '';
+        let cost_price = '';
+        let profit_margin_percent = '';
+        let sale_price = '';
+        let sale_price_cordoba = '';
+        let stock_local = '';
+        let stock_cordoba = '';
+        let defect_notes = '';
+        let barcode = '';
+        let is_individual = false;
+        let internet_cost = '';
+        let electricity_cost = '';
+        let image_url = null;
+        let loadedVariants = [];
 
-            if (queueItem.color) {
-                setVariants([{ color: queueItem.color, stock: queueItem.quantity?.toString() || "" }]);
-            }
-        }
-    }, [queueItem]);
-
-    // Load data if editing (existing product)
-    useEffect(() => {
+        // 1. Load existing product data if editing or linking
         if (productToEdit) {
-            try {
-                setFormData({
-                    name: productToEdit.name || '',
-                    description: productToEdit.description || '',
-                    provider: productToEdit.provider || '',
-                    cost_price: productToEdit.cost_price?.toString() || '',
-                    profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
-                    sale_price: productToEdit.sale_price?.toString() || '',
-                    sale_price_cordoba: (productToEdit.sale_price_cordoba || productToEdit.sale_price)?.toString() || '',
-                    stock_local: productToEdit.stock_local?.toString() || '',
-                    stock_cordoba: productToEdit.stock_cordoba?.toString() || '',
-                    defect_notes: productToEdit.defect_notes || '',
-                    barcode: productToEdit.barcode || '',
-                    is_individual: !!productToEdit.is_individual
-                });
-                setOverheadInternet(productToEdit.internet_cost?.toString() || '');
-                setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
-                setVariants(Array.isArray(productToEdit.variants) ? productToEdit.variants : []);
-                if (productToEdit.image_url) {
-                    setImage(productToEdit.image_url);
+            name = productToEdit.name || '';
+            description = productToEdit.description || '';
+            provider = productToEdit.provider || '';
+            cost_price = productToEdit.cost_price?.toString() || '';
+            profit_margin_percent = productToEdit.profit_margin_percent?.toString() || '';
+            sale_price = productToEdit.sale_price?.toString() || '';
+            sale_price_cordoba = (productToEdit.sale_price_cordoba || productToEdit.sale_price)?.toString() || '';
+            stock_local = productToEdit.stock_local?.toString() || '0';
+            stock_cordoba = productToEdit.stock_cordoba?.toString() || '0';
+            defect_notes = productToEdit.defect_notes || '';
+            barcode = productToEdit.barcode || '';
+            is_individual = !!productToEdit.is_individual;
+            internet_cost = productToEdit.internet_cost?.toString() || '';
+            electricity_cost = productToEdit.electricity_cost?.toString() || '';
+            image_url = productToEdit.image_url || null;
+            loadedVariants = Array.isArray(productToEdit.variants) ? JSON.parse(JSON.stringify(productToEdit.variants)) : [];
+        }
+
+        // 2. Adjust with wizard queue item (purchase order incoming stock) if present
+        if (queueItem) {
+            name = queueItem.name || queueItem.temp_product_name || name;
+            cost_price = queueItem.cost?.toString() || queueItem.cost_per_unit?.toString() || cost_price;
+            provider = queueItem.provider || queueItem.supplier || queueItem.supplier_orders?.provider_name || provider;
+
+            const incomingQty = parseInt(queueItem.quantity) || 0;
+
+            if (productToEdit) {
+                // Wizard linking to existing product -> ADD incoming stock to old stock
+                stock_local = ((parseInt(productToEdit.stock_local) || 0) + incomingQty).toString();
+
+                if (queueItem.color) {
+                    const cleanColor = queueItem.color.trim();
+                    const existingVarIdx = loadedVariants.findIndex(v => v.color?.toLowerCase() === cleanColor.toLowerCase());
+                    if (existingVarIdx >= 0) {
+                        const currentVarStock = parseInt(loadedVariants[existingVarIdx].stock) || 0;
+                        loadedVariants[existingVarIdx].stock = (currentVarStock + incomingQty).toString();
+                    } else {
+                        loadedVariants.push({ color: cleanColor, stock: incomingQty.toString() });
+                    }
                 }
-            } catch (err) {
-                console.error('Error initializing product data:', err);
-                Alert.alert('Error', 'Hubo un problema al cargar los datos del producto.');
+            } else {
+                // Wizard creating a brand new product -> Prefill quantity directly
+                stock_local = incomingQty.toString();
+                if (queueItem.color) {
+                    loadedVariants = [{ color: queueItem.color.trim(), stock: incomingQty.toString() }];
+                }
             }
         }
-    }, [productToEdit]);
+
+        // Set to state
+        setFormData({
+            name,
+            description,
+            provider,
+            cost_price,
+            profit_margin_percent,
+            sale_price,
+            sale_price_cordoba,
+            stock_local,
+            stock_cordoba,
+            defect_notes,
+            barcode,
+            is_individual
+        });
+        setOverheadInternet(internet_cost);
+        setOverheadElectricity(electricity_cost);
+        setVariants(loadedVariants);
+        if (image_url) {
+            setImage(image_url);
+        }
+    }, [productToEdit, queueItem]);
 
     const addVariant = () => {
         setVariants([...variants, { color: '', stock: '' }]);
@@ -648,9 +694,8 @@ export default function AddProductScreen({ navigation, route }) {
                 }
             }
 
-            // --- AUTO EXPENSE & ORDER GENERATION ---
-            // Only runs when receiving stock from Supplier Orders (Wizard Mode), never on manual edits.
-            if (stockDifference > 0 && costPrice > 0 && isWizardMode && !isBundle) {
+            // 1. Auto-Expense Logic: Only runs on manual stock increases, NOT when linking an existing Supplier Order.
+            if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle && formData.register_expense) {
                 try {
                     const oldVariants = Array.isArray(productToEdit?.variants) ? productToEdit.variants : [];
                     const newVariants = variants || [];
@@ -723,22 +768,27 @@ export default function AddProductScreen({ navigation, route }) {
             }
             // -------------------------------
 
-            if (!isLiquidation) {
+            if (!isLiquidation && !isWizardMode) {
                 // NOTE: Do NOT show 'guardado' Alert here if CRM modal will open.
                 // The modal itself serves as confirmation. We show it only if no clients found.
                 if (productId) {
-                    const interested = await CRMService.findInterestedClients({
-                        id: productId,
-                        name: formData.name
-                    });
+                    try {
+                        const interested = await CRMService.findInterestedClients({
+                            id: productId,
+                            name: formData.name
+                        });
 
-                    if (interested.length > 0) {
-                        // Show CRM modal — navigation happens when user dismisses it
-                        setPotentialClients(interested);
-                        setShowMatchModal(true);
-                        // Navigation is handled by the modal's close/dismiss action
-                        return; // Early return — don't navigate yet
-                    } else {
+                        if (interested.length > 0) {
+                            // Show CRM modal — navigation happens when user dismisses it
+                            setPotentialClients(interested);
+                            setShowMatchModal(true);
+                            setLoading(false); // Reset loading so modal is interactive
+                            return; // Early return — don't navigate yet
+                        } else {
+                            Alert.alert('✅ Éxito', 'Producto guardado correctamente.');
+                        }
+                    } catch (crmErr) {
+                        console.log('CRM Logic error (non-critical):', crmErr);
                         Alert.alert('✅ Éxito', 'Producto guardado correctamente.');
                     }
                 }
@@ -1452,7 +1502,21 @@ export default function AddProductScreen({ navigation, route }) {
                             style={styles.crmCloseBtn}
                             onPress={() => {
                                 setShowMatchModal(false);
-                                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                                // If we were in wizard mode (though bypassed above, keeping as safety), 
+                                // we should handle it here too.
+                                if (route.params?.importQueue && productId) {
+                                    const nextIndex = route.params.importIndex + 1;
+                                    if (nextIndex < route.params.importQueue.length) {
+                                        navigation.replace('AddProduct', {
+                                            importQueue: route.params.importQueue,
+                                            importIndex: nextIndex
+                                        });
+                                    } else {
+                                        navigation.navigate('SupplierOrders');
+                                    }
+                                } else {
+                                    navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
+                                }
                             }}
                         >
                             <Text style={styles.crmCloseBtnText}>LISTO, CONTINUAR</Text>

@@ -10,5 +10,6 @@ config.transformer.getTransformOptions = async () => ({
 });
 
 config.resolver.sourceExts = [...config.resolver.sourceExts, 'mjs', 'cjs'];
+config.resolver.assetExts.push('wasm');
 
 module.exports = config;

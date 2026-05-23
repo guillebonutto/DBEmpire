@@ -125,9 +125,14 @@ export default function ClientsScreen({ navigation }) {
             <StatusBar barStyle="light-content" />
             <View style={styles.header}>
                 <Text style={styles.title}>CLIENTES</Text>
-                <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
-                    <Text style={styles.addButtonText}>+ AGREGAR</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <TouchableOpacity style={[styles.addButton, { backgroundColor: '#333' }]} onPress={() => navigation.navigate('Deudas')}>
+                        <Text style={[styles.addButtonText, { color: '#d4af37' }]}>DEUDAS</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
+                        <Text style={styles.addButtonText}>+ AGREGAR</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Search Bar */}

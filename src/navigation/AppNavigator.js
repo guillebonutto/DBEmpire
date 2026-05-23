@@ -2,10 +2,11 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { View, Platform } from 'react-native';
+import { View, Platform, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useState, useEffect } from 'react';
+import LiquidGlassTabBar from '../components/LiquidGlassTabBar';
 
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -45,11 +46,7 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
-    const insets = useSafeAreaInsets();
     const [userRole, setUserRole] = useState('seller');
-    const isAndroid = Platform.OS === 'android';
-    const bottomPadding = insets.bottom > 0 ? insets.bottom : (isAndroid ? 15 : 10);
-    const tabBarHeight = 65 + (insets.bottom > 0 ? insets.bottom : (isAndroid ? 10 : 0));
 
     useEffect(() => {
         const getRole = async () => {
@@ -62,47 +59,10 @@ function MainTabs() {
     return (
         <Tab.Navigator
             initialRouteName="Home"
-            screenOptions={({ route }) => ({
+            tabBar={(props) => <LiquidGlassTabBar {...props} />}
+            screenOptions={{
                 headerShown: false,
-                tabBarStyle: {
-                    backgroundColor: '#000',
-                    borderTopColor: '#333',
-                    height: tabBarHeight,
-                    paddingBottom: bottomPadding,
-                    paddingTop: 10,
-                    elevation: 0,
-                    borderTopWidth: 1
-                },
-                tabBarActiveTintColor: '#d4af37', // Original Gold
-                tabBarInactiveTintColor: '#444',
-                tabBarLabelStyle: {
-                    fontSize: 10,
-                    fontWeight: '700'
-                },
-                tabBarIcon: ({ focused, color, size }) => {
-                    let iconName;
-                    if (route.name === 'Home') iconName = 'home-variant';
-                    else if (route.name === 'Balance') iconName = 'scale-balance';
-                    else if (route.name === 'Deudas') iconName = 'cash-check';
-                    else if (route.name === 'Presupuestos') iconName = 'file-document-edit';
-                    else if (route.name === 'Inventario') iconName = 'package-variant-closed';
-
-                    return (
-                        <View style={focused ? {
-                            backgroundColor: 'rgba(212, 175, 55, 0.1)',
-                            padding: 8,
-                            borderRadius: 15,
-                            shadowColor: '#d4af37',
-                            shadowOffset: { width: 0, height: 0 },
-                            shadowOpacity: 0.6,
-                            shadowRadius: 10,
-                            elevation: 5
-                        } : null}>
-                            <MaterialCommunityIcons name={iconName} size={24} color={color} />
-                        </View>
-                    );
-                },
-            })}
+            }}
         >
             <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Dashboard' }} />
             <Tab.Screen name="Inventario" component={StockScreen} options={{ title: 'Inventario' }} />
@@ -118,7 +78,7 @@ function MainTabs() {
                     },
                 })}
             />
-            {/* ACCESO TOTALPARA ADMIN Y SOCIO (SELLER) */}
+            {/* ACCESO TOTAL PARA ADMIN Y SOCIO (SELLER) */}
             <Tab.Screen name="Balance" component={AdminScreen} options={{ title: 'Balance' }} />
             <Tab.Screen name="Deudas" component={DebtsScreen} options={{ title: 'Deudas' }} />
         </Tab.Navigator>
@@ -166,7 +126,7 @@ export default function AppNavigator() {
                 options={{ headerShown: false }}
             />
             <Stack.Screen
-                name="Clients"
+                name="Clientes"
                 component={ClientsScreen}
                 options={{ headerShown: false }}
             />
@@ -213,6 +173,11 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="NewSupplierOrder"
                 component={NewSupplierOrderScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Deudas"
+                component={DebtsScreen}
                 options={{ headerShown: false }}
             />
             <Stack.Screen

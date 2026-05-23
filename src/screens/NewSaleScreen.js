@@ -84,7 +84,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const [expandedProductId, setExpandedProductId] = useState(null);
     const [tempQty, setTempQty] = useState(1);
     const [selectedColor, setSelectedColor] = useState(null);
-    const [saleLocation, setSaleLocation] = useState('local'); // 'local' (BA) or 'cordoba'
+    const [saleLocation, setSaleLocation] = useState(currentUserRole === 'seller' ? 'cordoba' : 'local'); // 'local' (BA) or 'cordoba'
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();
@@ -349,7 +349,7 @@ export default function NewSaleScreen({ navigation, route }) {
         const finalProfit = totalProfit - totalDiscount;
         
         // --- LÓGICA DE COMISIÓN DE SOCIO CÓRDOBA ---
-        const isSeller = currentUserRole === 'seller';
+        const isSeller = currentUserRole === 'seller' || ((currentUserRole === 'admin' || currentUserRole === 'leader') && assignToPartner);
         let currentRate = 0;
         
         if (isSeller) {
@@ -383,7 +383,7 @@ export default function NewSaleScreen({ navigation, route }) {
         };
     };
 
-    const { subtotal, total, totalProfit, commission, discount, promoDetail, manualDiscountAmt } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate, manualDiscount, manualDiscountType, commissionType, saleLocation, currentUserRole]);
+    const { subtotal, total, totalProfit, commission, discount, promoDetail, manualDiscountAmt } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate, manualDiscount, manualDiscountType, commissionType, saleLocation, currentUserRole, assignToPartner]);
 
     const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
     const [pendingCheckoutType, setPendingCheckoutType] = useState('completed'); // Track the checkout type being processed
@@ -413,10 +413,6 @@ export default function NewSaleScreen({ navigation, route }) {
             return;
         }
 
-        if (!selectedClient) {
-            setClientModalVisible(true);
-            return;
-        }
         processCheckout(selectedClient, checkoutType);
     };
 
@@ -613,11 +609,11 @@ export default function NewSaleScreen({ navigation, route }) {
     const processCheckout = async (client, checkoutSaleType = saleType) => {
         if (cart.length === 0) return;
 
-        // Force client selection at the end
-        if (!client) {
+        // Force client selection at the end ONLY if it is a debt or a budget
+        if (!client && checkoutSaleType !== 'completed') {
             setClientModalVisible(true);
-            if (Platform.OS === 'web') alert('Selecciona un cliente para finalizar la venta.');
-            else Alert.alert('Cliente requerido', 'Debes seleccionar un cliente para finalizar la venta.');
+            if (Platform.OS === 'web') alert('Selecciona un cliente para finalizar la operación.');
+            else Alert.alert('Cliente requerido', 'Debes seleccionar un cliente para finalizar la operación.');
             return;
         }
 
@@ -712,8 +708,7 @@ export default function NewSaleScreen({ navigation, route }) {
             // 1. Optimistic Stock Update
             if (checkoutSaleType !== 'budget') {
                 cart.forEach(item => {
-                    const localDeduct = saleLocation === 'local' ? item.qty : 0;
-                    updateProductStock(item.id, localDeduct, item.qty);
+                    updateProductStock(item.id, item.qty, saleLocation, item.color);
                 });
             }
 
@@ -895,6 +890,35 @@ export default function NewSaleScreen({ navigation, route }) {
                 }
                 ListFooterComponent={
                     <View style={styles.formFooter}>
+                        {/* 💸 DESCUENTO MANUAL (Solo Líder/Admin o con permiso) */}
+                        <View style={styles.manualDiscountContainer}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                <Text style={styles.sectionLabel}>DESCUENTO MANUAL:</Text>
+                                <View style={styles.discountTypeToggle}>
+                                    <TouchableOpacity 
+                                        style={[styles.typeOption, manualDiscountType === 'fixed' && styles.typeOptionActive]} 
+                                        onPress={() => setManualDiscountType('fixed')}
+                                    >
+                                        <Text style={[styles.typeOptionText, manualDiscountType === 'fixed' && styles.typeOptionTextActive]}>$</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[styles.typeOption, manualDiscountType === 'percent' && styles.typeOptionActive]} 
+                                        onPress={() => setManualDiscountType('percent')}
+                                    >
+                                        <Text style={[styles.typeOptionText, manualDiscountType === 'percent' && styles.typeOptionTextActive]}>%</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                            <TextInput
+                                style={styles.manualDiscountInput}
+                                placeholder={manualDiscountType === 'fixed' ? "Monto a descontar (ej: 500)" : "Porcentaje (ej: 10)"}
+                                placeholderTextColor="#444"
+                                keyboardType="numeric"
+                                value={manualDiscount}
+                                onChangeText={setManualDiscount}
+                            />
+                        </View>
+
                         <PromotionSelector
                             promos={availablePromos}
                             selectedPromo={selectedPromo}
@@ -944,6 +968,38 @@ export default function NewSaleScreen({ navigation, route }) {
                                         CERRÓ LÍDER (Socio cobra 5%)
                                     </Text>
                                 </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {/* Real-time Commission Indicator */}
+                        {isSeller && commission > 0 && (
+                            <View style={{
+                                backgroundColor: '#111',
+                                borderWidth: 1,
+                                borderColor: '#d4af3740',
+                                borderRadius: 8,
+                                padding: 12,
+                                marginTop: 12,
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between'
+                            }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                                    <MaterialCommunityIcons name="percent" size={18} color="#d4af37" />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={{ color: '#aaa', fontSize: 11, fontWeight: 'bold' }}>
+                                            COMISIÓN ESTIMADA DEL SOCIO
+                                        </Text>
+                                        <Text style={{ color: '#666', fontSize: 9, marginTop: 2 }}>
+                                            {saleLocation === 'cordoba' 
+                                                ? (commissionType === 'direct' ? 'Venta Directa desde Córdoba Stock (40%)' : 'Cierre de Envío desde Jujuy (10%)') 
+                                                : `Venta Jujuy / Vendedor Estándar (${(isLeaderSale ? 0.05 : commissionRate) * 100}%)`}
+                                        </Text>
+                                    </View>
+                                </View>
+                                <Text style={{ color: '#d4af37', fontSize: 16, fontWeight: '900', marginLeft: 10 }}>
+                                    ${commission.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                </Text>
                             </View>
                         )}
 
@@ -1099,6 +1155,13 @@ const styles = StyleSheet.create({
 
     formFooter: { marginTop: 20 },
     sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', marginLeft: 15, marginBottom: 8, marginTop: 20 },
+    manualDiscountContainer: { marginHorizontal: 15, marginBottom: 15 },
+    manualDiscountInput: { backgroundColor: '#0a0a0a', borderBottomWidth: 2, borderBottomColor: '#d4af37', padding: 12, color: '#fff', fontSize: 16, fontWeight: 'bold' },
+    discountTypeToggle: { flexDirection: 'row', backgroundColor: '#0a0a0a', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#222' },
+    typeOption: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6 },
+    typeOptionActive: { backgroundColor: '#d4af37' },
+    typeOptionText: { color: '#666', fontSize: 12, fontWeight: '900' },
+    typeOptionTextActive: { color: '#000' },
     originPickerSimple: { paddingHorizontal: 15 },
     originRow: { flexDirection: 'row', gap: 10 },
     originOption: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 10, backgroundColor: '#0a0a0a', borderWidth: 1, borderColor: '#111' },

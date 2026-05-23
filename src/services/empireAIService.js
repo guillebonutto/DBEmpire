@@ -343,10 +343,15 @@ export const EmpireAIService = {
             let retries = 3;
             let backoff = 1000;
             while (retries > 0) {
-                response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${settingsData.value}`, {
+                response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${settingsData.value}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    body: JSON.stringify({ 
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json"
+                        }
+                    })
                 });
                 if (response.status === 429) {
                     retries--;

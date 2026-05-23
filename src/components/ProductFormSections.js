@@ -190,6 +190,21 @@ export const StockSection = ({ formData, handleChange }) => (
             </View>
         </View>
 
+        <View style={{ marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.inputLabel}>¿Registrar Gasto automático?</Text>
+                <Text style={{ fontSize: 10, color: '#666', marginTop: -2 }}>
+                    Crea un Gasto y Pedido de compra. Desactivar si ya cargaste esta compra en el panel de Compras.
+                </Text>
+            </View>
+            <TouchableOpacity 
+                style={[styles.toggleSwitch, formData.register_expense && styles.toggleSwitchActive]} 
+                onPress={() => handleChange('register_expense', !formData.register_expense)}
+            >
+                <View style={[styles.toggleCircle, formData.register_expense && styles.toggleCircleActive]} />
+            </TouchableOpacity>
+        </View>
+
         <Text style={styles.smallNote}><Text>💡 </Text><Text>El stock por variante se suma automáticamente a estos totales.</Text></Text>
     </View>
 );

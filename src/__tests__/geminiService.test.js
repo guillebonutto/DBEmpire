@@ -31,6 +31,8 @@ describe('GeminiService', () => {
 
         // Mock Fetch Response
         fetch.mockResolvedValue({
+            ok: true,
+            text: jest.fn().mockResolvedValue(''),
             json: jest.fn().mockResolvedValue({
                 candidates: [{ content: { parts: [{ text: 'OPCIÓN 1: Test' }] } }]
             })
@@ -53,6 +55,8 @@ describe('GeminiService', () => {
 
         const mockJsonResponse = '```json\n{"total": 100, "vendor": "Tester"}\n```';
         fetch.mockResolvedValue({
+            ok: true,
+            text: jest.fn().mockResolvedValue(''),
             json: jest.fn().mockResolvedValue({
                 candidates: [{ content: { parts: [{ text: mockJsonResponse }] } }]
             })

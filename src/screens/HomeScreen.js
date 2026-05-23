@@ -13,6 +13,7 @@ import { useFinanceStore } from '../store/useFinanceStore';
 import { EmpireAIService } from '../services/empireAIService';
 import { useAuthStore } from '../store/useAuthStore';
 import { DeviceAuthService } from '../services/deviceAuth';
+import * as Clipboard from 'expo-clipboard';
 
 const { width } = Dimensions.get('window');
 
@@ -436,6 +437,10 @@ export default function HomeScreen({ navigation }) {
                             </TouchableOpacity>
                         )}
 
+                        <TouchableOpacity onPress={() => navigation.navigate('Clientes')} style={styles.miniClientsBtn}>
+                            <MaterialCommunityIcons name="account-group" size={22} color="#d4af37" />
+                        </TouchableOpacity>
+
                         <TouchableOpacity onPress={() => navigation.navigate('Balance')} style={styles.miniAdminBtn}>
                             <MaterialCommunityIcons name="chart-line" size={22} color="#d4af37" />
                         </TouchableOpacity>
@@ -470,6 +475,25 @@ export default function HomeScreen({ navigation }) {
                             </>
                         )}
                     </View>
+
+                    {/* ALIAS DE TRANSFERENCIA COMPARTIDO (RÁPIDO) */}
+                    <TouchableOpacity
+                        onPress={async () => {
+                            await Clipboard.setStringAsync('grb1m.uala');
+                            Alert.alert('✅ ¡Alias Copiado!', 'El alias "grb1m.uala" se copió al portapapeles.');
+                        }}
+                        style={styles.aliasContainer}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.aliasContent}>
+                            <MaterialCommunityIcons name="bank" size={20} color="#d4af37" />
+                            <View style={{ marginLeft: 12 }}>
+                                <Text style={styles.aliasLabel}>CBU / ALIAS DE TRANSFERENCIAS:</Text>
+                                <Text style={styles.aliasVal}>grb1m.uala</Text>
+                            </View>
+                        </View>
+                        <MaterialCommunityIcons name="content-copy" size={18} color="#d4af37" style={{ opacity: 0.8 }} />
+                    </TouchableOpacity>
 
                     {/* AI Insight Summary */}
                     <TouchableOpacity
@@ -567,12 +591,29 @@ const styles = StyleSheet.create({
     headerRole: { color: '#444', fontSize: 9, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1 },
     miniAiBtn: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#151515' },
     spyModeBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(212, 175, 55, 0.1)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.3)' },
+    miniClientsBtn: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#151515' },
     miniAdminBtn: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#151515' },
 
     statsGrid: { flexDirection: 'row', gap: 12, marginBottom: 15 },
     statBrick: { flex: 1, backgroundColor: '#080808', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#151515' },
     statLab: { color: '#555', fontSize: 10, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
     statVal: { color: '#fff', fontSize: 22, fontWeight: '900' },
+
+    aliasContainer: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        backgroundColor: '#080808', 
+        paddingHorizontal: 20, 
+        paddingVertical: 15, 
+        borderRadius: 18, 
+        borderWidth: 1, 
+        borderColor: 'rgba(212, 175, 55, 0.2)', 
+        marginBottom: 20,
+        justifyContent: 'space-between'
+    },
+    aliasContent: { flexDirection: 'row', alignItems: 'center' },
+    aliasLabel: { color: '#555', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
+    aliasVal: { color: '#fff', fontSize: 15, fontWeight: '900', marginTop: 2, letterSpacing: 0.5 },
 
     aiInsightBox: { marginBottom: 20, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.3)' },
     aiInsightGrad: { padding: 18 },
@@ -594,6 +635,26 @@ const styles = StyleSheet.create({
     missionInfo: { flex: 1, marginLeft: 15 },
     missionTitle: { color: '#d4af37', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 2 },
     missionDesc: { color: '#eee', fontSize: 13, fontWeight: '600' },
+
+    modulesGrid: { flexDirection: 'row', gap: 12, marginBottom: 25 },
+    moduleCard: { 
+        flex: 1, 
+        backgroundColor: '#080808', 
+        padding: 15, 
+        borderRadius: 18, 
+        alignItems: 'center', 
+        borderWidth: 1, 
+        borderColor: '#151515' 
+    },
+    moduleIcon: { 
+        width: 45, 
+        height: 45, 
+        borderRadius: 12, 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        marginBottom: 10 
+    },
+    moduleTitle: { color: '#888', fontSize: 11, fontWeight: '800' },
 
     scannerCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
     scannerTap: {

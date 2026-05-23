@@ -164,11 +164,55 @@ export const SyncService = {
             const { error: itemsError } = await supabase.from('sale_items').insert(items);
             if (itemsError) throw itemsError;
 
-            // Update remote stock
+            // --- ROBUST REMOTE STOCK DEDUCTION ---
             for (const item of metadata.items) {
-                const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.id).single();
-                if (prod) {
-                    await supabase.from('products').update({ current_stock: prod.current_stock - item.qty }).eq('id', item.id);
+                // Fetch fresh product data from Supabase
+                const { data: prod, error: fetchErr } = await supabase
+                    .from('products')
+                    .select('stock_local, stock_cordoba, current_stock, variants')
+                    .eq('id', item.id)
+                    .single();
+                
+                if (!fetchErr && prod) {
+                    const updatePayload = {};
+                    const qty = parseInt(item.qty) || 0;
+
+                    // 1. Location based deduction
+                    if (payload.sale_location === 'cordoba') {
+                        updatePayload.stock_cordoba = Math.max(0, (prod.stock_cordoba || 0) - qty);
+                        updatePayload.stock_local = prod.stock_local || 0;
+                    } else {
+                        updatePayload.stock_local = Math.max(0, (prod.stock_local || 0) - qty);
+                        updatePayload.stock_cordoba = prod.stock_cordoba || 0;
+                    }
+
+                    // Recalculate total
+                    updatePayload.current_stock = updatePayload.stock_local + updatePayload.stock_cordoba;
+
+                    // 2. Variants deduction
+                    if (item.color && prod.variants) {
+                        let variants = [];
+                        try {
+                            variants = Array.isArray(prod.variants)
+                                ? prod.variants
+                                : (typeof prod.variants === 'string' ? JSON.parse(prod.variants) : []);
+                        } catch (e) {
+                            console.log('Error parsing prod.variants in syncService:', e);
+                        }
+
+                        if (Array.isArray(variants)) {
+                            const cleanColor = item.color.trim().toLowerCase();
+                            const vIdx = variants.findIndex(v => v.color?.trim().toLowerCase() === cleanColor);
+                            if (vIdx >= 0) {
+                                const currentVarStock = parseInt(variants[vIdx].stock) || 0;
+                                variants[vIdx].stock = Math.max(0, currentVarStock - qty).toString();
+                                updatePayload.variants = variants;
+                            }
+                        }
+                    }
+
+                    // Perform update in Supabase
+                    await supabase.from('products').update(updatePayload).eq('id', item.id);
                 }
             }
         }
