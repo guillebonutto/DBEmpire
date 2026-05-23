@@ -19,6 +19,7 @@ const TABLE_COLUMNS = {
     supplier_order_items: ['id', 'supplier_order_id', 'product_id', 'quantity', 'cost_per_unit', 'color', 'temp_product_name'],
     pending_sync: ['id', 'table_name', 'action', 'payload', 'metadata', 'created_at'],
     suppliers: ['id', 'name', 'phone', 'email', 'notes', 'active', 'created_at'],
+    reminders: ['id', 'title', 'notes', 'due_date', 'completed', 'notification_id'],
 };
 
 function sanitizeRow(tableName, row) {
@@ -108,6 +109,7 @@ async function init() {
                 CREATE TABLE IF NOT EXISTS supplier_order_items (id TEXT PRIMARY KEY, supplier_order_id TEXT, product_id TEXT, quantity INTEGER, cost_per_unit REAL, color TEXT, temp_product_name TEXT);
                 CREATE TABLE IF NOT EXISTS pending_sync (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, action TEXT, payload TEXT, metadata TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT, notes TEXT, active INTEGER DEFAULT 1, created_at TEXT);
+                CREATE TABLE IF NOT EXISTS reminders (id TEXT PRIMARY KEY, title TEXT, notes TEXT, due_date TEXT, completed INTEGER DEFAULT 0, notification_id TEXT);
             `);
             _db = db;
             await runSeeding(db);

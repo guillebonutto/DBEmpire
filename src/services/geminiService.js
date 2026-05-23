@@ -122,7 +122,12 @@ export const GeminiService = {
         const result = await handleGeminiRequest(prompt, imageBase64, true, schema);
 
         // Clean result if it comes with markdown code blocks
-        const cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();
+        let cleanResult = result.replace(/```json/g, '').replace(/```/g, '').trim();
+        const firstBrace = cleanResult.indexOf('{');
+        const lastBrace = cleanResult.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            cleanResult = cleanResult.substring(firstBrace, lastBrace + 1);
+        }
         return JSON.parse(cleanResult);
     },
 

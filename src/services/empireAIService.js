@@ -381,6 +381,11 @@ export const EmpireAIService = {
             const data = await response.json();
             let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
             text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const firstBrace = text.indexOf('{');
+            const lastBrace = text.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                text = text.substring(firstBrace, lastBrace + 1);
+            }
             const parsedInsights = JSON.parse(text);
             
             cachedResponse = parsedInsights;

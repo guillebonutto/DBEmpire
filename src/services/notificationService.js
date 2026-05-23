@@ -69,5 +69,51 @@ export const NotificationService = {
                 repeats: true
             },
         });
+    },
+
+    // 4. Schedule User Reminder
+    scheduleReminder: async (id, title, notes, dateString) => {
+        try {
+            const triggerDate = new Date(dateString);
+            if (triggerDate.getTime() <= Date.now()) {
+                console.log('[NotificationService] Date is in the past, skipping trigger scheduling');
+                return null;
+            }
+
+            const hasPerm = await NotificationService.requestPermissions();
+            if (!hasPerm) {
+                console.log('[NotificationService] No notification permissions granted');
+                return null;
+            }
+
+            const notifId = await Notifications.scheduleNotificationAsync({
+                content: {
+                    title: `📅 AGENDA: ${title}`,
+                    body: notes || 'Tienes una tarea pendiente ahora.',
+                    color: '#d4af37',
+                    sound: true,
+                },
+                trigger: {
+                    type: Notifications.SchedulableTriggerInputTypes.DATE,
+                    date: triggerDate,
+                },
+            });
+            console.log(`[NotificationService] Scheduled notification ID: ${notifId} at ${triggerDate.toISOString()}`);
+            return notifId;
+        } catch (err) {
+            console.error('[NotificationService] Error scheduling notification:', err);
+            return null;
+        }
+    },
+
+    // 5. Cancel Scheduled Reminder
+    cancelReminder: async (notificationId) => {
+        if (!notificationId) return;
+        try {
+            await Notifications.cancelScheduledNotificationAsync(notificationId);
+            console.log(`[NotificationService] Canceled scheduled notification ID: ${notificationId}`);
+        } catch (err) {
+            console.warn('[NotificationService] Cancel notification error:', err.message);
+        }
     }
 };

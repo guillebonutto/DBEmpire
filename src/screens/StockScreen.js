@@ -157,7 +157,6 @@ export default function StockScreen({ navigation, route }) {
 
     useFocusEffect(
         useCallback(() => {
-            requestPermission();
             setScreenReady(true);
             
             // DEFER background sync until interactions (navigation) are finished

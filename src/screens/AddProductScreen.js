@@ -30,7 +30,6 @@ export default function AddProductScreen({ navigation, route }) {
             }
         };
         checkRole();
-        requestPermission(); // Warm up camera
     }, []);
     const [image, setImage] = useState(route.params?.scannedImage || null);
 

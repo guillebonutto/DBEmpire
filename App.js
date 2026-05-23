@@ -10,6 +10,8 @@ import { GlobalDataService } from './src/services/GlobalDataService';
 import { useFinanceStore } from './src/store/useFinanceStore';
 import { useProductStore } from './src/store/useProductStore';
 import { useClientStore } from './src/store/useClientStore';
+import { useReminderStore } from './src/store/useReminderStore';
+import AgendaWidget from './src/components/AgendaWidget';
 
 export default function App() {
   React.useEffect(() => {
@@ -22,6 +24,7 @@ export default function App() {
         await useFinanceStore.getState().initStore();
         await useProductStore.getState().initStore();
         await useClientStore.getState().initStore();
+        await useReminderStore.getState().initStore();
         console.log('🚀 Empire App Initialized Successfully');
       } catch (err) {
         console.error('Initialization failed:', err);
@@ -36,6 +39,7 @@ export default function App() {
         <AppNavigator />
         <StatusBar style="auto" />
       </NavigationContainer>
+      <AgendaWidget />
     </SafeAreaProvider>
   );
 }

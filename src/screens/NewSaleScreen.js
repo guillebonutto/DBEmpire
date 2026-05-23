@@ -70,6 +70,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const [searchQuery, setSearchQuery] = useState('');
     const [clientError, setClientError] = useState(false);
     const [creatingClient, setCreatingClient] = useState(false);
+    const [isSandboxMode, setIsSandboxMode] = useState(false);
 
     // Selection State
     const [selectedClient, setSelectedClient] = useState(null);
@@ -85,6 +86,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const [tempQty, setTempQty] = useState(1);
     const [selectedColor, setSelectedColor] = useState(null);
     const [saleLocation, setSaleLocation] = useState(currentUserRole === 'seller' ? 'cordoba' : 'local'); // 'local' (BA) or 'cordoba'
+    const isSeller = currentUserRole === 'seller' || ((currentUserRole === 'admin' || currentUserRole === 'leader') && assignToPartner);
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();
@@ -140,7 +142,6 @@ export default function NewSaleScreen({ navigation, route }) {
     useFocusEffect(
         useCallback(() => {
             fetchInitialData();
-            requestPermission();
         }, [])
     );
 
@@ -349,7 +350,6 @@ export default function NewSaleScreen({ navigation, route }) {
         const finalProfit = totalProfit - totalDiscount;
         
         // --- LÓGICA DE COMISIÓN DE SOCIO CÓRDOBA ---
-        const isSeller = currentUserRole === 'seller' || ((currentUserRole === 'admin' || currentUserRole === 'leader') && assignToPartner);
         let currentRate = 0;
         
         if (isSeller) {
@@ -393,7 +393,7 @@ export default function NewSaleScreen({ navigation, route }) {
     // Ref to avoid setState async timing issues with modals
     const checkoutTypeRef = useRef('completed');
 
-    // Triggered when clicking "COBRAR"
+    // Triggered when clicking "COBRAR" (routes to sandbox or real depending on isSandboxMode)
     const handleCheckout = (checkoutType = 'completed') => {
         if (cart.length === 0) return;
 
@@ -413,7 +413,8 @@ export default function NewSaleScreen({ navigation, route }) {
             return;
         }
 
-        processCheckout(selectedClient, checkoutType);
+        // Route through triggerCheckout — bypasses DB if sandbox mode is active
+        triggerCheckout(selectedClient, checkoutType);
     };
 
     const handleCreateClient = async () => {
@@ -455,7 +456,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
             setClientModalVisible(false);
             setTimeout(() => {
-                processCheckout(clientPayload);
+                triggerCheckout(clientPayload);
             }, 500);
 
         } catch (error) {
@@ -602,6 +603,116 @@ export default function NewSaleScreen({ navigation, route }) {
             console.log('Error generating PDF:', error);
             if (Platform.OS === 'web') alert('Error: No se pudo generar el recibo digital.');
             else Alert.alert('Error', 'No se pudo generar el recibo digital.');
+        }
+    };
+
+
+    const processSandboxCheckout = async (client, checkoutSaleType = saleType) => {
+        if (cart.length === 0) return;
+
+        // Force client selection at the end ONLY if it is a debt or a budget
+        if (!client && checkoutSaleType !== 'completed') {
+            setClientModalVisible(true);
+            if (Platform.OS === 'web') alert('Selecciona un cliente para finalizar la operación.');
+            else Alert.alert('Cliente requerido', 'Debes seleccionar un cliente para finalizar la operación.');
+            return;
+        }
+
+        if (loading) return;
+        setLoading(true);
+
+        try {
+            console.log('processSandboxCheckout started with:', { client, checkoutSaleType });
+            
+            // Wait 600ms to simulate database operations lag
+            await new Promise(resolve => setTimeout(resolve, 600));
+
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+            const saleId = generateUUID();
+            let salePayload = {
+                id: saleId,
+                seller_id: null,
+                client_id: client ? client.id : null,
+                total_amount: typeof total === 'number' ? total : 0,
+                profit_generated: typeof totalProfit === 'number' ? totalProfit : 0,
+                commission_amount: typeof commission === 'number' ? commission : 0,
+                status: checkoutSaleType || 'completed',
+                device_sig: 'mock-sandbox-sig',
+                is_leader_sale: isLeaderSale || false,
+                promotion_id: selectedPromo ? selectedPromo.id : null,
+                manual_discount_amount: typeof manualDiscountAmt === 'number' ? manualDiscountAmt : 0,
+                manual_discount_type: manualDiscountType || 'fixed',
+                manual_discount_value: parseFloat(manualDiscount) || 0,
+                sale_location: saleLocation || 'local'
+            };
+
+            const successTitle = '🧪 Cobro Simulado (SANDBOX)';
+            const successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¡Simulación finalizada sin errores! (No se guardó en BD real ni se modificó stock).`;
+
+            if (Platform.OS === 'web') {
+                if (window.confirm(`${successTitle}\n${successMessage}\n\n¿Deseas generar el recibo PDF simulado?`)) {
+                    await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
+                }
+                clearCart();
+                setSelectedClient(null);
+                setSelectedPromo(null);
+                setManualDiscount('');
+                setManualDiscountType('fixed');
+                setIsSandboxMode(false); // Reset sandbox mode
+                setClientModalVisible(false);
+                navigation.navigate('Sales');
+            } else {
+                Alert.alert(
+                    successTitle,
+                    successMessage,
+                    [
+                        {
+                            text: 'CERRAR',
+                            onPress: () => {
+                                clearCart();
+                                setSelectedClient(null);
+                                setSelectedPromo(null);
+                                setManualDiscount('');
+                                setManualDiscountType('fixed');
+                                setIsSandboxMode(false); // Reset sandbox mode
+                                setClientModalVisible(false);
+                                navigation.navigate('Sales');
+                            }
+                        },
+                        {
+                            text: 'VER PDF SIMULADO',
+                            onPress: async () => {
+                                await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
+                                clearCart();
+                                setSelectedClient(null);
+                                setSelectedPromo(null);
+                                setManualDiscount('');
+                                setManualDiscountType('fixed');
+                                setIsSandboxMode(false); // Reset sandbox mode
+                                setClientModalVisible(false);
+                                navigation.navigate('Sales');
+                            }
+                        }
+                    ]
+                );
+            }
+        } catch (error) {
+            console.log('Sandbox Checkout Error:', error);
+            if (Platform.OS === 'web') alert(`Error: ${error.message}`);
+            else Alert.alert('Error', error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const triggerCheckout = (client, type) => {
+        if (isSandboxMode) {
+            processSandboxCheckout(client, type);
+        } else {
+            processCheckout(client, type);
         }
     };
 
@@ -791,6 +902,64 @@ export default function NewSaleScreen({ navigation, route }) {
         }
     };
 
+    const runTestSaleSimulation = () => {
+        // 1. Always use a purely fictitious product so zero real stock is touched
+        const sandboxProduct = {
+            id: 'sandbox-prod-test-123',
+            name: '🧪 Gadget Imperial (SANDBOX)',
+            sale_price: 15000,
+            cost_price: 5000,
+            stock_local: 999,
+            stock_cordoba: 999,
+            current_stock: 999
+        };
+
+        // 2. Always use a fictitious client
+        const sandboxClient = {
+            id: 'sandbox-cli-test-456',
+            name: '🧪 Cliente Sandbox (Test)',
+            phone: '0000000000'
+        };
+
+        // 3. Activate SANDBOX MODE flag — this makes ALL checkout buttons use processSandboxCheckout
+        setIsSandboxMode(true);
+
+        // 4. Clear cart and inject mock data
+        clearCart();
+        addToCart(sandboxProduct, 1, sandboxClient.id, null);
+        setSelectedClient(sandboxClient);
+
+        // 5. Inform user clearly about sandbox mode
+        const msg = `🧪 MODO SANDBOX ACTIVADO\n\nSe cargó un producto y cliente ficticios.\n\n⚠️ NINGUNA acción en esta sesión afectará tu inventario real, base de datos ni tus métricas de ventas.\n\n¿Querés cobrar automáticamente (amago) o probar botón por botón?`;
+        
+        if (Platform.OS === 'web') {
+            if (window.confirm(msg)) {
+                setTimeout(() => {
+                    processSandboxCheckout(sandboxClient, 'completed');
+                }, 300);
+            }
+        } else {
+            Alert.alert(
+                '🧪 Modo Sandbox',
+                msg,
+                [
+                    {
+                        text: 'PROBAR BOTÓN A BOTÓN',
+                        style: 'cancel',
+                    },
+                    {
+                        text: 'COBRAR (AMAGO)',
+                        onPress: () => {
+                            setTimeout(() => {
+                                processSandboxCheckout(sandboxClient, 'completed');
+                            }, 300);
+                        }
+                    }
+                ]
+            );
+        }
+    };
+
     const renderHeader = () => (
         <View style={styles.compactHeader}>
             <View style={styles.headerTopRow}>
@@ -814,7 +983,10 @@ export default function NewSaleScreen({ navigation, route }) {
                         <Text style={[styles.locOptionText, saleLocation === 'cordoba' && styles.locOptionTextActive]}>CÓRDOBA</Text>
                     </TouchableOpacity>
                 </View>
-                <View style={{ width: 30 }} />
+                <TouchableOpacity onPress={runTestSaleSimulation} style={styles.testSaleBtn}>
+                    <MaterialCommunityIcons name="beaker-outline" size={16} color="#00ff88" />
+                    <Text style={styles.testSaleBtnText}>TEST</Text>
+                </TouchableOpacity>
             </View>
 
             <View style={styles.summaryCompact}>
@@ -863,11 +1035,30 @@ export default function NewSaleScreen({ navigation, route }) {
             <StatusBar barStyle="light-content" />
             {renderHeader()}
 
+            {/* ── SANDBOX MODE BANNER ── */}
+            {isSandboxMode && (
+                <View style={{
+                    backgroundColor: '#7C3AED',
+                    paddingVertical: 6,
+                    paddingHorizontal: 15,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                }}>
+                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>
+                        🧪 MODO SANDBOX ACTIVO — Ningún dato real será modificado
+                    </Text>
+                    <TouchableOpacity onPress={() => { setIsSandboxMode(false); clearCart(); setSelectedClient(null); }}>
+                        <Text style={{ color: '#ddd6fe', fontWeight: 'bold', fontSize: 13 }}>✕ SALIR</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
             <FlatList
                 data={cart}
                 keyExtractor={(item, index) => `${item.id}-${item.color || 'no-color'}-${index}`}
                 style={{ flex: 1 }}
-                contentContainerStyle={{ padding: 15, paddingBottom: 250 }}
+                contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
                 renderItem={({ item, index }) => (
                     <CartItem
                         key={item.cartId || `${item.id}-${index}`}
@@ -1003,7 +1194,7 @@ export default function NewSaleScreen({ navigation, route }) {
                             </View>
                         )}
 
-                        <View style={{ height: 100 }} />
+                        <View style={{ height: 10 }} />
                     </View>
                 }
             />
@@ -1047,7 +1238,19 @@ export default function NewSaleScreen({ navigation, route }) {
 
                 {/* BOTÓN ACCESO RÁPIDO AGREGAR */}
                 <View style={styles.floatingActionRow}>
-                    <TouchableOpacity style={styles.fabBtn} onPress={() => setIsScanning(true)}>
+                    <TouchableOpacity 
+                        style={styles.fabBtn} 
+                        onPress={async () => {
+                            if (permission && !permission.granted) {
+                                const res = await requestPermission();
+                                if (!res.granted) {
+                                    Alert.alert('Permiso denegado', 'Se necesita acceso a la cámara.');
+                                    return;
+                                }
+                            }
+                            setIsScanning(true);
+                        }}
+                    >
                         <MaterialCommunityIcons name="barcode-scan" size={24} color="#000" />
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.fabBtn, { backgroundColor: '#111', borderWidth: 1, borderColor: '#333' }]} onPress={handleAddProductPress}>
@@ -1172,7 +1375,10 @@ const styles = StyleSheet.create({
     leaderToggleActive: { backgroundColor: '#00ff8808', borderWidth: 1, borderColor: '#00ff8820' },
     leaderToggleText: { color: '#444', fontSize: 11, fontWeight: 'bold' },
 
-    actionFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#000', padding: 20, paddingBottom: 40, borderTopWidth: 1, borderTopColor: '#111' },
+    testSaleBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#00ff8812', borderWidth: 1, borderColor: '#00ff8840', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, gap: 5 },
+    testSaleBtnText: { color: '#00ff88', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
+
+    actionFooter: { backgroundColor: '#000', padding: 20, paddingBottom: Platform.OS === 'ios' ? 25 : 15, borderTopWidth: 1, borderTopColor: '#111' },
     subtotalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, paddingHorizontal: 5 },
     subtotalLabel: { color: '#888', fontSize: 13, fontWeight: '700' },
     discountLabel: { color: '#ff3b3b', fontSize: 13, fontWeight: '900' },
