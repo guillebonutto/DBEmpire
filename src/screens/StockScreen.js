@@ -67,7 +67,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                         <View style={{ flex: 1 }}>
                             <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                {(userRole?.toLowerCase() === 'admin' || userRole === 'leader' || !userRole) ? (
+                            {(userRole?.toLowerCase() === 'admin' || userRole === 'leader') ? (
                                     <>
                                         <Text style={[styles.salePrice, { color: '#2ecc71', fontSize: 18, fontWeight: 'bold' }]}>${item.sale_price}</Text>
                                         {item.sale_price_cordoba && (
@@ -86,7 +86,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                     </View>
 
                     <View style={styles.locationStockRow}>
-                        {(userRole?.toLowerCase() === 'admin' || userRole === 'leader' || !userRole) && (
+                        {(userRole?.toLowerCase() === 'admin' || userRole === 'leader') && (
                             <>
                                 <View style={styles.locationItem}>
                                     <MaterialCommunityIcons name="home-map-marker" size={14} color="#555" />

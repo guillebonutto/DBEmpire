@@ -42,15 +42,18 @@ export default function HomeScreen({ navigation }) {
                 currentRole = await AsyncStorage.getItem('user_role');
             }
 
-            // AUTO-SYNC ROLE: If they are the leader/admin, always boot them into leader mode by default
-            if ((hRole === 'admin' || hRole === 'leader') && (!currentRole || currentRole === 'admin')) {
+            // AUTO-SYNC ROLE: Solo promueve a 'leader' si el hardware lo autoriza
+            // Y el rol guardado es admin/leader (nunca pisar un 'seller' elegido manualmente)
+            if ((hRole === 'admin' || hRole === 'leader') && (currentRole === 'admin' || currentRole === 'leader' || !currentRole)) {
                 currentRole = 'leader';
                 setUserRole('leader');
                 await AsyncStorage.setItem('user_role', 'leader');
             } else if (!currentRole) {
+                // Sin rol guardado y sin hardware reconocido → seller por defecto
                 currentRole = 'seller';
                 setUserRole('seller');
             }
+            // Si currentRole === 'seller', nunca lo pisamos, respetamos la elección manual
 
             setLoadingAI(true);
             const insights = await EmpireAIService.getInsights(false, currentRole);
