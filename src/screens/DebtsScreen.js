@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
     header: { color: '#d4af37', fontSize: 16, fontWeight: '900', letterSpacing: 1 },
     badge: { backgroundColor: '#e74c3c', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, marginLeft: 10 },
     badgeText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-    list: { padding: 20 },
+    list: { padding: 20, paddingBottom: 110 },
     debtCard: { backgroundColor: '#111', borderRadius: 20, padding: 20, marginBottom: 15, borderWidth: 1, borderColor: '#222' },
     debtHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
     clientName: { fontSize: 18, fontWeight: '900', color: '#fff' },

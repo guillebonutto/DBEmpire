@@ -261,7 +261,7 @@ export default function OrdersScreen({ navigation, route }) {
                 data={displayedOrders}
                 keyExtractor={item => item.id}
                 renderItem={renderOrderItem}
-                contentContainerStyle={{ padding: 20 }}
+                contentContainerStyle={{ padding: 20, paddingBottom: 110 }}
                 refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => fetchAllData(true)} tintColor="#d4af37" />}
                 ListEmptyComponent={
                     <View style={styles.empty}>

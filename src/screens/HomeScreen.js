@@ -583,7 +583,7 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
     background: { ...StyleSheet.absoluteFillObject },
     safe: { flex: 1 },
-    scroll: { flexGrow: 1, paddingHorizontal: 25, paddingBottom: 40 },
+    scroll: { flexGrow: 1, paddingHorizontal: 25, paddingBottom: 110 },
 
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20, marginBottom: 20 },
     brandContainer: { alignItems: 'center' },

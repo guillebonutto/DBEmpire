@@ -1120,7 +1120,7 @@ const styles = StyleSheet.create({
     addButton: { width: 50, height: 50, borderRadius: 15, overflow: 'hidden' },
     addBtnGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-    listContent: { paddingHorizontal: 20, paddingBottom: 0 },
+    listContent: { paddingHorizontal: 20, paddingBottom: 110 },
     productCard: { marginBottom: 12, borderRadius: 20, borderWidth: 1, borderColor: '#111', overflow: 'hidden', backgroundColor: '#050505' },
     cardInner: { flexDirection: 'row', padding: 12, alignItems: 'center' },
     imageWrapper: { width: 70, height: 70, borderRadius: 15, backgroundColor: '#080808', overflow: 'hidden', position: 'relative' },

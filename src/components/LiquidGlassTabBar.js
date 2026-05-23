@@ -107,7 +107,7 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
             style={[
                 styles.container,
                 {
-                    bottom: isAndroid ? 15 : 25,
+                    bottom: Math.max(insets.bottom, 12),
                 },
             ]}
         >
@@ -221,7 +221,7 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
                         >
                             <MaterialCommunityIcons
                                 name={iconName}
-                                size={24}
+                                size={22}
                                 color={isFocused ? GOLD : '#666'}
                             />
                             <Animated.Text
@@ -230,9 +230,12 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
                                     {
                                         color: isFocused ? GOLD : '#666',
                                         fontWeight: isFocused ? '700' : '500',
+                                        fontSize: numTabs > 4 ? 9 : 10,
                                     },
                                 ]}
                                 numberOfLines={1}
+                                adjustsFontSizeToFit={true}
+                                minimumScaleFactor={0.8}
                             >
                                 {label}
                             </Animated.Text>
