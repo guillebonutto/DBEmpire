@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView, Platform } from 'react-native'; // Added ScrollView
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView, Platform } from 'react-native'; // Added ScrollView
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
@@ -29,12 +29,15 @@ import ProductModal from '../components/ProductModal';
 import ClientModal from '../components/ClientModal';
 
 import { useFinanceStore } from '../store/useFinanceStore';
+import CustomAlert from '../components/CustomAlert';
+import { useAlert } from '../hooks/useAlert';
 
 export default function NewSaleScreen({ navigation, route }) {
     const { products, updateProductStock, fetchProducts, setProducts } = useProductStore();
     const { clients, addClientLocally, fetchClients } = useClientStore();
     const { userRole: currentUserRole } = useAuthStore();
     const { sales, saleItems, addSaleLocal, setFinanceState } = useFinanceStore();
+    const { showAlert, alertProps } = useAlert();
     
     // We still need promos and commission manually or via a settings store, for now we keep them local using GlobalDataService initially.
     const { 
@@ -172,8 +175,7 @@ export default function NewSaleScreen({ navigation, route }) {
         const available = getAvailableStock(item);
 
         if (available <= 0) {
-            if (Platform.OS === 'web') alert('Sin Stock: No queda stock disponible para este producto (revisa tu carrito).');
-            else Alert.alert('Sin Stock', 'No queda stock disponible para este producto (revisa tu carrito).');
+            showAlert({ type: 'warning', title: 'Sin Stock', message: 'No queda stock disponible para este producto (revisa tu carrito).' });
             return;
         }
 
@@ -219,23 +221,19 @@ export default function NewSaleScreen({ navigation, route }) {
             if (available > 0) {
                 // Add to cart directly (1 unit, no color)
                 addToCart(product, 1, selectedClient?.id);
-                if (Platform.OS === 'web') alert(`✅ Agregado: ${product.name} (+1)`);
-                else Alert.alert('✅ Agregado', `${product.name} (+1)`);
+                showAlert({ type: 'success', title: 'Agregado', message: `${product.name} (+1)` });
             } else {
-                if (Platform.OS === 'web') alert(`Sin Stock: No hay stock disponible de ${product.name}`);
-                else Alert.alert('Sin Stock', `No hay stock disponible de ${product.name}`);
+                showAlert({ type: 'warning', title: 'Sin Stock', message: `No hay stock disponible de ${product.name}` });
             }
         } else {
-            if (Platform.OS === 'web') alert(`No encontrado: No existe producto con código: ${barcodeData}`);
-            else Alert.alert('No encontrado', `No existe producto con código: ${barcodeData}`);
+            showAlert({ type: 'error', title: 'No encontrado', message: `No existe producto con código: ${barcodeData}` });
         }
     };
 
     const confirmAddToCart = (product) => {
         // If product has variants but no color selected, alert user
         if (product.variants && product.variants.length > 0 && !selectedColor) {
-            if (Platform.OS === 'web') alert('Color Requerido: Por favor selecciona un color para este producto.');
-            else Alert.alert('Color Requerido', 'Por favor selecciona un color para este producto.');
+            showAlert({ type: 'warning', title: 'Color Requerido', message: 'Por favor selecciona un color para este producto.' });
             return;
         }
 
@@ -407,8 +405,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
         // Final sanity check for client
         if (!selectedClient && checkoutType !== 'completed') {
-            if (Platform.OS === 'web') alert('Falta Cliente: Las deudas y presupuestos requieren seleccionar un cliente.');
-            else Alert.alert('Falta Cliente', 'Las deudas y presupuestos requieren seleccionar un cliente.');
+            showAlert({ type: 'warning', title: 'Falta Cliente', message: 'Las deudas y presupuestos requieren seleccionar un cliente.' });
             setClientModalVisible(true);
             return;
         }
@@ -419,8 +416,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
     const handleCreateClient = async () => {
         if (!newClientName.trim()) {
-            if (Platform.OS === 'web') alert('Error: El nombre del cliente es obligatorio');
-            else Alert.alert('Error', 'El nombre del cliente es obligatorio');
+            showAlert({ type: 'error', title: 'Error', message: 'El nombre del cliente es obligatorio' });
             return;
         }
 
@@ -461,7 +457,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
         } catch (error) {
             console.log('Error creating client:', error);
-            Alert.alert('Error', 'No se pudo crear el cliente de forma offline');
+            showAlert({ type: 'error', title: 'Error', message: 'No se pudo crear el cliente de forma offline' });
         } finally {
             setCreatingClient(false);
         }
@@ -493,8 +489,7 @@ export default function NewSaleScreen({ navigation, route }) {
 
         } catch (error) {
             console.log('Error creating client inline:', error);
-            if (Platform.OS === 'web') alert('Error: No se pudo crear el cliente rápido.');
-            else Alert.alert('Error', 'No se pudo crear el cliente rápido.');
+            showAlert({ type: 'error', title: 'Error', message: 'No se pudo crear el cliente rápido.' });
         } finally {
             setCreatingClient(false);
         }
@@ -601,8 +596,7 @@ export default function NewSaleScreen({ navigation, route }) {
             await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle });
         } catch (error) {
             console.log('Error generating PDF:', error);
-            if (Platform.OS === 'web') alert('Error: No se pudo generar el recibo digital.');
-            else Alert.alert('Error', 'No se pudo generar el recibo digital.');
+            showAlert({ type: 'error', title: 'Error', message: 'No se pudo generar el recibo digital.' });
         }
     };
 
@@ -613,8 +607,7 @@ export default function NewSaleScreen({ navigation, route }) {
         // Force client selection at the end ONLY if it is a debt or a budget
         if (!client && checkoutSaleType !== 'completed') {
             setClientModalVisible(true);
-            if (Platform.OS === 'web') alert('Selecciona un cliente para finalizar la operación.');
-            else Alert.alert('Cliente requerido', 'Debes seleccionar un cliente para finalizar la operación.');
+            showAlert({ type: 'warning', title: 'Cliente requerido', message: 'Debes seleccionar un cliente para finalizar la operación.' });
             return;
         }
 
@@ -649,60 +642,38 @@ export default function NewSaleScreen({ navigation, route }) {
                 sale_location: saleLocation || 'local'
             };
 
-            const successTitle = '🧪 Cobro Simulado (SANDBOX)';
-            const successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¡Simulación finalizada sin errores! (No se guardó en BD real ni se modificó stock).`;
+            const successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¡Simulación finalizada sin errores!\n(No se guardó en BD real ni se modificó stock).`;
 
-            if (Platform.OS === 'web') {
-                if (window.confirm(`${successTitle}\n${successMessage}\n\n¿Deseas generar el recibo PDF simulado?`)) {
-                    await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
-                }
-                clearCart();
-                setSelectedClient(null);
-                setSelectedPromo(null);
-                setManualDiscount('');
-                setManualDiscountType('fixed');
-                setIsSandboxMode(false); // Reset sandbox mode
-                setClientModalVisible(false);
-                navigation.navigate('Sales');
-            } else {
-                Alert.alert(
-                    successTitle,
-                    successMessage,
-                    [
-                        {
-                            text: 'CERRAR',
-                            onPress: () => {
-                                clearCart();
-                                setSelectedClient(null);
-                                setSelectedPromo(null);
-                                setManualDiscount('');
-                                setManualDiscountType('fixed');
-                                setIsSandboxMode(false); // Reset sandbox mode
-                                setClientModalVisible(false);
-                                navigation.navigate('Sales');
-                            }
-                        },
-                        {
-                            text: 'VER PDF SIMULADO',
-                            onPress: async () => {
-                                await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
-                                clearCart();
-                                setSelectedClient(null);
-                                setSelectedPromo(null);
-                                setManualDiscount('');
-                                setManualDiscountType('fixed');
-                                setIsSandboxMode(false); // Reset sandbox mode
-                                setClientModalVisible(false);
-                                navigation.navigate('Sales');
-                            }
+            showAlert({
+                type: 'sandbox',
+                title: 'Cobro Simulado (SANDBOX)',
+                message: successMessage,
+                buttons: [
+                    {
+                        text: 'VER PDF SIMULADO',
+                        onPress: async () => {
+                            await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
+                            clearCart(); setSelectedClient(null); setSelectedPromo(null);
+                            setManualDiscount(''); setManualDiscountType('fixed');
+                            setIsSandboxMode(false); setClientModalVisible(false);
+                            navigation.navigate('Sales');
                         }
-                    ]
-                );
-            }
+                    },
+                    {
+                        text: 'CERRAR',
+                        style: 'cancel',
+                        onPress: () => {
+                            clearCart(); setSelectedClient(null); setSelectedPromo(null);
+                            setManualDiscount(''); setManualDiscountType('fixed');
+                            setIsSandboxMode(false); setClientModalVisible(false);
+                            navigation.navigate('Sales');
+                        }
+                    },
+                ]
+            });
         } catch (error) {
             console.log('Sandbox Checkout Error:', error);
-            if (Platform.OS === 'web') alert(`Error: ${error.message}`);
-            else Alert.alert('Error', error.message);
+            showAlert({ type: 'error', title: 'Error Sandbox', message: error.message });
         } finally {
             setLoading(false);
         }
@@ -737,24 +708,21 @@ export default function NewSaleScreen({ navigation, route }) {
             // Validate that we have calculated values
             if (total === undefined || total === null || typeof total !== 'number') {
                 console.error('Invalid total amount:', total);
-                if (Platform.OS === 'web') alert('Error: No se pudo calcular el total. Por favor revisa que los productos tengan precios válidos.');
-                else Alert.alert('Error de Cálculo', 'No se pudo calcular el total. Por favor revisa que los productos tengan precios válidos.');
+                showAlert({ type: 'error', title: 'Error de Cálculo', message: 'No se pudo calcular el total. Por favor revisa que los productos tengan precios válidos.' });
                 setLoading(false);
                 return;
             }
 
             if (totalProfit === undefined || totalProfit === null || typeof totalProfit !== 'number') {
                 console.error('Invalid profit:', totalProfit);
-                if (Platform.OS === 'web') alert('Error: No se pudo calcular la ganancia.');
-                else Alert.alert('Error', 'No se pudo calcular la ganancia.');
+                showAlert({ type: 'error', title: 'Error', message: 'No se pudo calcular la ganancia.' });
                 setLoading(false);
                 return;
             }
 
             if (commission === undefined || commission === null || typeof commission !== 'number') {
                 console.error('Invalid commission:', commission);
-                if (Platform.OS === 'web') alert('Error: No se pudo calcular la comisión.');
-                else Alert.alert('Error', 'No se pudo calcular la comisión.');
+                showAlert({ type: 'error', title: 'Error', message: 'No se pudo calcular la comisión.' });
                 setLoading(false);
                 return;
             }
@@ -839,64 +807,41 @@ export default function NewSaleScreen({ navigation, route }) {
                 addSaleLocal(optSale, optItems);
             }
 
-            // Success! 
-            if (Platform.OS === 'web') {
-                let successTitle = '✅ Operación Registrada';
-                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\nLa operación se sincronizará en segundo plano. ¿Deseas generar el PDF?`;
-                
-                if (window.confirm(`${successTitle}\n${successMessage}`)) {
-                    await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
-                }
-                clearCart();
-                setSelectedClient(null);
-                setSelectedPromo(null);
-                setManualDiscount('');
-                setManualDiscountType('fixed');
-                setClientModalVisible(false);
-                navigation.navigate('Sales');
-            } else {
-                let successTitle = '✅ Operación Registrada';
-                let successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\nLa operación se sincronizará en segundo plano.`;
-                
-                Alert.alert(
-                    successTitle,
-                    successMessage,
-                    [
-                        {
-                            text: 'CERRAR',
-                            onPress: () => {
-                                clearCart();
-                                setSelectedClient(null);
-                                setSelectedPromo(null);
-                                setManualDiscount('');
-                                setManualDiscountType('fixed');
-                                setClientModalVisible(false);
-                                navigation.navigate('Sales');
-                            }
-                        },
-                        {
-                            text: 'VER PDF',
-                            onPress: async () => {
-                                await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
-                                clearCart();
-                                setSelectedClient(null);
-                                setSelectedPromo(null);
-                                setManualDiscount('');
-                                setManualDiscountType('fixed');
-                                setClientModalVisible(false);
-                                navigation.navigate('Sales');
-                            }
+            // Success!
+            const successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\nLa operación se sincronizará en segundo plano.`;
+            showAlert({
+                type: 'success',
+                title: 'Operación Registrada',
+                message: successMessage,
+                buttons: [
+                    {
+                        text: 'VER PDF',
+                        onPress: async () => {
+                            await generateReceiptPDF(salePayload, client, cart, checkoutSaleType);
+                            clearCart(); setSelectedClient(null); setSelectedPromo(null);
+                            setManualDiscount(''); setManualDiscountType('fixed');
+                            setClientModalVisible(false);
+                            navigation.navigate('Sales');
                         }
-                    ]
-                );
-            }
+                    },
+                    {
+                        text: 'CERRAR',
+                        style: 'cancel',
+                        onPress: () => {
+                            clearCart(); setSelectedClient(null); setSelectedPromo(null);
+                            setManualDiscount(''); setManualDiscountType('fixed');
+                            setClientModalVisible(false);
+                            navigation.navigate('Sales');
+                        }
+                    },
+                ]
+            });
 
             return; // Exit here, the background sync handles the rest.
 
         } catch (error) {
             console.log('Checkout Error:', error);
-            if (Platform.OS === 'web') alert(`Error: ${error.message}`);
-            else Alert.alert('Error', error.message);
+            showAlert({ type: 'error', title: 'Error de Cobro', message: error.message });
         } finally {
             setLoading(false);
         }
@@ -930,34 +875,27 @@ export default function NewSaleScreen({ navigation, route }) {
         setSelectedClient(sandboxClient);
 
         // 5. Inform user clearly about sandbox mode
-        const msg = `🧪 MODO SANDBOX ACTIVADO\n\nSe cargó un producto y cliente ficticios.\n\n⚠️ NINGUNA acción en esta sesión afectará tu inventario real, base de datos ni tus métricas de ventas.\n\n¿Querés cobrar automáticamente (amago) o probar botón por botón?`;
-        
-        if (Platform.OS === 'web') {
-            if (window.confirm(msg)) {
-                setTimeout(() => {
-                    processSandboxCheckout(sandboxClient, 'completed');
-                }, 300);
-            }
-        } else {
-            Alert.alert(
-                '🧪 Modo Sandbox',
-                msg,
-                [
-                    {
-                        text: 'PROBAR BOTÓN A BOTÓN',
-                        style: 'cancel',
-                    },
-                    {
-                        text: 'COBRAR (AMAGO)',
-                        onPress: () => {
-                            setTimeout(() => {
-                                processSandboxCheckout(sandboxClient, 'completed');
-                            }, 300);
-                        }
+        const msg = `Se cargó un producto y cliente ficticios.\n\n⚠️ NINGUNA acción en esta sesión afectará tu inventario real, base de datos ni tus métricas de ventas.`;
+
+        showAlert({
+            type: 'sandbox',
+            title: 'Modo Sandbox Activado',
+            message: msg,
+            buttons: [
+                {
+                    text: 'PROBAR BOTÓN A BOTÓN',
+                    style: 'cancel',
+                },
+                {
+                    text: 'COBRAR (AMAGO)',
+                    onPress: () => {
+                        setTimeout(() => {
+                            processSandboxCheckout(sandboxClient, 'completed');
+                        }, 300);
                     }
-                ]
-            );
-        }
+                }
+            ]
+        });
     };
 
     const renderHeader = () => (
@@ -1244,7 +1182,7 @@ export default function NewSaleScreen({ navigation, route }) {
                             if (permission && !permission.granted) {
                                 const res = await requestPermission();
                                 if (!res.granted) {
-                                    Alert.alert('Permiso denegado', 'Se necesita acceso a la cámara.');
+                                    showAlert({ type: 'error', title: 'Permiso denegado', message: 'Se necesita acceso a la cámara para escanear códigos.' });
                                     return;
                                 }
                             }
@@ -1290,14 +1228,13 @@ export default function NewSaleScreen({ navigation, route }) {
                             setProductModalVisible(true);
                         }, 300);
                     } else {
-                        setTimeout(() => processCheckout(client, checkoutTypeRef.current), 500);
+                        setTimeout(() => triggerCheckout(client, checkoutTypeRef.current), 500);
                     }
                 }}
                 onSelectWithType={(client, type) => {
                     setSelectedClient(client);
                     setClientModalVisible(false);
-                    // Saltamos pasos: Procesa directamente con el tipo elegido por el gesto
-                    setTimeout(() => processCheckout(client, type), 500);
+                    setTimeout(() => triggerCheckout(client, type), 500);
                 }}
                 showNewClientForm={showNewClientForm}
                 setShowNewClientForm={setShowNewClientForm}
@@ -1331,6 +1268,9 @@ export default function NewSaleScreen({ navigation, route }) {
                     </View>
                 </View>
             </Modal>
+
+            {/* CUSTOM ALERT */}
+            <CustomAlert {...alertProps} />
         </SafeAreaView >
     );
 }
