@@ -4,7 +4,6 @@ import {
     TouchableOpacity,
     Animated,
     StyleSheet,
-    Dimensions,
     Platform,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -31,18 +30,15 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
     const isAndroid = Platform.OS === 'android';
     const numTabs = state.routes.length;
 
-    // Animation values
     const translateX = useRef(new Animated.Value(0)).current;
     const scaleX = useRef(new Animated.Value(1)).current;
     const glowOpacity = useRef(new Animated.Value(1)).current;
 
-    // Track tab widths
     const [tabWidths, setTabWidths] = useState([]);
     const [tabPositions, setTabPositions] = useState([]);
     const [barWidth, setBarWidth] = useState(0);
     const layoutsReady = tabWidths.length === numTabs && barWidth > 0;
 
-    // Calculate indicator position when layout is ready or active tab changes
     useEffect(() => {
         if (!layoutsReady) return;
 
@@ -50,9 +46,7 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
         const tabWidth = barWidth / numTabs;
         const targetX = activeIndex * tabWidth + INDICATOR_HORIZONTAL_PADDING;
 
-        // Animate with spring for juicy liquid feel
         Animated.parallel([
-            // Squeeze indicator briefly during transition
             Animated.sequence([
                 Animated.timing(scaleX, {
                     toValue: 0.85,
@@ -66,14 +60,12 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
                     useNativeDriver: true,
                 }),
             ]),
-            // Slide to new position
             Animated.spring(translateX, {
                 toValue: targetX,
                 friction: 6,
                 tension: 80,
                 useNativeDriver: true,
             }),
-            // Pulse glow
             Animated.sequence([
                 Animated.timing(glowOpacity, {
                     toValue: 0.4,
@@ -90,7 +82,6 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
         ]).start();
     }, [state.index, layoutsReady, barWidth]);
 
-    // Set initial position immediately (no animation)
     useEffect(() => {
         if (!layoutsReady) return;
         const tabWidth = barWidth / numTabs;
@@ -106,26 +97,55 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
         <View
             style={[
                 styles.container,
-                {
-                    bottom: Math.max(insets.bottom, 12),
-                },
+                { bottom: Math.max(insets.bottom, 12) },
             ]}
         >
-            {/* Glass background */}
+            {/* ── CAPA 1: Base muy translúcida para que el blur respire ── */}
+            <View style={styles.glassBase} />
+
+            {/* ── CAPA 2: BlurView nativo en ambas plataformas (expo-blur) ── */}
             <BlurView
-                intensity={40}
+                intensity={90}
                 tint="dark"
                 style={StyleSheet.absoluteFill}
             />
 
-            {/* Inner content wrapper */}
+            {/* ── CAPA 3: Gradiente de reflexión interna (efecto frosted glass) ── */}
+            <LinearGradient
+                colors={[
+                    'rgba(255, 255, 255, 0.14)',
+                    'rgba(255, 255, 255, 0.04)',
+                    'rgba(0, 0, 0, 0.08)',
+                    'rgba(0, 0, 0, 0.28)',
+                ]}
+                locations={[0, 0.20, 0.60, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+            />
+
+            {/* ── CAPA 4: Tinte dorado muy sutil en los bordes ── */}
+            <LinearGradient
+                colors={[
+                    'rgba(212, 175, 55, 0.06)',
+                    'transparent',
+                    'rgba(212, 175, 55, 0.04)',
+                ]}
+                locations={[0, 0.5, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+            />
+
+            {/* ── CAPA 5: Línea de reflejo superior (efecto cristal) ── */}
+            <View style={styles.topHighlight} />
+
+            {/* ── CAPA 6: Contenido (indicador + tabs) ── */}
             <View
                 style={styles.innerContainer}
-                onLayout={(e) => {
-                    setBarWidth(e.nativeEvent.layout.width);
-                }}
+                onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
             >
-                {/* Sliding indicator (behind icons) */}
+                {/* Sliding indicator */}
                 {layoutsReady && (
                     <Animated.View
                         style={[
@@ -133,36 +153,29 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
                             {
                                 width: indicatorWidth,
                                 height: TAB_BAR_HEIGHT - INDICATOR_VERTICAL_PADDING * 2,
-                                transform: [
-                                    { translateX },
-                                    { scaleX },
-                                ],
+                                transform: [{ translateX }, { scaleX }],
                             },
                         ]}
                     >
-                        {/* Glass pill background */}
+                        {/* Fondo del indicador: gradiente dorado suave */}
                         <LinearGradient
                             colors={[
-                                'rgba(212, 175, 55, 0.18)',
-                                'rgba(212, 175, 55, 0.08)',
+                                'rgba(212, 175, 55, 0.22)',
+                                'rgba(212, 175, 55, 0.10)',
                             ]}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 0, y: 1 }}
                             style={styles.indicatorGradient}
                         />
-                        {/* Top highlight line (glass reflex) */}
+                        {/* Reflexión blanca en el top del pill */}
                         <Animated.View
-                            style={[
-                                styles.indicatorHighlight,
-                                { opacity: glowOpacity },
-                            ]}
+                            style={[styles.indicatorHighlight, { opacity: glowOpacity }]}
                         />
-                        {/* Bottom glow */}
+                        {/* Borde dorado del pill */}
+                        <View style={styles.indicatorBorder} />
+                        {/* Glow difuso abajo del pill */}
                         <Animated.View
-                            style={[
-                                styles.indicatorGlow,
-                                { opacity: glowOpacity },
-                            ]}
+                            style={[styles.indicatorGlow, { opacity: glowOpacity }]}
                         />
                     </Animated.View>
                 )}
@@ -179,17 +192,13 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
                             target: route.key,
                             canPreventDefault: true,
                         });
-
                         if (!isFocused && !event.defaultPrevented) {
                             navigation.navigate(route.name, route.params);
                         }
                     };
 
                     const onLongPress = () => {
-                        navigation.emit({
-                            type: 'tabLongPress',
-                            target: route.key,
-                        });
+                        navigation.emit({ type: 'tabLongPress', target: route.key });
                     };
 
                     const iconName = ICON_MAP[route.name] || 'help-circle';
@@ -222,13 +231,13 @@ export default function LiquidGlassTabBar({ state, descriptors, navigation }) {
                             <MaterialCommunityIcons
                                 name={iconName}
                                 size={22}
-                                color={isFocused ? GOLD : '#666'}
+                                color={isFocused ? GOLD : 'rgba(180, 180, 200, 0.6)'}
                             />
                             <Animated.Text
                                 style={[
                                     styles.label,
                                     {
-                                        color: isFocused ? GOLD : '#666',
+                                        color: isFocused ? GOLD : 'rgba(180, 180, 200, 0.55)',
                                         fontWeight: isFocused ? '700' : '500',
                                         fontSize: numTabs > 4 ? 9 : 10,
                                     },
@@ -254,21 +263,44 @@ const styles = StyleSheet.create({
         right: 15,
         height: TAB_BAR_HEIGHT,
         borderRadius: 24,
-        backgroundColor: 'rgba(10, 10, 10, 0.45)',
-        borderWidth: 1.5,
-        borderColor: 'rgba(255, 255, 255, 0.12)',
-        elevation: 10,
+        // Sin backgroundColor aquí: lo maneja glassBase + capas encima
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.13)',
+        elevation: 20,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.4,
-        shadowRadius: 15,
+        shadowOffset: { width: 0, height: 12 },
+        shadowOpacity: 0.5,
+        shadowRadius: 20,
         overflow: 'hidden',
     },
+
+    // Capa 1: base MUY transparente — el BlurView hace el trabajo pesado
+    glassBase: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: Platform.select({
+            ios: 'rgba(5, 5, 12, 0.15)',    // iOS: casi invisible, blur lo oscurece
+            android: 'rgba(5, 5, 14, 0.28)', // Android: un poco más para compensar blur limitado
+        }),
+        borderRadius: 24,
+    },
+
+    // Línea de destello en el borde superior (simula el reflejo del vidrio)
+    topHighlight: {
+        position: 'absolute',
+        top: 0,
+        left: 20,
+        right: 20,
+        height: 1,
+        backgroundColor: 'rgba(255, 255, 255, 0.22)',
+        borderRadius: 1,
+    },
+
     innerContainer: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
     },
+
     tab: {
         flex: 1,
         alignItems: 'center',
@@ -276,11 +308,13 @@ const styles = StyleSheet.create({
         height: '100%',
         zIndex: 2,
     },
+
     label: {
         fontSize: 10,
         marginTop: 2,
     },
-    // --- Sliding indicator ---
+
+    // Sliding indicator
     indicator: {
         position: 'absolute',
         top: INDICATOR_VERTICAL_PADDING,
@@ -289,10 +323,21 @@ const styles = StyleSheet.create({
         zIndex: 1,
         overflow: 'hidden',
     },
+
     indicatorGradient: {
         ...StyleSheet.absoluteFillObject,
         borderRadius: 18,
     },
+
+    // Borde translúcido dorado del pill
+    indicatorBorder: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: 'rgba(212, 175, 55, 0.30)',
+    },
+
+    // Reflexión blanca en la parte superior del pill
     indicatorHighlight: {
         position: 'absolute',
         top: 0,
@@ -300,22 +345,23 @@ const styles = StyleSheet.create({
         right: '15%',
         height: 1.5,
         borderRadius: 1,
-        backgroundColor: 'rgba(245, 230, 163, 0.45)',
+        backgroundColor: 'rgba(245, 230, 163, 0.55)',
     },
+
+    // Glow difuso debajo del pill
     indicatorGlow: {
         position: 'absolute',
-        bottom: -4,
+        bottom: -5,
         left: '20%',
         right: '20%',
-        height: 8,
-        borderRadius: 4,
+        height: 10,
+        borderRadius: 5,
         backgroundColor: GOLD,
-        opacity: 0.25,
-        // Simulates a diffuse glow below the pill
+        opacity: 0.20,
         shadowColor: GOLD,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.8,
-        shadowRadius: 8,
-        elevation: 3,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.9,
+        shadowRadius: 10,
+        elevation: 4,
     },
 });
