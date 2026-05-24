@@ -1,75 +1,144 @@
 /**
  * useAlert.js
- *
- * Hook para reemplazar Alert.alert() nativo con CustomAlert branded.
- *
- * Uso:
- *   const { showAlert, alertProps } = useAlert();
- *
- *   // En el JSX del componente:
- *   <CustomAlert {...alertProps} />
- *
- *   // Para mostrar:
- *   showAlert({
- *       type: 'success',          // 'success' | 'error' | 'warning' | 'info' | 'sandbox' | 'confirm'
- *       title: 'Operación OK',
- *       message: 'Total: $15000',
- *       buttons: [
- *           { text: 'CERRAR',  style: 'cancel',  onPress: () => {} },
- *           { text: 'VER PDF', onPress: () => {} },
- *       ],
- *       dismissable: false,   // optional — close on backdrop tap
- *   });
+ * Hook para manejo global de alertas imperativas
+ * 
+ * Permite mostrar alertas desde cualquier parte de la app
+ * sin necesidad de pasar props o contextos
+ * 
+ * Digital Boost Empire - Alert System
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
-export function useAlert() {
+/**
+ * Manager global singleton para permitir llamadas imperativas
+ * Esto permite usar alertManager.show() desde cualquier archivo
+ */
+class AlertManager {
+    constructor() {
+        this.showCallback = null;
+        this.hideCallback = null;
+    }
+
+    setShowCallback(callback) {
+        this.showCallback = callback;
+    }
+
+    setHideCallback(callback) {
+        this.hideCallback = callback;
+    }
+
+    show(config) {
+        if (this.showCallback) {
+            this.showCallback(config);
+        } else {
+            console.warn('⚠️ AlertManager: showCallback not initialized. Did you forget to add <CustomAlert> in App.js?');
+        }
+    }
+
+    hide() {
+        if (this.hideCallback) {
+            this.hideCallback();
+        } else {
+            console.warn('⚠️ AlertManager: hideCallback not initialized.');
+        }
+    }
+}
+
+// Instancia global exportada
+export const alertManager = new AlertManager();
+
+/**
+ * Hook principal para manejo de alertas
+ * Debe usarse en el componente raíz (App.js)
+ */
+export const useAlert = () => {
     const [alertConfig, setAlertConfig] = useState({
         visible: false,
         type: 'info',
         title: '',
         message: '',
-        buttons: [],
-        dismissable: false,
+        buttons: []
     });
 
-    // Resolve type from title/message heuristics if type is omitted
-    const resolveType = (cfg) => {
-        if (cfg.type) return cfg.type;
-        const t = ((cfg.title || '') + (cfg.message || '')).toLowerCase();
-        if (t.includes('error') || t.includes('fallo') || t.includes('no se pudo')) return 'error';
-        if (t.includes('sandbox') || t.includes('🧪')) return 'sandbox';
-        if (t.includes('✅') || t.includes('registrad') || t.includes('éxito') || t.includes('ok')) return 'success';
-        if (t.includes('⚠') || t.includes('atención') || t.includes('sin stock')) return 'warning';
-        return 'info';
-    };
-
-    const showAlert = useCallback((cfg) => {
-        // Strip emoji prefixes from title that were used with native Alert
-        let title = cfg.title || '';
-        title = title.replace(/^(✅|⚠️|🧪|❌|ℹ️)\s*/, '');
-
+    /**
+     * Muestra un alert con la configuración especificada
+     */
+    const showAlert = useCallback((config) => {
         setAlertConfig({
             visible: true,
-            type: resolveType(cfg),
-            title,
-            message: cfg.message || '',
-            buttons: cfg.buttons || [{ text: 'OK', onPress: null }],
-            dismissable: cfg.dismissable ?? false,
-            onDismiss: () => setAlertConfig(prev => ({ ...prev, visible: false })),
+            type: config.type || 'info',
+            title: config.title || '',
+            message: config.message || '',
+            buttons: config.buttons || [{ text: 'OK', onPress: () => { } }]
         });
     }, []);
 
+    /**
+     * Oculta el alert actual
+     */
     const hideAlert = useCallback(() => {
-        setAlertConfig(prev => ({ ...prev, visible: false }));
+        setAlertConfig(prev => ({
+            ...prev,
+            visible: false
+        }));
+
+        // Reset completo después de la animación
+        setTimeout(() => {
+            setAlertConfig({
+                visible: false,
+                type: 'info',
+                title: '',
+                message: '',
+                buttons: []
+            });
+        }, 300);
     }, []);
 
-    // alertProps — spread directly into <CustomAlert {...alertProps} />
-    const alertProps = {
-        ...alertConfig,
-        onDismiss: () => setAlertConfig(prev => ({ ...prev, visible: false })),
-    };
+    /**
+     * Registrar callbacks en el manager global
+     * Solo se ejecuta una vez al montar
+     */
+    useEffect(() => {
+        alertManager.setShowCallback(showAlert);
+        alertManager.setHideCallback(hideAlert);
 
-    return { showAlert, hideAlert, alertProps };
-}
+        return () => {
+            // Cleanup al desmontar
+            alertManager.setShowCallback(null);
+            alertManager.setHideCallback(null);
+        };
+    }, [showAlert, hideAlert]);
+
+    return {
+        alertProps: {
+            ...alertConfig,
+            onClose: hideAlert
+        },
+        showAlert,
+        hideAlert
+    };
+};
+
+/**
+ * Métodos de conveniencia exportados
+ */
+export const showSuccess = (title, message, buttons = []) => {
+    alertManager.show({ type: 'success', title, message, buttons });
+};
+
+export const showError = (title, message, buttons = []) => {
+    alertManager.show({ type: 'error', title, message, buttons });
+};
+
+export const showWarning = (title, message, buttons = []) => {
+    alertManager.show({ type: 'warning', title, message, buttons });
+};
+
+export const showInfo = (title, message, buttons = []) => {
+    alertManager.show({ type: 'info', title, message, buttons });
+};
+
+export const showSandbox = (title, message, buttons = []) => {
+    alertManager.show({ type: 'sandbox', title, message, buttons });
+};

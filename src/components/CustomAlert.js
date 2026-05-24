@@ -1,14 +1,16 @@
 /**
  * CustomAlert.js
+ * Sistema de alertas branded con design system Digital Boost Empire
  * 
- * Sistema de alertas premium para Digital Boost Empire.
- * Reemplaza Alert.alert() nativo con un modal branded, animado y con
- * design system consistente (fondo negro, acentos dorados, glassmorphism).
- *
- * Variantes: success | error | warning | info | sandbox | confirm
+ * Características:
+ * - 5 variantes: success, error, warning, info, sandbox
+ * - Animaciones fluidas con spring
+ * - Glassmorphism con BlurView
+ * - Iconos animados con pulso
+ * - Soporte para 1, 2 o 3+ botones
  */
 
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
     Modal,
     View,
@@ -16,373 +18,440 @@ import {
     TouchableOpacity,
     Animated,
     StyleSheet,
-    Dimensions,
-    BackHandler,
     Platform,
+    Dimensions,
+    StatusBar
 } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import { Ionicons } from '@expo/vector-icons';
 
-const { width: SCREEN_W } = Dimensions.get('window');
-const MODAL_WIDTH = Math.min(SCREEN_W - 48, 360);
+const { width, height } = Dimensions.get('window');
 
-// ─── Design Tokens ───────────────────────────────────────────────────────────
-const PALETTE = {
-    success:  { accent: '#00e676', bg: '#00e67614', icon: 'check-circle-outline' },
-    error:    { accent: '#ff5252', bg: '#ff525214', icon: 'alert-circle-outline' },
-    warning:  { accent: '#ffab00', bg: '#ffab0014', icon: 'alert-outline' },
-    info:     { accent: '#d4af37', bg: '#d4af3714', icon: 'information-outline' },
-    sandbox:  { accent: '#a78bfa', bg: '#a78bfa14', icon: 'flask-outline' },
-    confirm:  { accent: '#d4af37', bg: '#d4af3714', icon: 'help-circle-outline' },
+// Configuración de variantes con colores y iconos
+const VARIANT_CONFIG = {
+    success: {
+        color: '#00ff88',
+        icon: 'checkmark-circle',
+        borderColor: '#00ff88',
+        glowColor: 'rgba(0, 255, 136, 0.3)'
+    },
+    error: {
+        color: '#ff4444',
+        icon: 'alert-circle',
+        borderColor: '#ff4444',
+        glowColor: 'rgba(255, 68, 68, 0.3)'
+    },
+    warning: {
+        color: '#ffaa00',
+        icon: 'warning',
+        borderColor: '#ffaa00',
+        glowColor: 'rgba(255, 170, 0, 0.3)'
+    },
+    info: {
+        color: '#d4af37',
+        icon: 'information-circle',
+        borderColor: '#d4af37',
+        glowColor: 'rgba(212, 175, 55, 0.3)'
+    },
+    sandbox: {
+        color: '#7C3AED',
+        icon: 'flask',
+        borderColor: '#7C3AED',
+        glowColor: 'rgba(124, 58, 237, 0.3)'
+    }
 };
 
-// ─── AnimatedButton ───────────────────────────────────────────────────────────
-function AnimatedButton({ onPress, style, textStyle, label, isPrimary, accentColor, isDestructive }) {
-    const scale = useRef(new Animated.Value(1)).current;
-
-    const handlePressIn = () => {
-        Animated.spring(scale, {
-            toValue: 0.94,
-            useNativeDriver: true,
-            speed: 50,
-            bounciness: 4,
-        }).start();
-    };
-
-    const handlePressOut = () => {
-        Animated.spring(scale, {
-            toValue: 1,
-            useNativeDriver: true,
-            speed: 20,
-            bounciness: 8,
-        }).start();
-    };
-
-    const primaryBg = isDestructive ? '#ff525218' : `${accentColor}18`;
-    const primaryBorder = isDestructive ? '#ff5252' : accentColor;
-    const primaryText = isDestructive ? '#ff5252' : accentColor;
-
-    return (
-        <Animated.View style={{ transform: [{ scale }], flex: 1 }}>
-            <TouchableOpacity
-                activeOpacity={1}
-                onPressIn={handlePressIn}
-                onPressOut={handlePressOut}
-                onPress={onPress}
-                style={[
-                    styles.btn,
-                    isPrimary
-                        ? { backgroundColor: primaryBg, borderColor: primaryBorder, borderWidth: 1 }
-                        : { backgroundColor: '#0a0a0a', borderColor: '#222', borderWidth: 1 },
-                    style,
-                ]}
-            >
-                <Text
-                    style={[
-                        styles.btnText,
-                        isPrimary
-                            ? { color: primaryText, fontWeight: '900' }
-                            : { color: '#555', fontWeight: '700' },
-                        textStyle,
-                    ]}
-                    numberOfLines={1}
-                >
-                    {label}
-                </Text>
-            </TouchableOpacity>
-        </Animated.View>
-    );
-}
-
-// ─── CustomAlert ──────────────────────────────────────────────────────────────
-export default function CustomAlert({
+const CustomAlert = ({
     visible = false,
-    type = 'info',           // 'success' | 'error' | 'warning' | 'info' | 'sandbox' | 'confirm'
+    type = 'info',
     title = '',
     message = '',
-    buttons = [],            // [{ text, onPress, style }] — style: 'cancel' | 'destructive' | 'default'
-    onDismiss,               // called when backdrop tapped (if dismissable)
-    dismissable = false,     // whether tapping backdrop closes the alert
-}) {
-    const palette = PALETTE[type] || PALETTE.info;
-    const { accent, bg, icon } = palette;
+    buttons = [],
+    onClose = () => { }
+}) => {
+    const scaleAnim = useRef(new Animated.Value(0)).current;
+    const opacityAnim = useRef(new Animated.Value(0)).current;
+    const iconPulseAnim = useRef(new Animated.Value(1)).current;
+    const iconRotateAnim = useRef(new Animated.Value(0)).current;
 
-    // ── Animations ──
-    const backdropOpacity  = useRef(new Animated.Value(0)).current;
-    const cardScale        = useRef(new Animated.Value(0.82)).current;
-    const cardOpacity      = useRef(new Animated.Value(0)).current;
-    const iconPulse        = useRef(new Animated.Value(1)).current;
-    const accentLineWidth  = useRef(new Animated.Value(0)).current;
-    const pulseAnim        = useRef(null);
-
-    const animateIn = useCallback(() => {
-        // Start icon pulse loop
-        pulseAnim.current = Animated.loop(
-            Animated.sequence([
-                Animated.timing(iconPulse, { toValue: 1.12, duration: 900, useNativeDriver: true }),
-                Animated.timing(iconPulse, { toValue: 1.0,  duration: 900, useNativeDriver: true }),
-            ])
-        );
-
-        Animated.parallel([
-            Animated.timing(backdropOpacity, {
-                toValue: 1, duration: 220, useNativeDriver: true,
-            }),
-            Animated.spring(cardScale, {
-                toValue: 1, friction: 7, tension: 120, useNativeDriver: true,
-            }),
-            Animated.timing(cardOpacity, {
-                toValue: 1, duration: 200, useNativeDriver: true,
-            }),
-            Animated.timing(accentLineWidth, {
-                toValue: MODAL_WIDTH, duration: 350, delay: 120, useNativeDriver: false,
-            }),
-        ]).start(() => {
-            pulseAnim.current?.start();
-        });
-    }, []);
-
-    const animateOut = useCallback((cb) => {
-        pulseAnim.current?.stop();
-        Animated.parallel([
-            Animated.timing(backdropOpacity, {
-                toValue: 0, duration: 180, useNativeDriver: true,
-            }),
-            Animated.timing(cardScale, {
-                toValue: 0.88, duration: 160, useNativeDriver: true,
-            }),
-            Animated.timing(cardOpacity, {
-                toValue: 0, duration: 160, useNativeDriver: true,
-            }),
-        ]).start(() => {
-            // Reset for next show
-            cardScale.setValue(0.82);
-            cardOpacity.setValue(0);
-            backdropOpacity.setValue(0);
-            accentLineWidth.setValue(0);
-            iconPulse.setValue(1);
-            cb?.();
-        });
-    }, []);
+    const config = VARIANT_CONFIG[type] || VARIANT_CONFIG.info;
 
     useEffect(() => {
         if (visible) {
-            animateIn();
+            // Animación de entrada con spring
+            Animated.parallel([
+                Animated.spring(scaleAnim, {
+                    toValue: 1,
+                    friction: 8,
+                    tension: 40,
+                    useNativeDriver: true
+                }),
+                Animated.timing(opacityAnim, {
+                    toValue: 1,
+                    duration: 200,
+                    useNativeDriver: true
+                })
+            ]).start();
+
+            // Animación de pulso del icono (loop infinito)
+            Animated.loop(
+                Animated.sequence([
+                    Animated.timing(iconPulseAnim, {
+                        toValue: 1.15,
+                        duration: 1000,
+                        useNativeDriver: true
+                    }),
+                    Animated.timing(iconPulseAnim, {
+                        toValue: 1,
+                        duration: 1000,
+                        useNativeDriver: true
+                    })
+                ])
+            ).start();
+
+            // Rotación suave del icono al aparecer
+            Animated.spring(iconRotateAnim, {
+                toValue: 1,
+                friction: 8,
+                tension: 40,
+                useNativeDriver: true
+            }).start();
+        } else {
+            // Reset animaciones cuando se oculta
+            scaleAnim.setValue(0);
+            opacityAnim.setValue(0);
+            iconPulseAnim.setValue(1);
+            iconRotateAnim.setValue(0);
         }
     }, [visible]);
 
-    // Android back button
-    useEffect(() => {
-        if (!visible) return;
-        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-            if (dismissable) onDismiss?.();
-            return true; // always consume
-        });
-        return () => sub.remove();
-    }, [visible, dismissable]);
-
-    // Build buttons: default to single OK if none provided
-    const resolvedButtons = buttons.length > 0 ? buttons : [{ text: 'OK', onPress: null }];
-
-    const handleButtonPress = (btn) => {
-        animateOut(() => {
-            btn.onPress?.();
+    const handleButtonPress = (button) => {
+        // Animación de salida suave
+        Animated.parallel([
+            Animated.spring(scaleAnim, {
+                toValue: 0.85,
+                friction: 8,
+                useNativeDriver: true
+            }),
+            Animated.timing(opacityAnim, {
+                toValue: 0,
+                duration: 150,
+                useNativeDriver: true
+            })
+        ]).start(() => {
+            // Ejecutar callback del botón después de la animación
+            if (button.onPress) {
+                button.onPress();
+            }
+            // Cerrar el modal
+            if (onClose) {
+                onClose();
+            }
         });
     };
 
-    const handleBackdropPress = () => {
-        if (dismissable) {
-            animateOut(() => onDismiss?.());
-        }
-    };
+    // Asegurar al menos un botón por defecto
+    const displayButtons = buttons.length > 0
+        ? buttons
+        : [{ text: 'OK', onPress: () => { }, style: 'default' }];
+
+    // Interpolación de rotación del icono
+    const iconRotate = iconRotateAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg']
+    });
 
     if (!visible) return null;
 
-    const BlurOrView = Platform.OS === 'android' ? View : BlurView;
-    const blurProps = Platform.OS !== 'android'
-        ? { intensity: 60, tint: 'dark' }
-        : { style: { backgroundColor: 'rgba(0,0,0,0.88)' } };
-
     return (
         <Modal
-            visible={visible}
             transparent
+            visible={visible}
             animationType="none"
             statusBarTranslucent
-            onRequestClose={() => {
-                if (dismissable) animateOut(() => onDismiss?.());
-            }}
+            onRequestClose={() => handleButtonPress(displayButtons[0])}
         >
-            {/* ── Backdrop ── */}
-            <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]}>
-                <TouchableOpacity
-                    style={StyleSheet.absoluteFill}
-                    activeOpacity={1}
-                    onPress={handleBackdropPress}
-                />
-            </Animated.View>
+            <StatusBar backgroundColor="rgba(0,0,0,0.7)" barStyle="light-content" />
 
-            {/* ── Card ── */}
-            <View style={styles.centeredContainer} pointerEvents="box-none">
+            <Animated.View
+                style={[
+                    styles.overlay,
+                    { opacity: opacityAnim }
+                ]}
+            >
+                {/* Blur effect para iOS, fondo sólido para Android */}
+                {Platform.OS === 'ios' ? (
+                    <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+                ) : (
+                    <View style={styles.androidBlur} />
+                )}
+
                 <Animated.View
                     style={[
-                        styles.card,
+                        styles.alertContainer,
                         {
-                            opacity: cardOpacity,
-                            transform: [{ scale: cardScale }],
-                        },
+                            transform: [{ scale: scaleAnim }],
+                            borderTopColor: config.borderColor,
+                            shadowColor: config.glowColor
+                        }
                     ]}
                 >
-                    {/* Blur background */}
-                    <BlurOrView
-                        {...blurProps}
-                        style={StyleSheet.absoluteFill}
-                    />
+                    {/* Línea superior de acento con gradiente */}
+                    <View style={[styles.accentLine, { backgroundColor: config.borderColor }]} />
 
-                    {/* Animated accent top line */}
+                    {/* Icono animado con pulso y rotación */}
                     <Animated.View
-                        style={[
-                            styles.accentLine,
-                            { backgroundColor: accent, width: accentLineWidth },
-                        ]}
-                    />
-
-                    {/* Content */}
-                    <View style={styles.content}>
-                        {/* Icon */}
-                        <Animated.View
-                            style={[
-                                styles.iconContainer,
-                                { backgroundColor: bg, transform: [{ scale: iconPulse }] },
-                            ]}
-                        >
-                            <MaterialCommunityIcons name={icon} size={32} color={accent} />
-                        </Animated.View>
-
-                        {/* Title */}
-                        {!!title && (
-                            <Text style={[styles.title, { color: accent }]} numberOfLines={2}>
-                                {title}
-                            </Text>
-                        )}
-
-                        {/* Message */}
-                        {!!message && (
-                            <Text style={styles.message}>
-                                {message}
-                            </Text>
-                        )}
-
-                        {/* Separator */}
-                        <View style={[styles.separator, { backgroundColor: accent + '22' }]} />
-
-                        {/* Buttons */}
-                        <View style={[
-                            styles.buttonRow,
-                            resolvedButtons.length === 1 && { justifyContent: 'center' },
-                        ]}>
-                            {resolvedButtons.map((btn, idx) => {
-                                const isCancel = btn.style === 'cancel';
-                                const isDestructive = btn.style === 'destructive';
-                                // Last non-cancel button = primary; cancel = secondary
-                                const cancelIdx = resolvedButtons.findIndex(b => b.style === 'cancel');
-                                const isPrimary = isCancel ? false : (idx === resolvedButtons.length - 1 || cancelIdx !== -1);
-
-                                return (
-                                    <AnimatedButton
-                                        key={idx}
-                                        label={btn.text || 'OK'}
-                                        isPrimary={isPrimary}
-                                        isDestructive={isDestructive}
-                                        accentColor={accent}
-                                        onPress={() => handleButtonPress(btn)}
-                                    />
-                                );
-                            })}
+                        style={{
+                            transform: [
+                                { scale: iconPulseAnim },
+                                { rotate: iconRotate }
+                            ]
+                        }}
+                    >
+                        <View style={[styles.iconContainer, { backgroundColor: config.glowColor }]}>
+                            <Ionicons
+                                name={config.icon}
+                                size={56}
+                                color={config.color}
+                            />
                         </View>
+                    </Animated.View>
+
+                    {/* Título */}
+                    {title ? (
+                        <Text style={styles.title} numberOfLines={2}>
+                            {title}
+                        </Text>
+                    ) : null}
+
+                    {/* Mensaje */}
+                    {message ? (
+                        <Text style={styles.message} numberOfLines={5}>
+                            {message}
+                        </Text>
+                    ) : null}
+
+                    {/* Botones */}
+                    <View style={[
+                        styles.buttonsContainer,
+                        displayButtons.length === 1 && styles.singleButton,
+                        displayButtons.length === 2 && styles.twoButtons,
+                        displayButtons.length >= 3 && styles.multipleButtons
+                    ]}>
+                        {displayButtons.map((button, index) => (
+                            <AlertButton
+                                key={`btn-${index}`}
+                                button={button}
+                                config={config}
+                                onPress={() => handleButtonPress(button)}
+                                isLast={index === displayButtons.length - 1}
+                                total={displayButtons.length}
+                            />
+                        ))}
                     </View>
                 </Animated.View>
-            </View>
+            </Animated.View>
         </Modal>
     );
-}
+};
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// Componente de botón con animación de press
+const AlertButton = ({ button, config, onPress, isLast, total }) => {
+    const scaleAnim = useRef(new Animated.Value(1)).current;
+    const glowAnim = useRef(new Animated.Value(0)).current;
+
+    const handlePressIn = () => {
+        Animated.parallel([
+            Animated.spring(scaleAnim, {
+                toValue: 0.95,
+                friction: 3,
+                useNativeDriver: true
+            }),
+            Animated.timing(glowAnim, {
+                toValue: 1,
+                duration: 100,
+                useNativeDriver: false
+            })
+        ]).start();
+    };
+
+    const handlePressOut = () => {
+        Animated.parallel([
+            Animated.spring(scaleAnim, {
+                toValue: 1,
+                friction: 3,
+                useNativeDriver: true
+            }),
+            Animated.timing(glowAnim, {
+                toValue: 0,
+                duration: 100,
+                useNativeDriver: false
+            })
+        ]).start();
+    };
+
+    // Determinar estilo del botón
+    const isPrimary = button.style === 'default' || button.style === 'confirm' || !button.style;
+    const isDestructive = button.style === 'destructive';
+    const isCancel = button.style === 'cancel';
+
+    // Color de fondo dinámico
+    const backgroundColor = glowAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [
+            isDestructive ? '#ff4444' : (isPrimary ? config.color : '#2a2a2a'),
+            isDestructive ? '#ff6666' : (isPrimary ? config.borderColor : '#3a3a3a')
+        ]
+    });
+
+    return (
+        <Animated.View
+            style={[
+                styles.buttonWrapper,
+                total === 2 && styles.halfWidth,
+                total >= 3 && styles.fullWidth,
+                { transform: [{ scale: scaleAnim }] }
+            ]}
+        >
+            <TouchableOpacity
+                onPress={onPress}
+                onPressIn={handlePressIn}
+                onPressOut={handlePressOut}
+                activeOpacity={0.9}
+                style={styles.buttonTouchable}
+            >
+                <Animated.View
+                    style={[
+                        styles.button,
+                        { backgroundColor }
+                    ]}
+                >
+                    <Text style={[
+                        styles.buttonText,
+                        (isPrimary || isDestructive) && styles.primaryButtonText,
+                        isCancel && styles.cancelButtonText
+                    ]}>
+                        {button.text.toUpperCase()}
+                    </Text>
+                </Animated.View>
+            </TouchableOpacity>
+        </Animated.View>
+    );
+};
+
 const styles = StyleSheet.create({
-    backdrop: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'rgba(0,0,0,0.75)',
-    },
-    centeredContainer: {
+    overlay: {
         flex: 1,
-        alignItems: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.75)',
         justifyContent: 'center',
-        paddingHorizontal: 24,
+        alignItems: 'center',
+        padding: 20
     },
-    card: {
-        width: MODAL_WIDTH,
-        borderRadius: 20,
-        overflow: 'hidden',
-        backgroundColor: '#0d0d0d',
-        borderWidth: 1,
-        borderColor: '#1a1a1a',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 20 },
+    androidBlur: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0, 0, 0, 0.85)'
+    },
+    alertContainer: {
+        width: Math.min(width - 40, 420),
+        maxHeight: height * 0.8,
+        backgroundColor: '#1a1a1a',
+        borderRadius: 24,
+        padding: 28,
+        borderTopWidth: 5,
+        shadowOffset: { width: 0, height: 15 },
         shadowOpacity: 0.6,
-        shadowRadius: 30,
-        elevation: 25,
+        shadowRadius: 25,
+        elevation: 15,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.05)'
     },
     accentLine: {
-        height: 3,
-        borderRadius: 3,
-    },
-    content: {
-        padding: 24,
-        alignItems: 'center',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 5,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24
     },
     iconContainer: {
-        width: 64,
-        height: 64,
-        borderRadius: 32,
+        width: 90,
+        height: 90,
+        borderRadius: 45,
+        alignSelf: 'center',
         alignItems: 'center',
         justifyContent: 'center',
-        marginBottom: 16,
+        marginBottom: 20,
+        marginTop: 12
     },
     title: {
-        fontSize: 18,
-        fontWeight: '900',
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: '#ffffff',
         textAlign: 'center',
-        letterSpacing: 0.3,
-        marginBottom: 10,
+        marginBottom: 14,
+        letterSpacing: 0.8,
+        lineHeight: 30
     },
     message: {
-        fontSize: 14,
-        color: '#888',
+        fontSize: 16,
+        color: '#c0c0c0',
         textAlign: 'center',
-        lineHeight: 20,
-        fontWeight: '500',
+        marginBottom: 28,
+        lineHeight: 24,
+        letterSpacing: 0.3
     },
-    separator: {
-        width: '100%',
-        height: 1,
-        marginTop: 20,
-        marginBottom: 16,
-        borderRadius: 1,
-    },
-    buttonRow: {
+    buttonsContainer: {
         flexDirection: 'row',
-        gap: 10,
-        width: '100%',
+        flexWrap: 'wrap',
+        marginTop: 4,
+        gap: 12
     },
-    btn: {
-        paddingVertical: 13,
-        paddingHorizontal: 16,
-        borderRadius: 12,
+    singleButton: {
+        justifyContent: 'center'
+    },
+    twoButtons: {
+        justifyContent: 'space-between'
+    },
+    multipleButtons: {
+        flexDirection: 'column'
+    },
+    buttonWrapper: {
+        flex: 1
+    },
+    halfWidth: {
+        flex: 0,
+        minWidth: '48%'
+    },
+    fullWidth: {
+        width: '100%'
+    },
+    buttonTouchable: {
+        width: '100%'
+    },
+    button: {
+        paddingVertical: 16,
+        paddingHorizontal: 24,
+        borderRadius: 14,
         alignItems: 'center',
         justifyContent: 'center',
+        minHeight: 52
     },
-    btnText: {
-        fontSize: 13,
-        letterSpacing: 0.5,
+    buttonText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#ffffff',
+        letterSpacing: 1.2
     },
+    primaryButtonText: {
+        color: '#000000'
+    },
+    cancelButtonText: {
+        color: '#999999'
+    },
+    destructiveButtonText: {
+        color: '#ffffff'
+    }
 });
+
+export default CustomAlert;

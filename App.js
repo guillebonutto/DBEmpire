@@ -5,6 +5,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
 import { StatusBar } from 'expo-status-bar';
 
+import CustomAlert from './src/components/CustomAlert';
+import { useAlert } from './src/hooks/useAlert';
 import { DatabaseInitService } from './src/services/DatabaseInitService';
 import { GlobalDataService } from './src/services/GlobalDataService';
 import { useFinanceStore } from './src/store/useFinanceStore';
@@ -19,7 +21,7 @@ export default function App() {
       try {
         await DatabaseInitService.init();
         await GlobalDataService.preloadAll(); // Download and cache all DB
-        
+
         // Initialize Stores sequentially from local cache
         await useFinanceStore.getState().initStore();
         await useProductStore.getState().initStore();
@@ -32,12 +34,14 @@ export default function App() {
     };
     initApp();
   }, []);
+  const { alertProps } = useAlert();
 
   return (
     <SafeAreaProvider>
       <NavigationContainer>
         <AppNavigator />
         <StatusBar style="auto" />
+        <CustomAlert {...alertProps} />
       </NavigationContainer>
       <AgendaWidget />
     </SafeAreaProvider>
