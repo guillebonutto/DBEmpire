@@ -57,7 +57,7 @@ export const DeviceAuthService = {
 
         // Format to human-readable (promised format: X78Y-Z21)
         // Taking first 8 chars: XXXX-XXXX
-        const clean = hash.toUpperCase().replace(/[^A-Z0-0]/g, '');
+        const clean = hash.toUpperCase().replace(/[^A-Z0-9]/g, '');
         const part1 = clean.substring(0, 4);
         const part2 = clean.substring(4, 8);
         return `${part1}-${part2}`;

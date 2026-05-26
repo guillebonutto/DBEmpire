@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, StatusBar, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
@@ -9,11 +9,15 @@ import * as Sharing from 'expo-sharing';
 
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useClientStore } from '../store/useClientStore';
+import CustomAlert from '../components/CustomAlert';
+import { useAlert } from '../hooks/useAlert';
 
 export default function OrdersScreen({ navigation, route }) {
     const { sales, saleItems, isLoading, fetchAllData } = useFinanceStore();
     const { clients } = useClientStore();
     const [viewType, setViewType] = useState(route.params?.initialViewType || 'pedidos');
+    const [loading, setLoading] = useState(false);
+    const { showAlert, alertProps } = useAlert();
 
     // Filter and enrich data from store
     const displayedOrders = sales.filter(o => {
@@ -40,7 +44,7 @@ export default function OrdersScreen({ navigation, route }) {
 
     const handleTrack = (trackingNumber) => {
         if (!trackingNumber) {
-            Alert.alert('Info', 'No hay número de seguimiento');
+            showAlert({ type: 'info', title: 'Info', message: 'No hay número de seguimiento' });
             return;
         }
         // Universal Tracking Link (17TRACK auto-detect)
@@ -49,10 +53,11 @@ export default function OrdersScreen({ navigation, route }) {
     };
 
     const handleFinishOrder = async (order) => {
-        Alert.alert(
-            'Finalizar Pedido',
-            '¿Marcar como Entregado/Finalizado? Pasará al historial de ventas.',
-            [
+        showAlert({
+            type: 'info',
+            title: 'Finalizar Pedido',
+            message: '¿Marcar como Entregado/Finalizado? Pasará al historial de ventas.',
+            buttons: [
                 { text: 'Cancelar', style: 'cancel' },
                 {
                     text: 'Finalizar',
@@ -66,16 +71,16 @@ export default function OrdersScreen({ navigation, route }) {
 
                             if (error) throw error;
                             fetchAllData(true);
-                            Alert.alert('Éxito', 'Pedido finalizado y archivado.');
+                            showAlert({ type: 'success', title: 'Éxito', message: 'Pedido finalizado y archivado.' });
                         } catch (err) {
-                            Alert.alert('Error', 'No se pudo actualizar.');
+                            showAlert({ type: 'error', title: 'Error', message: 'No se pudo actualizar.' });
                         } finally {
                             setLoading(false);
                         }
                     }
                 }
             ]
-        );
+        });
     };
 
     const generateReceiptPDF = async (saleData) => {
@@ -126,15 +131,16 @@ export default function OrdersScreen({ navigation, route }) {
             const { uri } = await Print.printToFileAsync({ html });
             await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: isBudget ? 'Enviar Presupuesto' : 'Enviar Comprobante' });
         } catch (err) {
-            Alert.alert('Error', 'No se pudo generar el PDF.');
+            showAlert({ type: 'error', title: 'Error', message: 'No se pudo generar el PDF.' });
         }
     };
 
     const handleConvertToSale = async (order) => {
-        Alert.alert(
-            '✅ Convertir a Venta',
-            `¿Confirmar venta por $${order.total_amount} al cliente ${order.clients?.name || 'Anónimo'}?`,
-            [
+        showAlert({
+            type: 'info',
+            title: '✅ Convertir a Venta',
+            message: `¿Confirmar venta por $${order.total_amount} al cliente ${order.clients?.name || 'Anónimo'}?`,
+            buttons: [
                 { text: 'Cancelar', style: 'cancel' },
                 {
                     text: 'CONFIRMAR VENTA',
@@ -147,16 +153,16 @@ export default function OrdersScreen({ navigation, route }) {
                                 .eq('id', order.id);
                             if (error) throw error;
                             fetchAllData(true);
-                            Alert.alert('✅ Venta confirmada', 'El presupuesto fue convertido en venta y archivado.');
+                            showAlert({ type: 'success', title: '✅ Venta confirmada', message: 'El presupuesto fue convertido en venta y archivado.' });
                         } catch (err) {
-                            Alert.alert('Error', 'No se pudo convertir el presupuesto.');
+                            showAlert({ type: 'error', title: 'Error', message: 'No se pudo convertir el presupuesto.' });
                         } finally {
                             setLoading(false);
                         }
                     }
                 }
             ]
-        );
+        });
     };
 
     const renderOrderItem = useCallback(({ item }) => (
@@ -276,6 +282,7 @@ export default function OrdersScreen({ navigation, route }) {
                 windowSize={5}
                 removeClippedSubviews={true}
             />
+            <CustomAlert {...alertProps} />
         </SafeAreaView>
     );
 }

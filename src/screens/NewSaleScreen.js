@@ -694,8 +694,7 @@ export default function NewSaleScreen({ navigation, route }) {
         // Force client selection at the end ONLY if it is a debt or a budget
         if (!client && checkoutSaleType !== 'completed') {
             setClientModalVisible(true);
-            if (Platform.OS === 'web') alert('Selecciona un cliente para finalizar la operación.');
-            else Alert.alert('Cliente requerido', 'Debes seleccionar un cliente para finalizar la operación.');
+            showAlert({ type: 'warning', title: 'Cliente requerido', message: 'Debes seleccionar un cliente para finalizar la operación.' });
             return;
         }
 
@@ -975,21 +974,45 @@ export default function NewSaleScreen({ navigation, route }) {
 
             {/* ── SANDBOX MODE BANNER ── */}
             {isSandboxMode && (
-                <View style={{
-                    backgroundColor: '#7C3AED',
-                    paddingVertical: 6,
-                    paddingHorizontal: 15,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                }}>
-                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>
-                        🧪 MODO SANDBOX ACTIVO — Ningún dato real será modificado
-                    </Text>
-                    <TouchableOpacity onPress={() => { setIsSandboxMode(false); clearCart(); setSelectedClient(null); }}>
-                        <Text style={{ color: '#ddd6fe', fontWeight: 'bold', fontSize: 13 }}>✕ SALIR</Text>
+                <LinearGradient
+                    colors={['#7C3AED', '#5B21B6']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={{
+                        margin: 10,
+                        borderRadius: 12,
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        borderWidth: 1,
+                        borderColor: 'rgba(255, 255, 255, 0.2)',
+                        shadowColor: '#7C3AED',
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.3,
+                        shadowRadius: 6,
+                        elevation: 4
+                    }}
+                >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                        <MaterialCommunityIcons name="flask" size={20} color="#fff" />
+                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13, flex: 1 }}>
+                            MODO SANDBOX ACTIVO — Ningún dato real será modificado
+                        </Text>
+                    </View>
+                    <TouchableOpacity 
+                        onPress={() => { setIsSandboxMode(false); clearCart(); setSelectedClient(null); }}
+                        style={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                            borderRadius: 8
+                        }}
+                    >
+                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 11 }}>✕ SALIR</Text>
                     </TouchableOpacity>
-                </View>
+                </LinearGradient>
             )}
 
             <FlatList

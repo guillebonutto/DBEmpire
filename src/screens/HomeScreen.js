@@ -14,6 +14,8 @@ import { EmpireAIService } from '../services/empireAIService';
 import { useAuthStore } from '../store/useAuthStore';
 import { DeviceAuthService } from '../services/deviceAuth';
 import * as Clipboard from 'expo-clipboard';
+import CustomAlert from '../components/CustomAlert';
+import { useAlert } from '../hooks/useAlert';
 
 const { width } = Dimensions.get('window');
 
@@ -28,6 +30,7 @@ export default function HomeScreen({ navigation }) {
     const [aiModalVisible, setAiModalVisible] = useState(false);
     const [simulatorQuery, setSimulatorQuery] = useState('');
     const [hardwareRole, setHardwareRole] = useState(null);
+    const { showAlert, alertProps } = useAlert();
 
     const loadDashboardData = useCallback(async () => {
         try {
@@ -422,10 +425,11 @@ export default function HomeScreen({ navigation }) {
                                     } catch (e) { console.log(e); }
                                     finally { setLoadingAI(false); }
 
-                                    Alert.alert(
-                                        nextRole === 'seller' ? '👁️ MODO SOCIO ACTIVADO' : '👑 MODO LÍDER RESTAURADO',
-                                        nextRole === 'seller' ? 'Ahora ves la app exactamente como tu socio.' : 'Has recuperado el acceso total.'
-                                    );
+                                    showAlert({
+                                        type: 'info',
+                                        title: nextRole === 'seller' ? '👁️ MODO SOCIO ACTIVADO' : '👑 MODO LÍDER RESTAURADO',
+                                        message: nextRole === 'seller' ? 'Ahora ves la app exactamente como tu socio.' : 'Has recuperado el acceso total.'
+                                    });
                                 }} 
                                 style={[
                                     styles.spyModeBtn, 
@@ -483,7 +487,7 @@ export default function HomeScreen({ navigation }) {
                     <TouchableOpacity
                         onPress={async () => {
                             await Clipboard.setStringAsync('grb1m.uala');
-                            Alert.alert('✅ ¡Alias Copiado!', 'El alias "grb1m.uala" se copió al portapapeles.');
+                            showAlert({ type: 'success', title: '¡Alias Copiado!', message: 'El alias "grb1m.uala" se copió al portapapeles.' });
                         }}
                         style={styles.aliasContainer}
                         activeOpacity={0.7}
@@ -549,7 +553,7 @@ export default function HomeScreen({ navigation }) {
                                 if (!permission || !permission.granted) {
                                     const res = await requestPermission();
                                     if (!res.granted) {
-                                        Alert.alert('Permiso denegado', 'Se necesita acceso a la cámara.');
+                                        showAlert({ type: 'error', title: 'Permiso denegado', message: 'Se necesita acceso a la cámara.' });
                                         return;
                                     }
                                 }
@@ -577,6 +581,7 @@ export default function HomeScreen({ navigation }) {
                         <View style={styles.statusDot} />
                     </View>
                 </ScrollView>
+                <CustomAlert {...alertProps} />
             </SafeAreaView>
         </View>
     );
