@@ -124,3 +124,17 @@ index 1274a12..22aa25b 100644
  // From node_modules
      implementation 'com.google.code.gson:gson:2.8.6'
  }
+diff --git a/node_modules/react-native-android-notification-listener/android/src/main/AndroidManifest.xml b/node_modules/react-native-android-notification-listener/android/src/main/AndroidManifest.xml
+index 3cb5acc..a0dc2e1 100644
+--- a/node_modules/react-native-android-notification-listener/android/src/main/AndroidManifest.xml
++++ b/node_modules/react-native-android-notification-listener/android/src/main/AndroidManifest.xml
+@@ -7,8 +7,7 @@
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+ 
+-    <application
+-        android:allowBackup="false">
++    <application>
+         <service
+             android:name=".RNAndroidNotificationListener"
+             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
