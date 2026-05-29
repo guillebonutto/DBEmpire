@@ -15,6 +15,8 @@ import { useClientStore } from './src/store/useClientStore';
 import { useReminderStore } from './src/store/useReminderStore';
 import AgendaWidget from './src/components/AgendaWidget';
 
+import { checkUalaListenerPermission } from './src/services/UalaNotificationListener';
+
 export default function App() {
   React.useEffect(() => {
     const initApp = async () => {
@@ -28,6 +30,7 @@ export default function App() {
         await useClientStore.getState().initStore();
         await useReminderStore.getState().initStore();
         console.log('🚀 Empire App Initialized Successfully');
+        await checkUalaListenerPermission();
       } catch (err) {
         console.error('Initialization failed:', err);
       }

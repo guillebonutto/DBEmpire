@@ -12,6 +12,9 @@ import { Linking } from 'react-native';
 import { IdentitySection, PriceSection, StockSection, OperativeSection, VariantsSection, OverheadSection } from '../components/ProductFormSections';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
+import { useProductStore } from '../store/useProductStore';
+import { LocalDbService } from '../services/localDbService';
+
 
 export default function AddProductScreen({ navigation, route }) {
     // Wizard Mode: Detect "Product to Edit" either from params or from Queue
@@ -343,7 +346,7 @@ export default function AddProductScreen({ navigation, route }) {
             cost_price = productToEdit.cost_price?.toString() || '';
             profit_margin_percent = productToEdit.profit_margin_percent?.toString() || '';
             sale_price = productToEdit.sale_price?.toString() || '';
-            sale_price_cordoba = (productToEdit.sale_price_cordoba || productToEdit.sale_price)?.toString() || '';
+            sale_price_cordoba = (productToEdit.sale_price_cordoba !== undefined && productToEdit.sale_price_cordoba !== null ? productToEdit.sale_price_cordoba : productToEdit.sale_price)?.toString() || '';
             stock_local = productToEdit.stock_local?.toString() || '0';
             stock_cordoba = productToEdit.stock_cordoba?.toString() || '0';
             defect_notes = productToEdit.defect_notes || '';
@@ -605,7 +608,7 @@ export default function AddProductScreen({ navigation, route }) {
                 provider: formData.provider,
                 cost_price: parseFloat(formData.cost_price) || 0,
                 sale_price: parseFloat(formData.sale_price) || 0,
-                sale_price_cordoba: parseFloat(formData.sale_price_cordoba) || parseFloat(formData.sale_price) || 0,
+                sale_price_cordoba: (formData.sale_price_cordoba !== undefined && formData.sale_price_cordoba !== null && formData.sale_price_cordoba !== '') ? (parseFloat(formData.sale_price_cordoba) ?? 0) : (parseFloat(formData.sale_price) || 0),
                 profit_margin_percent: parseFloat(formData.profit_margin_percent) || 0,
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
@@ -691,6 +694,28 @@ export default function AddProductScreen({ navigation, route }) {
 
                     stockDifference = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                 }
+            }
+
+            // 🚀 INSTANT OFFLINE SYNC: Guardar al instante en la base SQLite local y el Zustand store para reflejar el cambio inmediato en la UI
+            try {
+                const savedProduct = {
+                    ...productPayload,
+                    id: productId
+                };
+                await LocalDbService.saveItem('products', savedProduct);
+                const storeProducts = useProductStore.getState().products;
+                if (productToEdit && !isLiquidation) {
+                    useProductStore.setState({
+                        products: storeProducts.map(p => p.id === productId ? { ...p, ...savedProduct } : p)
+                    });
+                } else {
+                    useProductStore.setState({
+                        products: [...storeProducts, savedProduct]
+                    });
+                }
+                console.log('[AddProductScreen] Instantly updated local cache & Zustand store!');
+            } catch (localErr) {
+                console.warn('[AddProductScreen] Local database sync failed:', localErr);
             }
 
             // 1. Auto-Expense Logic: Only runs on manual stock increases, NOT when linking an existing Supplier Order.

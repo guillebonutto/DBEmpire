@@ -220,13 +220,20 @@ export const SyncService = {
     },
 
     _processGenericInsert: async (tableName, payload) => {
-        const { error } = await supabase.from(tableName).insert(payload);
+        const dataToInsert = { ...payload };
+        if (tableName === 'supplier_orders') {
+            delete dataToInsert.total_amount;
+        }
+        const { error } = await supabase.from(tableName).insert(dataToInsert);
         if (error) throw error;
         return true;
     },
 
     _processGenericUpdate: async (tableName, payload) => {
         const { id, ...updateData } = payload;
+        if (tableName === 'supplier_orders') {
+            delete updateData.total_amount;
+        }
         const { error } = await supabase.from(tableName).update(updateData).eq('id', id);
         if (error) throw error;
         return true;

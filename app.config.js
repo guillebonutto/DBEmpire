@@ -41,6 +41,7 @@ module.exports = {
             policy: "appVersion"
         },
         plugins: [
+            "./withAndroidNotificationListener.js",
             [
                 "expo-image-picker",
                 {

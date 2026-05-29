@@ -70,7 +70,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                             {(userRole?.toLowerCase() === 'admin' || userRole === 'leader') ? (
                                     <>
                                         <Text style={[styles.salePrice, { color: '#2ecc71', fontSize: 18, fontWeight: 'bold' }]}>${item.sale_price}</Text>
-                                        {item.sale_price_cordoba && (
+                                        {!!item.sale_price_cordoba && (
                                             <View style={{ backgroundColor: '#d4af3720', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 0.5, borderColor: '#d4af3740' }}>
                                                 <Text style={{ color: '#d4af37', fontSize: 10, fontWeight: 'bold' }}>CBA: ${item.sale_price_cordoba}</Text>
                                             </View>
