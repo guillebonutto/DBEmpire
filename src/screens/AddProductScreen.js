@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Switch, Modal, FlatList, StatusBar } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,12 +9,21 @@ import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Linking } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { captureRef } from 'react-native-view-shot';
 import { IdentitySection, PriceSection, StockSection, OperativeSection, VariantsSection, OverheadSection } from '../components/ProductFormSections';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
-import { useProductStore } from '../store/useProductStore';
-import { LocalDbService } from '../services/localDbService';
 
+const calculateEan8CheckDigit = (digits) => {
+    const d = digits.split('').map(Number);
+    const sumOdd = d[0] + d[2] + d[4] + d[6];
+    const sumEven = d[1] + d[3] + d[5];
+    const total = sumOdd * 3 + sumEven;
+    const check = (10 - (total % 10)) % 10;
+    return check;
+};
 
 export default function AddProductScreen({ navigation, route }) {
     // Wizard Mode: Detect "Product to Edit" either from params or from Queue
@@ -23,16 +32,11 @@ export default function AddProductScreen({ navigation, route }) {
     const isWizardMode = !!route.params?.importQueue;
 
     const [loading, setLoading] = useState(false);
+    const labelRef = useRef(null);
+    const labelGridRef = useRef(null);
 
     useEffect(() => {
-        const checkRole = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin' && role !== 'leader') {
-                Alert.alert('Acceso Denegado', 'Solo los Líderes pueden agregar productos.');
-                navigation.replace('Main');
-            }
-        };
-        checkRole();
+        requestPermission(); // Warm up camera
     }, []);
     const [image, setImage] = useState(route.params?.scannedImage || null);
 
@@ -89,28 +93,11 @@ export default function AddProductScreen({ navigation, route }) {
         defect_notes: '',
         barcode: route.params?.scannedBarcode || '',
         is_individual: false,
-        register_expense: false
+        is_packaging: false
     });
 
 
 
-    // Calculate Sale Price automatically
-    useEffect(() => {
-        if (formData.cost_price && formData.profit_margin_percent) {
-            const cost = parseFloat(formData.cost_price);
-            const margin = parseFloat(formData.profit_margin_percent);
-
-            if (!isNaN(cost) && !isNaN(margin)) {
-                // Sale Price = Cost * (1 + Margin)
-                const calculatedPrice = cost * (1 + (margin / 100));
-
-                setFormData(prev => ({
-                    ...prev,
-                    sale_price: calculatedPrice.toFixed(2)
-                }));
-            }
-        }
-    }, [formData.cost_price, formData.profit_margin_percent, overheadInternet, overheadElectricity]);
 
     // Apply Calculator
     const applyOverheadCalc = () => {
@@ -319,98 +306,54 @@ export default function AddProductScreen({ navigation, route }) {
         Alert.alert('💡 Precio Promediado', `Se calculó un costo promedio de $${ppp.toFixed(2)} basado en las compras seleccionadas.`);
     };
 
-    // Unified Form Initialization (Handles direct edits, wizard creations, and wizard linked stock increments)
+    // Wizard Mode: Pre-fill from Import Queue
     useEffect(() => {
-        let name = '';
-        let description = '';
-        let provider = '';
-        let cost_price = '';
-        let profit_margin_percent = '';
-        let sale_price = '';
-        let sale_price_cordoba = '';
-        let stock_local = '';
-        let stock_cordoba = '';
-        let defect_notes = '';
-        let barcode = '';
-        let is_individual = false;
-        let internet_cost = '';
-        let electricity_cost = '';
-        let image_url = null;
-        let loadedVariants = [];
-
-        // 1. Load existing product data if editing or linking
-        if (productToEdit) {
-            name = productToEdit.name || '';
-            description = productToEdit.description || '';
-            provider = productToEdit.provider || '';
-            cost_price = productToEdit.cost_price?.toString() || '';
-            profit_margin_percent = productToEdit.profit_margin_percent?.toString() || '';
-            sale_price = productToEdit.sale_price?.toString() || '';
-            sale_price_cordoba = (productToEdit.sale_price_cordoba !== undefined && productToEdit.sale_price_cordoba !== null ? productToEdit.sale_price_cordoba : productToEdit.sale_price)?.toString() || '';
-            stock_local = productToEdit.stock_local?.toString() || '0';
-            stock_cordoba = productToEdit.stock_cordoba?.toString() || '0';
-            defect_notes = productToEdit.defect_notes || '';
-            barcode = productToEdit.barcode || '';
-            is_individual = !!productToEdit.is_individual;
-            internet_cost = productToEdit.internet_cost?.toString() || '';
-            electricity_cost = productToEdit.electricity_cost?.toString() || '';
-            image_url = productToEdit.image_url || null;
-            loadedVariants = Array.isArray(productToEdit.variants) ? JSON.parse(JSON.stringify(productToEdit.variants)) : [];
-        }
-
-        // 2. Adjust with wizard queue item (purchase order incoming stock) if present
         if (queueItem) {
-            name = queueItem.name || queueItem.temp_product_name || name;
-            cost_price = queueItem.cost?.toString() || queueItem.cost_per_unit?.toString() || cost_price;
-            provider = queueItem.provider || queueItem.supplier || queueItem.supplier_orders?.provider_name || provider;
+            setFormData(prev => ({
+                ...prev,
+                name: queueItem.name || queueItem.temp_product_name || productToEdit?.name || prev.name,
+                cost_price: queueItem.cost?.toString() || queueItem.cost_per_unit?.toString() || prev.cost_price,
+                stock_local: queueItem.quantity?.toString() || prev.stock_local,
+                provider: queueItem.provider || queueItem.supplier || queueItem.supplier_orders?.provider_name || prev.provider
+            }));
 
-            const incomingQty = parseInt(queueItem.quantity) || 0;
-
-            if (productToEdit) {
-                // Wizard linking to existing product -> ADD incoming stock to old stock
-                stock_local = ((parseInt(productToEdit.stock_local) || 0) + incomingQty).toString();
-
-                if (queueItem.color) {
-                    const cleanColor = queueItem.color.trim();
-                    const existingVarIdx = loadedVariants.findIndex(v => v.color?.toLowerCase() === cleanColor.toLowerCase());
-                    if (existingVarIdx >= 0) {
-                        const currentVarStock = parseInt(loadedVariants[existingVarIdx].stock) || 0;
-                        loadedVariants[existingVarIdx].stock = (currentVarStock + incomingQty).toString();
-                    } else {
-                        loadedVariants.push({ color: cleanColor, stock: incomingQty.toString() });
-                    }
-                }
-            } else {
-                // Wizard creating a brand new product -> Prefill quantity directly
-                stock_local = incomingQty.toString();
-                if (queueItem.color) {
-                    loadedVariants = [{ color: queueItem.color.trim(), stock: incomingQty.toString() }];
-                }
+            if (queueItem.color) {
+                setVariants([{ color: queueItem.color, stock: queueItem.quantity?.toString() || "" }]);
             }
         }
+    }, [queueItem]);
 
-        // Set to state
-        setFormData({
-            name,
-            description,
-            provider,
-            cost_price,
-            profit_margin_percent,
-            sale_price,
-            sale_price_cordoba,
-            stock_local,
-            stock_cordoba,
-            defect_notes,
-            barcode,
-            is_individual
-        });
-        setOverheadInternet(internet_cost);
-        setOverheadElectricity(electricity_cost);
-        setVariants(loadedVariants);
-        if (image_url) {
-            setImage(image_url);
+    // Load data if editing (existing product)
+    useEffect(() => {
+        if (productToEdit) {
+            try {
+                setFormData({
+                    name: productToEdit.name || '',
+                    description: productToEdit.description || '',
+                    provider: productToEdit.provider || '',
+                    cost_price: productToEdit.cost_price?.toString() || '',
+                    profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
+                    sale_price: productToEdit.sale_price?.toString() || '',
+                    sale_price_cordoba: (productToEdit.sale_price_cordoba || productToEdit.sale_price)?.toString() || '',
+                    stock_local: productToEdit.stock_local?.toString() || '',
+                    stock_cordoba: productToEdit.stock_cordoba?.toString() || '',
+                    defect_notes: productToEdit.defect_notes || '',
+                    barcode: productToEdit.barcode || '',
+                    is_individual: !!productToEdit.is_individual,
+                    is_packaging: !!productToEdit.is_packaging
+                });
+                setOverheadInternet(productToEdit.internet_cost?.toString() || '');
+                setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
+                setVariants(Array.isArray(productToEdit.variants) ? productToEdit.variants : []);
+                if (productToEdit.image_url) {
+                    setImage(productToEdit.image_url);
+                }
+            } catch (err) {
+                console.error('Error initializing product data:', err);
+                Alert.alert('Error', 'Hubo un problema al cargar los datos del producto.');
+            }
         }
-    }, [productToEdit, queueItem]);
+    }, [productToEdit]);
 
     const addVariant = () => {
         setVariants([...variants, { color: '', stock: '' }]);
@@ -433,7 +376,21 @@ export default function AddProductScreen({ navigation, route }) {
     };
 
     const handleChange = (name, value) => {
-        setFormData(prev => ({ ...prev, [name]: value }));
+        setFormData(prev => {
+            const nextData = { ...prev, [name]: value };
+            
+            // Auto calculate sale_price if cost_price or profit_margin_percent is changed by user
+            if (name === 'cost_price' || name === 'profit_margin_percent') {
+                const cost = parseFloat(name === 'cost_price' ? value : nextData.cost_price);
+                const margin = parseFloat(name === 'profit_margin_percent' ? value : nextData.profit_margin_percent);
+                
+                if (!isNaN(cost) && !isNaN(margin)) {
+                    nextData.sale_price = (cost * (1 + (margin / 100))).toFixed(2);
+                }
+            }
+            
+            return nextData;
+        });
     };
 
     const pickImage = async () => {
@@ -510,6 +467,18 @@ export default function AddProductScreen({ navigation, route }) {
         if (!formData.name || !formData.sale_price) {
             Alert.alert('Error', 'El nombre y el precio de venta son obligatorios.');
             return;
+        }
+
+        if (formData.barcode) {
+            const cleanBarcode = formData.barcode.replace(/\D/g, '');
+            if (cleanBarcode.length !== 7 && cleanBarcode.length !== 8) {
+                Alert.alert('Código EAN-8 Inválido', 'El código de barras (Code 8 / EAN-8) debe contener exactamente 7 u 8 números.');
+                return;
+            }
+            const base7 = cleanBarcode.substring(0, 7);
+            const checkDigit = calculateEan8CheckDigit(base7);
+            const finalEan8 = `${base7}${checkDigit}`;
+            formData.barcode = finalEan8;
         }
 
         // Check for Liquidation Condition
@@ -608,7 +577,7 @@ export default function AddProductScreen({ navigation, route }) {
                 provider: formData.provider,
                 cost_price: parseFloat(formData.cost_price) || 0,
                 sale_price: parseFloat(formData.sale_price) || 0,
-                sale_price_cordoba: (formData.sale_price_cordoba !== undefined && formData.sale_price_cordoba !== null && formData.sale_price_cordoba !== '') ? (parseFloat(formData.sale_price_cordoba) ?? 0) : (parseFloat(formData.sale_price) || 0),
+                sale_price_cordoba: parseFloat(formData.sale_price_cordoba) || parseFloat(formData.sale_price) || 0,
                 profit_margin_percent: parseFloat(formData.profit_margin_percent) || 0,
                 internet_cost: parseFloat(overheadInternet) || 0,
                 electricity_cost: parseFloat(overheadElectricity) || 0,
@@ -616,7 +585,8 @@ export default function AddProductScreen({ navigation, route }) {
                 variants: variants,
                 active: true,
                 image_url: finalImageUrl,
-                is_individual: !!formData.is_individual
+                is_individual: !!formData.is_individual,
+                is_packaging: !!formData.is_packaging
             };
 
             let productId = productToEdit?.id;
@@ -696,30 +666,9 @@ export default function AddProductScreen({ navigation, route }) {
                 }
             }
 
-            // 🚀 INSTANT OFFLINE SYNC: Guardar al instante en la base SQLite local y el Zustand store para reflejar el cambio inmediato en la UI
-            try {
-                const savedProduct = {
-                    ...productPayload,
-                    id: productId
-                };
-                await LocalDbService.saveItem('products', savedProduct);
-                const storeProducts = useProductStore.getState().products;
-                if (productToEdit && !isLiquidation) {
-                    useProductStore.setState({
-                        products: storeProducts.map(p => p.id === productId ? { ...p, ...savedProduct } : p)
-                    });
-                } else {
-                    useProductStore.setState({
-                        products: [...storeProducts, savedProduct]
-                    });
-                }
-                console.log('[AddProductScreen] Instantly updated local cache & Zustand store!');
-            } catch (localErr) {
-                console.warn('[AddProductScreen] Local database sync failed:', localErr);
-            }
-
-            // 1. Auto-Expense Logic: Only runs on manual stock increases, NOT when linking an existing Supplier Order.
-            if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle && formData.register_expense) {
+            // --- AUTO EXPENSE & ORDER GENERATION ---
+            // Only runs when manually adding stock (not in Wizard Mode), never on manual edits.
+            if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle) {
                 try {
                     const oldVariants = Array.isArray(productToEdit?.variants) ? productToEdit.variants : [];
                     const newVariants = variants || [];
@@ -738,6 +687,7 @@ export default function AddProductScreen({ navigation, route }) {
 
                     const totalExpenseAmount = stockDifference * costPrice;
                     const details = additions.length > 0 ? additions : [{ color: 'General', qty: stockDifference }];
+                    const orderDateStr = route.params?.originalOrderDate || new Date().toISOString();
 
                     await supabase.from('expenses').insert({
                         description: `Inventario: ${formData.name}${additions.length > 0 ? ' (Color Mix)' : ''} (x${stockDifference})`,
@@ -746,7 +696,7 @@ export default function AddProductScreen({ navigation, route }) {
                         product_id: productId,
                         quantity: stockDifference,
                         details: details,
-                        created_at: new Date().toISOString()
+                        created_at: orderDateStr
                     });
 
                     // 2. Create Supplier Order (Auto-generated)
@@ -759,7 +709,8 @@ export default function AddProductScreen({ navigation, route }) {
                             status: 'received',
                             installments_total: 1,
                             installments_paid: 1, // Already paid if it's an auto-expense
-                            created_at: new Date().toISOString()
+                            created_at: orderDateStr,
+                            received_at: orderDateStr
                         })
                         .select()
                         .single();
@@ -792,27 +743,42 @@ export default function AddProductScreen({ navigation, route }) {
             }
             // -------------------------------
 
-            if (!isLiquidation && !isWizardMode) {
+            if (!isLiquidation) {
+                // Recalculate global packaging cost whenever a product is saved
+                try {
+                    const { data: packagingProducts } = await supabase
+                        .from('products')
+                        .select('cost_price, name')
+                        .eq('is_packaging', true)
+                        .eq('active', true);
+                    if (packagingProducts && packagingProducts.length > 0) {
+                        const totalPackagingCost = packagingProducts.reduce((sum, p) => sum + (parseFloat(p.cost_price) || 0), 0);
+                        await AsyncStorage.setItem('packaging_total_cost', totalPackagingCost.toString());
+                        await AsyncStorage.setItem('packaging_products_list', JSON.stringify(packagingProducts.map(p => p.name)));
+                    } else if (!formData.is_packaging) {
+                        // If no packaging products exist, reset to 0
+                        await AsyncStorage.setItem('packaging_total_cost', '0');
+                    }
+                } catch (pkgErr) {
+                    console.warn('Packaging cost recalculation error:', pkgErr);
+                }
+
                 // NOTE: Do NOT show 'guardado' Alert here if CRM modal will open.
                 // The modal itself serves as confirmation. We show it only if no clients found.
-                if (productId) {
-                    try {
-                        const interested = await CRMService.findInterestedClients({
-                            id: productId,
-                            name: formData.name
-                        });
 
-                        if (interested.length > 0) {
-                            // Show CRM modal — navigation happens when user dismisses it
-                            setPotentialClients(interested);
-                            setShowMatchModal(true);
-                            setLoading(false); // Reset loading so modal is interactive
-                            return; // Early return — don't navigate yet
-                        } else {
-                            Alert.alert('✅ Éxito', 'Producto guardado correctamente.');
-                        }
-                    } catch (crmErr) {
-                        console.log('CRM Logic error (non-critical):', crmErr);
+                if (productId) {
+                    const interested = await CRMService.findInterestedClients({
+                        id: productId,
+                        name: formData.name
+                    });
+
+                    if (interested.length > 0) {
+                        // Show CRM modal — navigation happens when user dismisses it
+                        setPotentialClients(interested);
+                        setShowMatchModal(true);
+                        // Navigation is handled by the modal's close/dismiss action
+                        return; // Early return — don't navigate yet
+                    } else {
                         Alert.alert('✅ Éxito', 'Producto guardado correctamente.');
                     }
                 }
@@ -834,7 +800,8 @@ export default function AddProductScreen({ navigation, route }) {
                     Alert.alert('✅ Siguiente', 'Producto registrado. Vamos con el próximo...');
                     navigation.replace('AddProduct', {
                         importQueue: route.params.importQueue,
-                        importIndex: nextIndex
+                        importIndex: nextIndex,
+                        originalOrderDate: route.params.originalOrderDate
                     });
                 } else {
                     Alert.alert('🎉 Importación Completa', 'Todos los productos nuevos han sido registrados e ingresados al inventario.');
@@ -932,6 +899,81 @@ export default function AddProductScreen({ navigation, route }) {
         );
     };
 
+    const generateBarcodeFromName = () => {
+        let uniqueCode = '';
+        let attempts = 0;
+        
+        while (attempts < 1000) {
+            const base = '100' + Math.floor(1000 + Math.random() * 9000);
+            const check = calculateEan8CheckDigit(base);
+            const candidate = `${base}${check}`;
+            
+            const exists = allProducts.some(p => p.barcode === candidate);
+            if (!exists) {
+                uniqueCode = candidate;
+                break;
+            }
+            attempts++;
+        }
+
+        if (uniqueCode) {
+            handleChange('barcode', uniqueCode);
+            Alert.alert('Código Generado (EAN-8)', `Se ha generado el código EAN-8:\n"${uniqueCode}"`);
+        } else {
+            Alert.alert('Error', 'No se pudo generar un código de barras único.');
+        }
+    };
+
+    const handlePrintBarcode = async () => {
+        if (!formData.barcode) {
+            Alert.alert('Error', 'No hay código de barras para imprimir.');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            // Wait to ensure cached images load if recently changed
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const uri = await captureRef(labelRef, {
+                format: 'jpg',
+                quality: 1.0,
+            });
+
+            await Sharing.shareAsync(uri);
+        } catch (error) {
+            console.error('Error printing barcode image:', error);
+            Alert.alert('Error', 'No se pudo generar la imagen de la etiqueta.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handlePrintBarcodeGrid = async () => {
+        if (!formData.barcode) {
+            Alert.alert('Error', 'No hay código de barras para imprimir.');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            // Wait to ensure cached images load if recently changed
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const uri = await captureRef(labelGridRef, {
+                format: 'jpg',
+                quality: 1.0,
+            });
+
+            await Sharing.shareAsync(uri);
+        } catch (error) {
+            console.error('Error printing barcode grid image:', error);
+            Alert.alert('Error', 'No se pudo generar la imagen de la grilla de etiquetas.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const renderWizardHeader = () => {
         if (!isWizardMode) return null;
         const current = (route.params.importIndex || 0) + 1;
@@ -951,11 +993,20 @@ export default function AddProductScreen({ navigation, route }) {
     };
 
     return (
-        <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+            <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
             <StatusBar barStyle="light-content" />
             <SafeAreaView style={styles.safe} edges={['top']}>{renderWizardHeader()}</SafeAreaView>
             
-            <IdentitySection formData={formData} handleChange={handleChange} image={image} onPickImage={pickImage} onScanBarcode={async () => {
+            <IdentitySection 
+                formData={formData} 
+                handleChange={handleChange} 
+                image={image} 
+                onPickImage={pickImage} 
+                onGenerateBarcodeFromName={generateBarcodeFromName}
+                onPrintBarcode={handlePrintBarcode}
+                onPrintBarcodeGrid={handlePrintBarcodeGrid}
+                onScanBarcode={async () => {
                     if (permission && !permission.granted) {
                         const result = await requestPermission();
                         if (!result.granted) {
@@ -966,13 +1017,14 @@ export default function AddProductScreen({ navigation, route }) {
                     setScanningMode('main');
                     setScanned(false);
                     setIsScanning(true);
-            }} />
+                }} 
+            />
 
             <PriceSection formData={formData} handleChange={handleChange} pendingPurchases={pendingPurchases} queueItem={queueItem} onShowPPPModal={() => setShowPPPModal(true)} />
             
             <StockSection formData={formData} handleChange={handleChange} />
 
-            <OperativeSection formData={formData} handleChange={handleChange} suppliersList={suppliersList} isBundle={isBundle} onToggleBundle={() => setIsBundle(!isBundle)} isIndividual={!!formData.is_individual} onToggleIndividual={() => handleChange('is_individual', !formData.is_individual)} bundleItems={bundleItems} onShowBundlePicker={() => setShowBundlePicker(true)} onShowSupplierModal={() => setShowSupplierModal(true)} />
+            <OperativeSection formData={formData} handleChange={handleChange} suppliersList={suppliersList} isBundle={isBundle} onToggleBundle={() => setIsBundle(!isBundle)} isIndividual={!!formData.is_individual} onToggleIndividual={() => handleChange('is_individual', !formData.is_individual)} isPackaging={!!formData.is_packaging} onTogglePackaging={() => handleChange('is_packaging', !formData.is_packaging)} bundleItems={bundleItems} onShowBundlePicker={() => setShowBundlePicker(true)} onShowSupplierModal={() => setShowSupplierModal(true)} />
 
             <VariantsSection variants={variants} addVariant={addVariant} removeVariant={removeVariant} updateVariant={updateVariant} />
 
@@ -1328,15 +1380,16 @@ export default function AddProductScreen({ navigation, route }) {
                         style={{ flex: 1 }}
                         facing="back"
                         barcodeScannerSettings={{
-                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
+                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128', 'code39', 'code93', 'upc_a', 'upc_e'],
                         }}
                         onBarcodeScanned={scanned ? undefined : async ({ data }) => {
                             if (scanningMode === 'bundle') {
                                 setScanned(true); // Temporarily pause
 
                                 // 1. Search in local inventory (robust match)
+                                const cleanScanned = String(data).trim().toUpperCase();
                                 let found = allProducts.find(p =>
-                                    p.barcode && p.barcode.toString().trim() === data.trim()
+                                    p.barcode && p.barcode.toString().trim().toUpperCase() === cleanScanned
                                 );
 
                                 // 1.5 Fallback: If not found in memory, try a quick DB search 
@@ -1345,7 +1398,7 @@ export default function AddProductScreen({ navigation, route }) {
                                     const { data: dbProd } = await supabase
                                         .from('products')
                                         .select('id, name, sale_price, barcode, image_url')
-                                        .eq('barcode', data.trim())
+                                        .eq('barcode', cleanScanned)
                                         .eq('active', true)
                                         .single();
                                     if (dbProd) found = dbProd;
@@ -1526,21 +1579,7 @@ export default function AddProductScreen({ navigation, route }) {
                             style={styles.crmCloseBtn}
                             onPress={() => {
                                 setShowMatchModal(false);
-                                // If we were in wizard mode (though bypassed above, keeping as safety), 
-                                // we should handle it here too.
-                                if (route.params?.importQueue && productId) {
-                                    const nextIndex = route.params.importIndex + 1;
-                                    if (nextIndex < route.params.importQueue.length) {
-                                        navigation.replace('AddProduct', {
-                                            importQueue: route.params.importQueue,
-                                            importIndex: nextIndex
-                                        });
-                                    } else {
-                                        navigation.navigate('SupplierOrders');
-                                    }
-                                } else {
-                                    navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
-                                }
+                                navigation.navigate('Main', { screen: 'Inventario', params: { refresh: Date.now() } });
                             }}
                         >
                             <Text style={styles.crmCloseBtnText}>LISTO, CONTINUAR</Text>
@@ -1680,7 +1719,122 @@ export default function AddProductScreen({ navigation, route }) {
                 </View>
             </Modal>
 
-        </ScrollView >
+            {/* Hidden view for capturing 1 single large barcode (58x47mm) */}
+            <View 
+                collapsable={false}
+                ref={labelRef} 
+                style={{ 
+                    position: 'absolute', 
+                    left: -9999, 
+                    top: -9999, 
+                    width: 580, 
+                    height: 470, 
+                    backgroundColor: '#ffffff', 
+                    flexDirection: 'column',
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    paddingVertical: 30,
+                    paddingHorizontal: 40,
+                }}
+            >
+                {formData.barcode ? (
+                    <>
+                        <Image 
+                            source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=4&height=15` }} 
+                            style={{ width: '100%', height: 260 }}
+                            resizeMode="contain"
+                        />
+                        <Text style={{ fontSize: 24, fontWeight: '900', color: '#000000', marginTop: 20, letterSpacing: 2 }}>
+                            {formData.barcode}
+                        </Text>
+                    </>
+                ) : null}
+            </View>
+
+            {/* Hidden view for capturing 2x2 grid of 4 barcodes (58x47mm) */}
+            <View 
+                collapsable={false}
+                ref={labelGridRef} 
+                style={{ 
+                    position: 'absolute', 
+                    left: -9999, 
+                    top: -9999, 
+                    width: 580, 
+                    height: 470, 
+                    backgroundColor: '#ffffff', 
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    paddingVertical: 20,
+                    paddingHorizontal: 15,
+                }}
+            >
+                {/* Row 1 */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', height: '44%' }}>
+                    {/* Top Left */}
+                    <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                        {formData.barcode ? (
+                            <>
+                                <Image 
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                    style={{ width: '100%', height: 130 }}
+                                    resizeMode="contain"
+                                />
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: '#000000', marginTop: 6 }}>{formData.barcode}</Text>
+                            </>
+                        ) : null}
+                    </View>
+                    {/* Top Right */}
+                    <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                        {formData.barcode ? (
+                            <>
+                                <Image 
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                    style={{ width: '100%', height: 130 }}
+                                    resizeMode="contain"
+                                />
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: '#000000', marginTop: 6 }}>{formData.barcode}</Text>
+                            </>
+                        ) : null}
+                    </View>
+                </View>
+
+                {/* Scissors cutting guidelines */}
+                <View style={{ position: 'absolute', top: 235, left: 15, right: 15, height: 1, borderWidth: 1, borderColor: '#d3d3d3', borderStyle: 'dashed' }} />
+                <View style={{ position: 'absolute', left: 290, top: 15, bottom: 15, width: 1, borderWidth: 1, borderColor: '#d3d3d3', borderStyle: 'dashed' }} />
+
+                {/* Row 2 */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', height: '44%' }}>
+                    {/* Bottom Left */}
+                    <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                        {formData.barcode ? (
+                            <>
+                                <Image 
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                    style={{ width: '100%', height: 130 }}
+                                    resizeMode="contain"
+                                />
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: '#000000', marginTop: 6 }}>{formData.barcode}</Text>
+                            </>
+                        ) : null}
+                    </View>
+                    {/* Bottom Right */}
+                    <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                        {formData.barcode ? (
+                            <>
+                                <Image 
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                    style={{ width: '100%', height: 130 }}
+                                    resizeMode="contain"
+                                />
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: '#000000', marginTop: 6 }}>{formData.barcode}</Text>
+                            </>
+                        ) : null}
+                    </View>
+                </View>
+            </View>
+
+            </ScrollView >
+        </View>
     );
 }
 

@@ -41,6 +41,10 @@ import TransfersScreen from '../screens/TransfersScreen';
 import NewTransferScreen from '../screens/NewTransferScreen';
 import AIDashboardScreen from '../screens/AIDashboardScreen';
 import ProductTesterScreen from '../screens/ProductTesterScreen';
+import BreakEvenScreen from '../screens/BreakEvenScreen';
+import ProfileScreen from '../screens/ProfileScreen';
+import CampaignPlannerScreen from '../screens/CampaignPlannerScreen';
+import CombosScreen from '../screens/CombosScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -263,6 +267,26 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="ProductTester"
                 component={ProductTesterScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="BreakEven"
+                component={BreakEvenScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Profile"
+                component={ProfileScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="CampaignPlanner"
+                component={CampaignPlannerScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Combos"
+                component={CombosScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

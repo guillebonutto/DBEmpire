@@ -155,15 +155,15 @@ export default function NewTransferScreen({ navigation }) {
                                 <View style={styles.productRow}>
                                     {!isExpanded ? (
                                         <TouchableOpacity style={styles.rowInner} onPress={() => { setExpandedProductId(item.id); setSelectedColor(null); }}>
-                                            <View>
-                                                <Text style={styles.rowName}>{item.name}</Text>
+                                            <View style={{ flex: 1, marginRight: 10 }}>
+                                                <Text style={styles.rowName} numberOfLines={2}>{item.name}</Text>
                                                 <Text style={styles.rowStock}>Local: {available} uni.</Text>
                                             </View>
                                             <MaterialCommunityIcons name="chevron-right" size={24} color="#d4af37" />
                                         </TouchableOpacity>
                                     ) : (
                                         <View style={{ padding: 10 }}>
-                                            <Text style={styles.rowName}>{item.name}</Text>
+                                            <Text style={styles.rowName} numberOfLines={2}>{item.name}</Text>
                                             
                                             {item.variants && item.variants.length > 0 && (
                                                 <View style={{ marginVertical: 10 }}>

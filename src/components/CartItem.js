@@ -111,7 +111,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8 
     },
     ignoreText: { color: '#888', fontSize: 11, fontWeight: 'bold', textDecorationLine: 'underline' },
-    itemInfo: { flex: 1 },
+    itemInfo: { flex: 1, marginRight: 15 },
     itemName: { color: '#fff', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
     itemMeta: { color: '#888', fontSize: 13, marginTop: 6, letterSpacing: 0.5 },
     metaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },

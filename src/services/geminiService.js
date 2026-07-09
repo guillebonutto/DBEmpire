@@ -15,7 +15,9 @@ const handleGeminiRequest = async (prompt, imageBase64 = null, jsonMode = false,
         }
 
         const apiKey = settingsData.value;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+        const primaryModel = 'gemini-3.5-flash';
+        const fallbackModel = 'gemini-2.5-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${primaryModel}:generateContent?key=${apiKey}`;
 
         // Construct payload
         const contents = [
@@ -47,15 +49,26 @@ const handleGeminiRequest = async (prompt, imageBase64 = null, jsonMode = false,
             }
         }
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                // Adding Accept for better browser compatibility
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(body)
-        });
+        const makeRequest = async (requestUrl) => {
+            return await fetch(requestUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // Adding Accept for better browser compatibility
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+        };
+
+        let response = await makeRequest(url);
+
+        // Fallback to gemini-2.5-flash if 503 (service unavailable) or 404 (model not found)
+        if (!response.ok && (response.status === 503 || response.status === 404)) {
+            console.log(`[GeminiService] Primary model ${primaryModel} failed with status ${response.status}. Falling back to ${fallbackModel}...`);
+            const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
+            response = await makeRequest(fallbackUrl);
+        }
 
         if (!response.ok) {
             const errText = await response.text();

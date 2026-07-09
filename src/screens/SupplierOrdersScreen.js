@@ -12,6 +12,13 @@ export default function SupplierOrdersScreen({ navigation }) {
     const { products } = useProductStore();
     const [pendingWizardOrders, setPendingWizardOrders] = useState([]);
 
+    // Always refresh from Supabase when entering this screen so both users see the latest orders
+    useFocusEffect(
+        useCallback(() => {
+            fetchAllData(true);
+        }, [fetchAllData])
+    );
+
     // Consignment payment modal
     const [payModalVisible, setPayModalVisible] = useState(false);
     const [payModalOrder, setPayModalOrder] = useState(null);
@@ -33,7 +40,10 @@ export default function SupplierOrdersScreen({ navigation }) {
         try {
             const { error } = await supabase
                 .from('supplier_orders')
-                .update({ status: 'received' })
+                .update({ 
+                    status: 'received',
+                    received_at: new Date().toISOString()
+                })
                 .eq('id', order.id);
 
             if (error) throw error;
@@ -58,7 +68,8 @@ export default function SupplierOrdersScreen({ navigation }) {
 
         navigation.navigate('AddProduct', {
             importQueue: itemsToLink,
-            importIndex: 0
+            importIndex: 0,
+            originalOrderDate: order.created_at
         });
     };
 
@@ -109,7 +120,12 @@ export default function SupplierOrdersScreen({ navigation }) {
                         <MaterialCommunityIcons name="cube-send" size={24} color="#d4af37" style={{ marginRight: 10 }} />
                         <View>
                             <Text style={styles.providerName}>{item.provider_name}</Text>
-                            <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
+                            <Text style={styles.date}>Pedido: {new Date(item.created_at).toLocaleDateString()}</Text>
+                            {item.received_at && (
+                                <Text style={[styles.date, { color: '#2ecc71', marginTop: 2 }]}>
+                                    Recibido: {new Date(item.received_at).toLocaleDateString()}
+                                </Text>
+                            )}
                         </View>
                     </View>
                     <View style={[styles.statusBadge, { backgroundColor: item.status === 'received' ? '#27ae60' : '#e67e22' }]}>

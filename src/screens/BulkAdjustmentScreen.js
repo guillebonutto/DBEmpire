@@ -11,14 +11,7 @@ export default function BulkAdjustmentScreen({ navigation }) {
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        const checkRole = async () => {
-            const role = await AsyncStorage.getItem('user_role');
-            if (role !== 'admin') {
-                Alert.alert('Acceso Denegado', 'Esta herramienta es confidencial.');
-                navigation.replace('Main');
-            }
-        };
-        checkRole();
+        // No role check
     }, []);
     const [percentage, setPercentage] = useState('');
     const [updating, setUpdating] = useState(false);

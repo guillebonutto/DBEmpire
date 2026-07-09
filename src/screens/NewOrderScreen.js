@@ -378,16 +378,16 @@ export default function NewOrderScreen({ navigation }) {
                                             style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flex: 1 }}
                                             onPress={() => initiateProductSelection(item)}
                                         >
-                                            <View>
-                                                <Text style={styles.rowTitle}>{item.name}</Text>
+                                            <View style={{ flex: 1, marginRight: 15 }}>
+                                                <Text style={styles.rowTitle} numberOfLines={2}>{item.name}</Text>
                                                 <Text style={[styles.rowSubtitle, { color: available < 5 ? '#e74c3c' : '#888' }]}>Disp: {available}</Text>
                                             </View>
-                                            <Text style={styles.rowPrice}>${item.sale_price}</Text>
+                                            <Text style={styles.rowPrice} numberOfLines={1}>${item.sale_price}</Text>
                                         </TouchableOpacity>
                                     ) : (
                                         <View style={{ flex: 1 }}>
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
-                                                <Text style={styles.rowTitle}>{item.name}</Text>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10, alignItems: 'center' }}>
+                                                <Text style={[styles.rowTitle, { flex: 1, marginRight: 15 }]} numberOfLines={2}>{item.name}</Text>
                                                 <Text style={styles.rowPrice}>${item.sale_price}</Text>
                                             </View>
 

@@ -13,8 +13,22 @@ export const useProductStore = create((set, get) => ({
         if (get().isInitialized) return;
         try {
             const local = await LocalDbService.getAll('products');
+            const parsedLocal = (local || []).map(prod => {
+                let variants = [];
+                try {
+                    variants = prod.variants_json 
+                        ? JSON.parse(prod.variants_json) 
+                        : (prod.variants ? (Array.isArray(prod.variants) ? prod.variants : JSON.parse(prod.variants)) : []);
+                } catch (e) {
+                    console.log('Error parsing local variants in initStore:', e);
+                }
+                return {
+                    ...prod,
+                    variants: Array.isArray(variants) ? variants : []
+                };
+            });
             set({ 
-                products: local || [], 
+                products: parsedLocal, 
                 isInitialized: true,
                 loadingProducts: false 
             });

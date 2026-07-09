@@ -27,18 +27,9 @@ export default function ShippingPackagesScreen({ navigation }) {
     const [allRates, setAllRates] = useState([]);
 
     useEffect(() => {
-        checkRole();
         fetchPackages();
         fetchRates();
     }, []);
-
-    const checkRole = async () => {
-        const role = await AsyncStorage.getItem('user_role');
-        if (role !== 'admin') {
-            Alert.alert('Acceso Denegado', 'Solo administradores pueden gestionar envíos.');
-            navigation.goBack();
-        }
-    };
 
     const fetchPackages = async () => {
         setLoading(true);

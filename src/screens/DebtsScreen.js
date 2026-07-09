@@ -39,7 +39,7 @@ export default function DebtsScreen({ navigation }) {
                     onPress: async () => {
                         const { error } = await supabase
                             .from('sales')
-                            .update({ status: 'completed' })
+                            .update({ status: 'completed', paid_at: new Date().toISOString() })
                             .eq('id', saleId);
 
                         if (!error) fetchAllData(true);

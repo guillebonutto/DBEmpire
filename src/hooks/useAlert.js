@@ -18,10 +18,20 @@ class AlertManager {
     constructor() {
         this.showCallback = null;
         this.hideCallback = null;
+        this.pendingAlert = null;
     }
 
     setShowCallback(callback) {
         this.showCallback = callback;
+        if (callback && this.pendingAlert) {
+            // Delay slightly to allow full mount transition
+            setTimeout(() => {
+                if (this.pendingAlert && this.showCallback) {
+                    this.showCallback(this.pendingAlert);
+                    this.pendingAlert = null;
+                }
+            }, 300);
+        }
     }
 
     setHideCallback(callback) {
@@ -32,7 +42,8 @@ class AlertManager {
         if (this.showCallback) {
             this.showCallback(config);
         } else {
-            console.warn('⚠️ AlertManager: showCallback not initialized. Did you forget to add <CustomAlert> in App.js?');
+            console.log('📬 AlertManager: showCallback not ready yet. Queuing alert:', config.title);
+            this.pendingAlert = config;
         }
     }
 
@@ -40,6 +51,7 @@ class AlertManager {
         if (this.hideCallback) {
             this.hideCallback();
         } else {
+            this.pendingAlert = null;
             console.warn('⚠️ AlertManager: hideCallback not initialized.');
         }
     }

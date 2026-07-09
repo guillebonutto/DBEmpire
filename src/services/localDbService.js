@@ -6,16 +6,17 @@ const DATABASE_NAME = 'empire_local.db';
 const TABLE_COLUMNS = {
     products: ['id', 'name', 'sale_price', 'cost_price', 'current_stock', 'stock_local',
                'category', 'barcode', 'image_url', 'active', 'description',
-               'stock_cordoba', 'provider', 'is_individual', 'sale_price_cordoba', 'variants_json'],
+               'stock_cordoba', 'provider', 'is_individual', 'sale_price_cordoba', 'variants_json',
+               'internet_cost', 'electricity_cost', 'is_packaging'],
     sales: ['id', 'total_amount', 'profit_generated', 'commission_amount', 'client_id',
             'payment_method', 'status', 'created_at', 'seller_id', 'device_sig',
-            'sale_location', 'is_leader_sale', 'notes', 'manual_discount_amount'],
+            'sale_location', 'is_leader_sale', 'notes', 'manual_discount_amount', 'paid_at'],
     expenses: ['id', 'amount', 'description', 'category', 'created_at', 'details'],
     clients: ['id', 'name', 'phone', 'email', 'created_at', 'notes', 'status', 'address', 'gender'],
     authorized_devices: ['id', 'device_signature', 'role', 'is_active'],
     settings: ['key', 'value'],
     sale_items: ['id', 'sale_id', 'product_id', 'quantity', 'unit_price_at_sale', 'subtotal', 'color'],
-    supplier_orders: ['id', 'provider_name', 'total_amount', 'total_cost', 'status', 'created_at', 'notes', 'installments_total', 'installments_paid', 'discount'],
+    supplier_orders: ['id', 'provider_name', 'total_amount', 'total_cost', 'status', 'created_at', 'notes', 'installments_total', 'installments_paid', 'discount', 'received_at'],
     supplier_order_items: ['id', 'supplier_order_id', 'product_id', 'quantity', 'cost_per_unit', 'color', 'temp_product_name'],
     pending_sync: ['id', 'table_name', 'action', 'payload', 'metadata', 'created_at'],
     suppliers: ['id', 'name', 'phone', 'email', 'notes', 'active', 'created_at'],
@@ -96,16 +97,44 @@ async function init() {
                 await db.execAsync("DROP TABLE IF EXISTS sale_items");
             }
 
+            // 🚀 GENERIC SCHEMA MIGRATION: Ensure all columns in TABLE_COLUMNS exist in local tables
+            for (const [tableName, columns] of Object.entries(TABLE_COLUMNS)) {
+                const tableExists = await db.getFirstAsync(
+                    `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
+                    [tableName]
+                );
+                if (tableExists) {
+                    const currentTableInfo = await db.getAllAsync(`PRAGMA table_info(${tableName})`);
+                    const existingCols = new Set(currentTableInfo.map(c => c.name));
+                    for (const col of columns) {
+                        if (!existingCols.has(col)) {
+                            console.log(`[LocalDb] Migrating ${tableName}: adding ${col} column...`);
+                            let colType = 'TEXT';
+                            if (col === 'total_amount' || col === 'profit_generated' || col === 'commission_amount' || col === 'sale_price' || col === 'cost_price' || col === 'amount' || col === 'total_cost' || col === 'subtotal' || col === 'unit_price_at_sale' || col === 'manual_discount_amount' || col === 'cost_per_unit' || col === 'internet_cost' || col === 'electricity_cost') {
+                                colType = 'REAL';
+                            } else if (col === 'current_stock' || col === 'stock_local' || col === 'stock_cordoba' || col === 'active' || col === 'is_individual' || col === 'is_leader_sale' || col === 'installments_total' || col === 'installments_paid' || col === 'completed' || col === 'quantity' || col === 'is_packaging') {
+                                colType = 'INTEGER';
+                            }
+                            try {
+                                await db.execAsync(`ALTER TABLE ${tableName} ADD COLUMN ${col} ${colType};`);
+                            } catch (altErr) {
+                                console.warn(`[LocalDb] Failed to alter table ${tableName} adding ${col}:`, altErr.message);
+                            }
+                        }
+                    }
+                }
+            }
+
             await db.execAsync(`
                 PRAGMA journal_mode = WAL;
-                CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, name TEXT, description TEXT, sale_price REAL, cost_price REAL, current_stock INTEGER, stock_local INTEGER, stock_cordoba INTEGER, category TEXT, barcode TEXT, image_url TEXT, active INTEGER DEFAULT 1, provider TEXT, is_individual INTEGER DEFAULT 0, sale_price_cordoba REAL, variants_json TEXT);
-                CREATE TABLE IF NOT EXISTS sales (id TEXT PRIMARY KEY, total_amount REAL, profit_generated REAL, commission_amount REAL, client_id TEXT, seller_id TEXT, payment_method TEXT, status TEXT, created_at TEXT, device_sig TEXT, sale_location TEXT, is_leader_sale INTEGER DEFAULT 0, notes TEXT, manual_discount_amount REAL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, name TEXT, description TEXT, sale_price REAL, cost_price REAL, current_stock INTEGER, stock_local INTEGER, stock_cordoba INTEGER, category TEXT, barcode TEXT, image_url TEXT, active INTEGER DEFAULT 1, provider TEXT, is_individual INTEGER DEFAULT 0, sale_price_cordoba REAL, variants_json TEXT, internet_cost REAL, electricity_cost REAL, is_packaging INTEGER DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS sales (id TEXT PRIMARY KEY, total_amount REAL, profit_generated REAL, commission_amount REAL, client_id TEXT, seller_id TEXT, payment_method TEXT, status TEXT, created_at TEXT, device_sig TEXT, sale_location TEXT, is_leader_sale INTEGER DEFAULT 0, notes TEXT, manual_discount_amount REAL DEFAULT 0, paid_at TEXT);
                 CREATE TABLE IF NOT EXISTS sale_items (id TEXT PRIMARY KEY, sale_id TEXT, product_id TEXT, quantity INTEGER, unit_price_at_sale REAL, subtotal REAL, color TEXT);
                 CREATE TABLE IF NOT EXISTS expenses (id TEXT PRIMARY KEY, amount REAL, description TEXT, category TEXT, created_at TEXT, details TEXT);
                 CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT, notes TEXT, address TEXT, status TEXT DEFAULT 'active', gender TEXT, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
                 CREATE TABLE IF NOT EXISTS authorized_devices (id TEXT PRIMARY KEY, device_signature TEXT UNIQUE, role TEXT, is_active INTEGER DEFAULT 1);
-                CREATE TABLE IF NOT EXISTS supplier_orders (id TEXT PRIMARY KEY, provider_name TEXT, total_amount REAL, total_cost REAL, status TEXT, created_at TEXT, notes TEXT, installments_total INTEGER DEFAULT 1, installments_paid INTEGER DEFAULT 0, discount REAL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS supplier_orders (id TEXT PRIMARY KEY, provider_name TEXT, total_amount REAL, total_cost REAL, status TEXT, created_at TEXT, notes TEXT, installments_total INTEGER DEFAULT 1, installments_paid INTEGER DEFAULT 0, discount REAL DEFAULT 0, received_at TEXT);
                 CREATE TABLE IF NOT EXISTS supplier_order_items (id TEXT PRIMARY KEY, supplier_order_id TEXT, product_id TEXT, quantity INTEGER, cost_per_unit REAL, color TEXT, temp_product_name TEXT);
                 CREATE TABLE IF NOT EXISTS pending_sync (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, action TEXT, payload TEXT, metadata TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT, notes TEXT, active INTEGER DEFAULT 1, created_at TEXT);

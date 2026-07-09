@@ -6,6 +6,7 @@ import { supabase } from '../services/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { printOrSharePDF } from '../utils/pdfHelper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFinanceStore } from '../store/useFinanceStore';
 
@@ -70,7 +71,7 @@ export default function SalesScreen({ navigation }) {
                                     </td>
                                     <td style="text-align: center; padding: 10px; font-size: 13px;">${item.quantity}</td>
                                     <td style="text-align: right; padding: 10px; font-size: 13px;">$${Number(item.unit_price_at_sale).toFixed(0)}</td>
-                                    <td style="text-align: right; padding: 10px; font-size: 13px;">$${(Number(item.unit_price_at_sale) * item.quantity).toFixed(2)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">$${(Number(item.unit_price_at_sale) * item.quantity).toFixed(0)}</td>
                                 </tr>
                             `).join('')}
 
@@ -88,15 +89,15 @@ export default function SalesScreen({ navigation }) {
                                     <td style="padding: 10px; font-size: 13px;">${discountLabel}</td>
                                     <td style="text-align: center; padding: 10px; font-size: 13px;">1</td>
                                     <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscount.toFixed(0)}</td>
-                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscount.toFixed(2)}</td>
+                                    <td style="text-align: right; padding: 10px; font-size: 13px;">-$${manualDiscount.toFixed(0)}</td>
                                 </tr>
                             ` : ''}
                         </tbody>
                     </table>
 
                     <div style="text-align: right; margin-top: 10px; padding-top: 10px; border-top: 1px solid #d4af37;">
-                        <p style="margin: 0; color: #888; font-size: 14px;">Subtotal: $${subtotalBeforeDiscounts.toFixed(2)}</p>
-                        <h2 style="margin: 10px 0 0 0; color: #000; font-size: 22px;">TOTAL A PAGAR: $${total.toFixed(2)}</h2>
+                        <p style="margin: 0; color: #888; font-size: 14px;">Subtotal: $${subtotalBeforeDiscounts.toFixed(0)}</p>
+                        <h2 style="margin: 10px 0 0 0; color: #000; font-size: 22px;">TOTAL A PAGAR: $${total.toFixed(0)}</h2>
                     </div>
                     
                     <div style="margin-top: 60px; text-align: center; color: #bbb; font-size: 11px;">
@@ -106,11 +107,10 @@ export default function SalesScreen({ navigation }) {
                 </body>
                 </html>
             `;
-            const { uri } = await Print.printToFileAsync({ html });
-            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: 'Enviar Recibo' });
+            await printOrSharePDF(html, { dialogTitle: 'Enviar Recibo' });
         } catch (err) {
             console.error('PDF Error:', err);
-            Alert.alert('Error', 'No se pudo generar el PDF.');
+            Alert.alert('Error', 'No se pudo generar el PDF. Detalle: ' + (err.message || err));
         }
     };
 
@@ -164,7 +164,7 @@ export default function SalesScreen({ navigation }) {
 
             if (!isCompleted) return; // Skip budgets and other non-finalized statuses for money stats
 
-            const saleDate = new Date(sale.created_at).getTime();
+            const saleDate = new Date(sale.paid_at || sale.created_at).getTime();
 
             // Calculate total commissions globally
             if (sale.commission_amount) {
@@ -256,7 +256,8 @@ export default function SalesScreen({ navigation }) {
                                 .from('sales')
                                 .update({
                                     status: 'completed',
-                                    created_at: new Date().toISOString()
+                                    created_at: new Date().toISOString(),
+                                    paid_at: new Date().toISOString()
                                 })
                                 .eq('id', sale.id);
 
@@ -325,8 +326,8 @@ export default function SalesScreen({ navigation }) {
                         )}
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${item.total_amount}</Text>
-                        {!isBudget && <Text style={styles.saleProfit}>(G: ${item.profit_generated})</Text>}
+                        <Text style={[styles.saleAmount, isBudget && { color: '#e67e22' }]}>${Math.round(Number(item.total_amount || 0))}</Text>
+                        {!isBudget && <Text style={styles.saleProfit}>(G: ${Math.round(Number(item.profit_generated || 0))})</Text>}
                         
                         <TouchableOpacity 
                             onPress={() => generateReceiptPDF(item)}
@@ -345,7 +346,7 @@ export default function SalesScreen({ navigation }) {
                             <View key={idx} style={styles.detailRow}>
                                 <Text style={styles.detailText} numberOfLines={1}>{detail.products?.name || 'Item'} {detail.color ? `(${detail.color})` : ''}</Text>
                                 <Text style={styles.detailQty}>x{detail.quantity}</Text>
-                                <Text style={styles.detailPrice}>${detail.unit_price_at_sale}</Text>
+                                <Text style={styles.detailPrice}>${Math.round(Number(detail.unit_price_at_sale || 0))}</Text>
                             </View>
                         ))}
                         
@@ -360,7 +361,7 @@ export default function SalesScreen({ navigation }) {
                             {item.manual_discount_amount > 0 && (
                                 <View style={styles.detailRow}>
                                     <Text style={[styles.detailText, { color: '#e74c3c' }]}>Descuento Manual</Text>
-                                    <Text style={styles.detailPrice}>-${item.manual_discount_amount}</Text>
+                                    <Text style={styles.detailPrice}>-${Math.round(Number(item.manual_discount_amount || 0))}</Text>
                                 </View>
                             )}
                         </View>
@@ -394,7 +395,7 @@ export default function SalesScreen({ navigation }) {
 
                                                             const { error: updateError } = await supabase
                                                                 .from('sales')
-                                                                .update({ status: 'completed', notes: newNotes })
+                                                                .update({ status: 'completed', notes: newNotes, paid_at: new Date().toISOString() })
                                                                 .eq('id', item.id);
                                                             if (updateError) throw updateError;
                                                             Alert.alert('✅ Pagado', 'Deuda saldada correctamente.');
@@ -445,11 +446,11 @@ export default function SalesScreen({ navigation }) {
             <View style={styles.statsContainer}>
                 <View style={styles.statCard}>
                     <Text style={styles.statLabel}>Vendido Hoy ({stats.countToday})</Text>
-                    <Text style={styles.statValue}>${stats.today.toFixed(2)}</Text>
+                    <Text style={styles.statValue}>${stats.today.toFixed(0)}</Text>
                 </View>
                 <View style={styles.statCard}>
                     <Text style={styles.statLabel}>Este Mes</Text>
-                    <Text style={styles.statValue}>${stats.month.toFixed(2)}</Text>
+                    <Text style={styles.statValue}>${stats.month.toFixed(0)}</Text>
                 </View>
             </View>
 
@@ -464,7 +465,7 @@ export default function SalesScreen({ navigation }) {
                     </View>
                     <View>
                         <Text style={styles.commissionLabel}>COMISIONES A PAGAR</Text>
-                        <Text style={styles.commissionValue}>${stats.commissions ? stats.commissions.toFixed(2) : '0.00'}</Text>
+                        <Text style={styles.commissionValue}>${stats.commissions ? stats.commissions.toFixed(0) : '0'}</Text>
                     </View>
                 </View>
             </TouchableOpacity>

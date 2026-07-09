@@ -82,12 +82,23 @@ export default function AnalyticsScreen({ navigation }) {
         const startOfYesterday = new Date(startOfToday);
         startOfYesterday.setDate(startOfYesterday.getDate() - 1);
 
-        // Today vs Yesterday
-        const { data: todaySales } = await supabase.from('sales').select('total_amount').gte('created_at', startOfToday.toISOString());
-        const { data: yesterdaySales } = await supabase.from('sales').select('total_amount').gte('created_at', startOfYesterday.toISOString()).lt('created_at', startOfToday.toISOString());
+        // Fetch sales that could fall into today or yesterday (using paid_at or created_at)
+        const { data: sales } = await supabase
+            .from('sales')
+            .select('total_amount, paid_at, created_at, status')
+            .or(`created_at.gte.${startOfYesterday.toISOString()},paid_at.gte.${startOfYesterday.toISOString()}`);
 
-        const todayTotal = todaySales?.reduce((sum, s) => sum + (s.total_amount || 0), 0) || 0;
-        const yesterdayTotal = yesterdaySales?.reduce((sum, s) => sum + (s.total_amount || 0), 0) || 0;
+        const todayTotal = sales?.filter(s => {
+            const date = new Date(s.paid_at || s.created_at);
+            const isCompleted = ['completed', 'exitosa', 'vended', ''].includes((s.status || '').toLowerCase());
+            return isCompleted && date >= startOfToday;
+        }).reduce((sum, s) => sum + (s.total_amount || 0), 0) || 0;
+
+        const yesterdayTotal = sales?.filter(s => {
+            const date = new Date(s.paid_at || s.created_at);
+            const isCompleted = ['completed', 'exitosa', 'vended', ''].includes((s.status || '').toLowerCase());
+            return isCompleted && date >= startOfYesterday && date < startOfToday;
+        }).reduce((sum, s) => sum + (s.total_amount || 0), 0) || 0;
 
         setComparisons(prev => ({
             ...prev,

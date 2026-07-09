@@ -10,6 +10,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { printOrSharePDF } from '../utils/pdfHelper';
 import { logoBase64 } from '../assets/logoBase64';
 import { GeminiService } from '../services/geminiService';
 import { CRMService } from '../services/crmService';
@@ -19,19 +20,12 @@ import { useAuthStore } from '../store/useAuthStore';
 import { ImageMapping } from '../assets/image_mapping';
 
 // 1. Move Item Renderer OUTSIDE and Memoize it to prevent re-setup during navigation
-const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing, stockColor, totalStock }) => {
+const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing, handleGenerateBarcode, stockColor, totalStock }) => {
     return (
         <TouchableOpacity
             style={styles.productCard}
             onPress={async () => {
-                const currentRole = userRole || await AsyncStorage.getItem('user_role');
-                if (currentRole === 'admin' || currentRole === 'leader' || currentRole === 'seller') {
-                    navigation.navigate('AddProduct', { product: item });
-                } else {
-                    Platform.OS === 'web' 
-                        ? alert('No tienes permisos de LÍDER para editar este activo.')
-                        : Alert.alert('Sin Permisos', 'Solo los Líderes pueden editar productos del inventario.');
-                }
+                navigation.navigate('AddProduct', { product: item });
             }}
             activeOpacity={0.7}
         >
@@ -52,7 +46,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                     {(userRole === 'admin' || userRole === 'leader' || userRole === 'seller') && (
                         <TouchableOpacity
                             style={styles.deleteBadge}
-                            onPress={() => handleDelete(item)}
+                            onPress={(e) => { e.stopPropagation(); handleDelete(item); }}
                         >
                             <MaterialCommunityIcons name="delete-outline" size={14} color="#ff3b3b" />
                         </TouchableOpacity>
@@ -109,9 +103,28 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
 
                     <View style={styles.infoBottom}>
                         <View style={styles.metaRow}>
-                            <MaterialCommunityIcons name="factory" size={12} color="#333" />
+                            <MaterialCommunityIcons name="factory" size={12} color="#555" />
                             <Text style={styles.metaText} numberOfLines={1}>{item.provider || 'Sin Proveedor'}</Text>
                         </View>
+                        {item.barcode ? (
+                            <View style={[styles.metaRow, { marginLeft: 12 }]}>
+                                <MaterialCommunityIcons name="barcode" size={12} color="#d4af37" />
+                                <Text style={[styles.metaText, { color: '#d4af37', fontWeight: 'bold' }]} numberOfLines={1}>{item.barcode}</Text>
+                            </View>
+                        ) : (
+                            (userRole === 'admin' || userRole === 'leader') && (
+                                <TouchableOpacity 
+                                    style={[styles.metaRow, { marginLeft: 12, backgroundColor: '#d4af3715', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }]} 
+                                    onPress={(e) => {
+                                        e.stopPropagation();
+                                        handleGenerateBarcode(item);
+                                    }}
+                                >
+                                    <MaterialCommunityIcons name="auto-fix" size={12} color="#d4af37" />
+                                    <Text style={{ fontSize: 10, color: '#d4af37', fontWeight: 'bold', marginLeft: 4 }}>GENERAR QR</Text>
+                                </TouchableOpacity>
+                            )
+                        )}
                     </View>
                 </View>
 
@@ -130,6 +143,7 @@ export default function StockScreen({ navigation, route }) {
     const { userRole, setUserRole } = useAuthStore();
     const [refreshing, setRefreshing] = useState(false);
     const [screenReady, setScreenReady] = useState(false);
+    const [pdfLoading, setPdfLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [showHiddenStock, setShowHiddenStock] = useState(false);
     const [isFastMode, setIsFastMode] = useState(false);
@@ -218,16 +232,20 @@ export default function StockScreen({ navigation, route }) {
 
     const handleBarcodeScanned = async ({ data }) => {
         if (scanned && !isFastMode) return;
+        if (!data) return;
 
         let barcodeData = data;
-        if (data.includes('linktr.ee/digital_boost_empire')) {
+        if (data.includes('barcode=')) {
             const parts = data.split('barcode=');
             if (parts.length > 1) barcodeData = parts[1];
         }
 
         setScanned(true);
 
-        const product = storeProducts.find(p => p.barcode === barcodeData);
+        const cleanScanned = String(barcodeData).trim().toUpperCase();
+        const product = storeProducts.find(p => 
+            p.barcode && p.barcode.toString().trim().toUpperCase() === cleanScanned
+        );
 
         if (product) {
             if (isFastMode) {
@@ -340,7 +358,6 @@ export default function StockScreen({ navigation, route }) {
                     text: 'Eliminar',
                     style: 'destructive',
                     onPress: async () => {
-                        setLoading(true);
                         try {
                             const { error: deleteError } = await supabase
                                 .from('products')
@@ -355,7 +372,7 @@ export default function StockScreen({ navigation, route }) {
                                         .eq('id', product.id);
 
                                     if (archiveError) throw archiveError;
-                                    Alert.alert('Producto Archivado', 'Se ha archivado por tener historial de ventas.');
+                                    Alert.alert('Producto Archivado', 'El producto tiene historial de ventas, fue archivado.');
                                 } else {
                                     throw deleteError;
                                 }
@@ -363,11 +380,10 @@ export default function StockScreen({ navigation, route }) {
                                 await SecurityService.logActivity('DELETE_PRODUCT', `Eliminó producto: ${product.name}`, { productId: product.id });
                                 Alert.alert('✅ Eliminado', 'Producto eliminado correctamente');
                             }
-                            fetchProducts();
+                            fetchProducts(true);
                         } catch (err) {
-                            Alert.alert('Error', 'No se pudo eliminar el producto');
-                        } finally {
-                            setLoading(false);
+                            console.error('[StockScreen] Error deleting product:', err);
+                            Alert.alert('Error', `No se pudo eliminar el producto: ${err.message || ''}`);
                         }
                     }
                 }
@@ -402,6 +418,35 @@ export default function StockScreen({ navigation, route }) {
         </View>
     );
 
+    const handleGenerateBarcode = useCallback(async (product) => {
+        const cleanName = product.name
+            .trim()
+            .toUpperCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "") // Quitar acentos
+            .replace(/[^A-Z0-9]/g, "-")      // Reemplazar caracteres no alfanuméricos con guion
+            .replace(/-+/g, "-")             // Colapsar guiones múltiples
+            .replace(/^-|-$/g, "");          // Limpiar extremos
+
+        const suffix = Math.floor(1000 + Math.random() * 9000);
+        const generatedCode = `${cleanName}-${suffix}`;
+
+        try {
+            const { error: dbError } = await supabase
+                .from('products')
+                .update({ barcode: generatedCode })
+                .eq('id', product.id);
+
+            if (dbError) throw dbError;
+
+            Alert.alert("Código Generado", `Se generó y guardó el código "${generatedCode}" para el producto "${product.name}".`);
+            fetchProducts(true);
+        } catch (err) {
+            console.error('Error generating barcode:', err);
+            Alert.alert("Error", "No se pudo guardar el código de barras generado.");
+        }
+    }, [fetchProducts]);
+
     const renderProductItem = useCallback(({ item }) => {
         const stockLocal = parseInt(item.stock_local) || 0;
         const stockCordoba = parseInt(item.stock_cordoba) || 0;
@@ -419,14 +464,15 @@ export default function StockScreen({ navigation, route }) {
                 handleDelete={handleDelete}
                 handleFindBuyers={handleFindBuyers}
                 handleGenerateMarketing={handleGenerateMarketing}
+                handleGenerateBarcode={handleGenerateBarcode}
                 stockColor={stockColor}
                 totalStock={totalStock}
             />
         );
-    }, [userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing]);
+    }, [userRole, navigation, handleDelete, handleFindBuyers, handleGenerateMarketing, handleGenerateBarcode]);
 
     const exportToPDF = async () => {
-        setLoading(true);
+        setPdfLoading(true);
         try {
             const htmlContent = `
             <!DOCTYPE html>
@@ -505,143 +551,120 @@ export default function StockScreen({ navigation, route }) {
             </body>
             </html>`;
 
-            const { uri } = await Print.printToFileAsync({ html: htmlContent });
-            await Sharing.shareAsync(uri);
+            await printOrSharePDF(htmlContent, { dialogTitle: 'Exportar Inventario' });
         } catch (error) {
-            Alert.alert('Error', 'No se pudo generar el PDF');
+            Alert.alert('Error', 'No se pudo generar el PDF. Detalle: ' + (error.message || error));
         } finally {
-            setLoading(false);
+            setPdfLoading(false);
         }
     };
 
-    const generateQRLabels = async () => {
-        setLoading(true);
+    const generateBarcodeLabels = async () => {
+        setPdfLoading(true);
         try {
-            const linktree = "https://linktr.ee/digital_boost_empire";
-            const whatsapp = "+54 9 3884 19-7137";
-
-            const labelItems = storeProducts.map(p => {
-                if (!p.barcode) return '';
-                const smartUrl = `${linktree}?barcode=${p.barcode}`;
-                const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(smartUrl)}&ecc=H`;
-                const displayName = p.name.length > 20 ? p.name.substring(0, 19) + '…' : p.name;
-                const displayPrice = p.sale_price ? `$${p.sale_price}` : '';
-                return `
-                <div class="label-wrapper">
-                    <div class="wa-top">${whatsapp}</div>
-                    <div class="label-card">
-                        <div class="qr-container">
-                            <img src="${qrApi}" class="qr-code" />
-                            <div class="qr-logo-overlay">
-                                <img src="${logoBase64}" 
-                                     style="width:100%; height:100%; object-fit:contain; border-radius:4px;" 
-                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
-                                <div class="logo-fallback" style="display:none; width:100%; height:100%; align-items:center; justify-content:center; color:#d4af37; font-weight:900; font-size:10px;">DBE</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="product-name">${displayName}</div>
-                    ${displayPrice ? `<div class="product-price">${displayPrice}</div>` : ''}
-                </div>
-                `;
-            }).join('');
+            const hasBarcodes = storeProducts.some(p => p.barcode);
+            if (!hasBarcodes) {
+                Alert.alert('Sin códigos de barras', 'No hay ningún producto con código de barras en el inventario.');
+                setPdfLoading(false);
+                return;
+            }
 
             const htmlContent = `
             <!DOCTYPE html>
             <html>
             <head>
+                <meta charset="utf-8">
+                <title>Códigos de Barras</title>
                 <style>
-                    @page { margin: 0; }
-                    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background: #fff; }
-                    .labels-grid { 
-                        display: grid; 
-                        grid-template-columns: repeat(auto-fill, 140px); 
-                        gap: 0; 
-                        justify-content: center; 
+                    @page {
+                        size: 58mm 47mm;
+                        margin: 0;
                     }
-                    .label-wrapper {
-                        width: 140px;
+                    body {
+                        width: 58mm;
+                        height: 47mm;
+                        margin: 0;
+                        padding: 0;
+                        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                        background: #fff;
+                        color: #000;
+                        box-sizing: border-box;
+                        overflow: hidden;
+                    }
+                    .label {
+                        width: 58mm;
+                        height: 47mm;
+                        padding: 3mm 6mm;
+                        box-sizing: border-box;
                         display: flex;
                         flex-direction: column;
                         align-items: center;
-                        padding: 10px 0;
+                        justify-content: space-between;
+                        text-align: center;
+                        page-break-after: always;
                     }
-                    .product-name {
-                        font-size: 8.5px;
+                    .brand {
+                        font-size: 7px;
+                        font-weight: 800;
+                        letter-spacing: 0.8px;
+                        text-transform: uppercase;
+                        color: #333;
+                    }
+                    .name {
+                        font-size: 9px;
                         font-weight: 700;
-                        color: #000;
-                        text-align: center;
-                        margin-top: 4px;
-                        max-width: 130px;
-                        word-break: break-word;
-                        line-height: 1.2;
-                    }
-                    .product-price {
-                        font-size: 10px;
-                        font-weight: 900;
-                        color: #000;
-                        text-align: center;
-                        margin-top: 2px;
-                        letter-spacing: 0.5px;
-                    }
-                    .wa-top {
-                        font-size: 8px;
-                        font-weight: 900;
-                        color: #000;
-                        margin-bottom: 2px;
-                        letter-spacing: 0.5px;
-                    }
-                    .label-card { 
-                        width: 110px; 
-                        height: 110px;
-                        padding: 5px; 
-                        text-align: center; 
-                        border: 1px dashed #000;
-                        background: #fff;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                    }
-                    .qr-container {
-                        position: relative;
-                        width: 100px;
-                        height: 100px;
-                    }
-                    .qr-code {
-                        width: 100%;
-                        height: 100%;
-                    }
-                    .qr-logo-overlay {
-                        position: absolute;
-                        top: 50%;
-                        left: 50%;
-                        transform: translate(-50%, -50%);
-                        width: 32px;
-                        height: 32px;
-                        background: #fff;
-                        border-radius: 6px;
-                        padding: 2px;
-                        box-shadow: 0 0 2px rgba(0,0,0,0.5);
+                        max-width: 54mm;
+                        word-wrap: break-word;
+                        line-height: 1.1;
+                        max-height: 20px;
                         overflow: hidden;
+                    }
+                    .barcode-container {
+                        width: 100%;
                         display: flex;
-                        align-items: center;
                         justify-content: center;
+                        align-items: center;
+                        height: 18mm;
+                    }
+                    img.barcode-img {
+                        max-width: 100%;
+                        height: 100%;
+                        object-fit: contain;
+                        display: block;
+                    }
+                    .price {
+                        font-size: 12px;
+                        font-weight: 900;
+                        color: #000;
                     }
                 </style>
             </head>
             <body>
-                <div class="labels-grid">
-                    ${labelItems}
-                </div>
+                ${storeProducts.map(p => {
+                    if (!p.barcode) return '';
+                    const displayPrice = p.sale_price ? `$${p.sale_price}` : '';
+                    return `
+                    <div class="label">
+                        <div class="brand">DIGITAL BOOST EMPIRE</div>
+                        <div class="name">${p.name}</div>
+                        <div class="barcode-container">
+                            <img class="barcode-img" 
+                                 src="https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(p.barcode)}&scale=2&includetext=true&textsize=10"
+                                 onerror="this.onerror=null; this.src='https://barcode.tec-it.com/barcode.ashx?data=${encodeURIComponent(p.barcode)}&code=EAN8';" />
+                        </div>
+                        ${displayPrice ? `<div class="price">${displayPrice}</div>` : ''}
+                    </div>
+                    `;
+                }).join('')}
             </body>
             </html>`;
 
-            const { uri } = await Print.printToFileAsync({ html: htmlContent });
-            await Sharing.shareAsync(uri);
+            await printOrSharePDF(htmlContent, { dialogTitle: 'Etiquetas de Código de Barras' });
         } catch (error) {
-            Alert.alert('Error', 'No se pudieron generar las etiquetas');
+            console.error('Error generating barcodes:', error);
+            Alert.alert('Error', 'No se pudieron generar las etiquetas. Detalle: ' + (error.message || error));
         } finally {
-            setLoading(false);
+            setPdfLoading(false);
         }
     };
 
@@ -691,16 +714,14 @@ export default function StockScreen({ navigation, route }) {
                     </TouchableOpacity>
                 </View>
 
-                {(userRole === 'admin' || userRole === 'leader' || userRole === 'seller') && (
-                    <TouchableOpacity
-                        style={styles.addButton}
-                        onPress={() => navigation.navigate('AddProduct')}
-                    >
-                        <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
-                            <MaterialCommunityIcons name="plus" size={28} color="#000" />
-                        </LinearGradient>
-                    </TouchableOpacity>
-                )}
+                <TouchableOpacity
+                    style={styles.addButton}
+                    onPress={() => navigation.navigate('AddProduct')}
+                >
+                    <LinearGradient colors={['#d4af37', '#b8942e']} style={styles.addBtnGradient}>
+                        <MaterialCommunityIcons name="plus" size={28} color="#000" />
+                    </LinearGradient>
+                </TouchableOpacity>
             </View>
 
             {!screenReady ? (
@@ -738,7 +759,7 @@ export default function StockScreen({ navigation, route }) {
                         facing="back"
                         onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
                         barcodeScannerSettings={{
-                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
+                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128', 'code39', 'code93', 'upc_a', 'upc_e'],
                         }}
                     />
                     <TouchableOpacity
@@ -779,21 +800,19 @@ export default function StockScreen({ navigation, route }) {
                                 <Text style={styles.toolLabel}>Ajuste Manual</Text>
                             </TouchableOpacity>
 
-                            {(userRole === 'admin' || userRole === 'leader' || userRole === 'seller') && (
-                                <TouchableOpacity
-                                    style={styles.toolItem}
-                                    onPress={() => { setToolsModalVisible(false); navigation.navigate('BulkAdjustment'); }}
-                                >
-                                    <View style={[styles.toolIconBox, { backgroundColor: '#3498db20' }]}>
-                                        <MaterialCommunityIcons name="calculator" size={24} color="#3498db" />
-                                    </View>
-                                    <Text style={styles.toolLabel}>Precios %</Text>
-                                </TouchableOpacity>
-                            )}
+                            <TouchableOpacity
+                                style={styles.toolItem}
+                                onPress={() => { setToolsModalVisible(false); navigation.navigate('BulkAdjustment'); }}
+                            >
+                                <View style={[styles.toolIconBox, { backgroundColor: '#3498db20' }]}>
+                                    <MaterialCommunityIcons name="calculator" size={24} color="#3498db" />
+                                </View>
+                                <Text style={styles.toolLabel}>Precios %</Text>
+                            </TouchableOpacity>
 
                             <TouchableOpacity
                                 style={styles.toolItem}
-                                onPress={() => { setToolsModalVisible(false); exportToPDF(); }}
+                                onPress={() => { setToolsModalVisible(false); setTimeout(exportToPDF, 300); }}
                             >
                                 <View style={[styles.toolIconBox, { backgroundColor: '#e74c3c20' }]}>
                                     <MaterialCommunityIcons name="file-pdf-box" size={24} color="#e74c3c" />
@@ -803,12 +822,12 @@ export default function StockScreen({ navigation, route }) {
 
                             <TouchableOpacity
                                 style={styles.toolItem}
-                                onPress={() => { setToolsModalVisible(false); generateQRLabels(); }}
+                                onPress={() => { setToolsModalVisible(false); setTimeout(generateBarcodeLabels, 300); }}
                             >
                                 <View style={[styles.toolIconBox, { backgroundColor: '#2ecc7120' }]}>
-                                    <MaterialCommunityIcons name="qrcode-scan" size={24} color="#2ecc71" />
+                                    <MaterialCommunityIcons name="barcode" size={24} color="#2ecc71" />
                                 </View>
-                                <Text style={styles.toolLabel}>Etiquetas QR</Text>
+                                <Text style={styles.toolLabel}>Etiquetas Barra</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
@@ -1099,6 +1118,12 @@ export default function StockScreen({ navigation, route }) {
                     </View>
                 </View>
             </Modal>
+            {pdfLoading && (
+                <View style={styles.pdfLoadingOverlay}>
+                    <ActivityIndicator size="large" color="#d4af37" />
+                    <Text style={styles.pdfLoadingText}>Generando PDF...</Text>
+                </View>
+            )}
         </SafeAreaView>
     );
 }
@@ -1238,5 +1263,18 @@ const styles = StyleSheet.create({
         color: '#888',
         fontSize: 13,
         fontWeight: 'bold'
+    },
+    pdfLoadingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0,0,0,0.85)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 9999,
+    },
+    pdfLoadingText: {
+        color: '#d4af37',
+        marginTop: 15,
+        fontWeight: 'bold',
+        fontSize: 16,
     }
 });

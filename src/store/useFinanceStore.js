@@ -27,8 +27,34 @@ export const useFinanceStore = create((set, get) => ({
                 LocalDbService.getAll('sale_items'),
                 LocalDbService.getAll('settings'),
             ]);
+
+            // Reconstruct relationships from local DB
+            const clientsList = await LocalDbService.getAll('clients') || [];
+            const productsList = await LocalDbService.getAll('products') || [];
+
+            const clientMap = {};
+            clientsList.forEach(c => { clientMap[c.id] = c; });
+
+            const productMap = {};
+            productsList.forEach(p => { productMap[p.id] = p; });
+
+            const itemsBySale = {};
+            (items || []).forEach(item => {
+                if (!itemsBySale[item.sale_id]) itemsBySale[item.sale_id] = [];
+                itemsBySale[item.sale_id].push({
+                    ...item,
+                    products: productMap[item.product_id] ? { name: productMap[item.product_id].name } : null
+                });
+            });
+
+            const enrichedSales = (sales || []).map(sale => ({
+                ...sale,
+                clients: clientMap[sale.client_id] ? { name: clientMap[sale.client_id].name } : null,
+                sale_items: itemsBySale[sale.id] || []
+            }));
+
             set({ 
-                sales: sales || [], 
+                sales: enrichedSales, 
                 expenses: expenses || [], 
                 supplierOrders: orders || [], 
                 supplierOrderItems: sItems || [],
@@ -37,7 +63,7 @@ export const useFinanceStore = create((set, get) => ({
                 isInitialized: true,
                 isLoading: false 
             });
-            console.log('[FinanceStore] Local data loaded.');
+            console.log('[FinanceStore] Local data loaded and relationships enriched.');
         } catch (err) {
             console.error('[FinanceStore] Init error:', err);
             set({ isInitialized: true, isLoading: false });

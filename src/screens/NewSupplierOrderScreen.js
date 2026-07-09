@@ -343,6 +343,8 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
         }
 
         setLoading(true);
+        const prevOrders = [...orders];
+
         try {
             const payload = {
                 provider_name: provider,
@@ -359,8 +361,6 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
             };
 
             let orderId;
-
-            const prevOrders = [...orders];
 
             if (route.params?.orderToEdit) {
                 // OPTIMISTIC UPDATE
@@ -383,37 +383,48 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     
                     // 1. Delete previous expenses that match this specific timestamp and category
                     const oldTimestamp = route.params.orderToEdit.created_at;
-                    await supabase
+                    const { error: deleteExpError } = await supabase
                         .from('expenses')
                         .delete()
                         .eq('category', 'Inventario')
                         .eq('created_at', oldTimestamp);
+                    
+                    if (deleteExpError) {
+                        console.error('Error deleting old expenses:', deleteExpError);
+                        throw new Error(`Error al borrar gastos anteriores: ${deleteExpError.message}`);
+                    }
 
                     // 2. Prepare new clean expenses (Plain array, No IDs)
                     const newExpenses = [];
-                    for (const item of selectedProducts) {
-                        const name = item.product.name || item.tempName || 'Producto Desconocido';
-                        const unitCost = parseFloat(item.cost) || 0;
-                        const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
-                        
-                        if (unitCost > 0 && totalQty > 0) {
-                            newExpenses.push({
-                                description: `Inventario: ${name}`,
-                                amount: unitCost * totalQty,
-                                category: 'Inventario',
-                                product_id: item.isNew ? null : item.product.id,
-                                quantity: totalQty,
-                                details: item.variants.map(v => ({ 
-                                    color: v.color || 'General', 
-                                    qty: parseInt(v.quantity)
-                                })),
-                                created_at: syncKey // Link by sharing the exact timestamp
-                            });
+                    if (!isConsignment && (parseFloat(cost) || 0) > 0) {
+                        for (const item of selectedProducts) {
+                            const name = item.product.name || item.tempName || 'Producto Desconocido';
+                            const unitCost = parseFloat(item.cost) || 0;
+                            const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
+                            
+                            if (unitCost > 0 && totalQty > 0) {
+                                newExpenses.push({
+                                    description: `Inventario: ${name}`,
+                                    amount: unitCost * totalQty,
+                                    category: 'Inventario',
+                                    product_id: item.isNew ? null : item.product.id,
+                                    quantity: totalQty,
+                                    details: item.variants.map(v => ({ 
+                                        color: v.color || 'General', 
+                                        qty: parseInt(v.quantity)
+                                    })),
+                                    created_at: syncKey // Link by sharing the exact timestamp
+                                });
+                            }
                         }
                     }
 
                     if (newExpenses.length > 0) {
-                        await supabase.from('expenses').insert(newExpenses);
+                        const { error: insertExpError } = await supabase.from('expenses').insert(newExpenses);
+                        if (insertExpError) {
+                            console.error('Error inserting new expenses:', insertExpError);
+                            throw new Error(`Error al insertar nuevos gastos: ${insertExpError.message}`);
+                        }
                     }
                 }
             } else {
@@ -430,8 +441,14 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 if (insertError) throw insertError;
                 orderId = newOrder.id;
 
+                // Replace the optimistic entry with the real server record to avoid duplicates
+                setFinanceState(state => ({
+                    supplierOrders: state.supplierOrders.filter(o => o.id !== optimisticId).concat([newOrder])
+                }));
+
+
                 // --- TIMESTAMP-BASED SYNC (NEW) ---
-                if (selectedProducts.length > 0) {
+                if (selectedProducts.length > 0 && !isConsignment && (parseFloat(cost) || 0) > 0) {
                     const syncKey = payload.created_at;
                     const newExpenses = [];
                     for (const item of selectedProducts) {
@@ -456,14 +473,26 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                     }
 
                     if (newExpenses.length > 0) {
-                        await supabase.from('expenses').insert(newExpenses);
+                        const { error: insertExpError } = await supabase.from('expenses').insert(newExpenses);
+                        if (insertExpError) {
+                            console.error('Error inserting new expenses:', insertExpError);
+                            throw new Error(`Error al insertar nuevos gastos: ${insertExpError.message}`);
+                        }
                     }
                 }
             }
 
             // Handle Linked Items (Delete all and re-insert for simplicity on edit)
             if (route.params?.orderToEdit) {
-                await supabase.from('supplier_order_items').delete().eq('supplier_order_id', orderId);
+                const { error: deleteItemsError } = await supabase
+                    .from('supplier_order_items')
+                    .delete()
+                    .eq('supplier_order_id', orderId);
+                
+                if (deleteItemsError) {
+                    console.error('Error deleting old supplier order items:', deleteItemsError);
+                    throw new Error(`Error al borrar items anteriores de la orden: ${deleteItemsError.message}`);
+                }
             }
 
             if (selectedProducts.length > 0 && orderId) {
@@ -473,18 +502,55 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 for (const p of selectedProducts) {
                     if (!p.isNew && p.product.id) {
                         const uniqueColors = [...new Set(p.variants.map(v => v.color).filter(c => c))];
-                        productUpdatePromises.push(
-                            supabase.rpc('append_product_colors', {
-                                p_id: p.product.id,
-                                new_colors: uniqueColors
-                            })
-                        );
-                        productUpdatePromises.push(
-                            supabase.from('products').update({
-                                name: p.product.name,
-                                defect_notes: p.quality === 'flawed' ? 'Reportado en orden de compra' : null
-                            }).eq('id', p.product.id)
-                        );
+                        productUpdatePromises.push((async () => {
+                            try {
+                                const { data: prodData, error: fetchErr } = await supabase
+                                    .from('products')
+                                    .select('variants, defect_notes')
+                                    .eq('id', p.product.id)
+                                    .single();
+                                
+                                if (fetchErr) throw fetchErr;
+
+                                let currentVariants = Array.isArray(prodData?.variants) ? prodData.variants : [];
+                                let hasNewColors = false;
+
+                                uniqueColors.forEach(color => {
+                                    if (!color) return;
+                                    const cleanColor = color.trim();
+                                    const exists = currentVariants.some(v => v.color?.toLowerCase() === cleanColor.toLowerCase());
+                                    if (!exists) {
+                                        currentVariants.push({ color: cleanColor, stock: 0 });
+                                        hasNewColors = true;
+                                    }
+                                });
+
+                                const updatePayload = {
+                                    name: p.product.name
+                                };
+
+                                if (p.quality) {
+                                    updatePayload.defect_notes = p.quality === 'flawed' ? 'Reportado en orden de compra' : null;
+                                } else {
+                                    updatePayload.defect_notes = prodData?.defect_notes || null;
+                                }
+
+                                if (hasNewColors) {
+                                    updatePayload.variants = currentVariants;
+                                }
+
+                                const { error: updateErr } = await supabase
+                                    .from('products')
+                                    .update(updatePayload)
+                                    .eq('id', p.product.id);
+
+                                if (updateErr) throw updateErr;
+
+                            } catch (itemErr) {
+                                console.error('Error updating product colors/details:', itemErr);
+                                throw itemErr;
+                            }
+                        })());
                     }
 
                     p.variants.forEach(v => {
@@ -521,6 +587,7 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 ]);
             }
         } catch (err) {
+            console.error('Error saving supplier order:', err);
             setFinanceState({ supplierOrders: prevOrders }); // ROLLBACK
             if (Platform.OS === 'web') alert('Error: No se pudo guardar: ' + err.message);
             else Alert.alert('Error', 'No se pudo guardar: ' + err.message);

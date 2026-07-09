@@ -6,6 +6,7 @@ import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { printOrSharePDF } from '../utils/pdfHelper';
 
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useClientStore } from '../store/useClientStore';
@@ -128,10 +129,10 @@ export default function OrdersScreen({ navigation, route }) {
                 </body>
                 </html>
             `;
-            const { uri } = await Print.printToFileAsync({ html });
-            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle: isBudget ? 'Enviar Presupuesto' : 'Enviar Comprobante' });
+            await printOrSharePDF(html, { dialogTitle: isBudget ? 'Enviar Presupuesto' : 'Enviar Comprobante' });
         } catch (err) {
-            showAlert({ type: 'error', title: 'Error', message: 'No se pudo generar el PDF.' });
+            console.error('PDF Error:', err);
+            showAlert({ type: 'error', title: 'Error', message: 'No se pudo generar el PDF. Detalle: ' + (err.message || err) });
         }
     };
 

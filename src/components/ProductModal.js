@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, Platform, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const ProductModal = ({
@@ -30,7 +31,8 @@ const ProductModal = ({
 
     return (
         <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-            <View style={styles.modalContent}>
+            <SafeAreaView style={styles.safeArea}>
+                <View style={styles.modalContent}>
                 <View style={styles.modalHeader}>
                     <Text style={styles.modalTitle}>Buscador de Productos</Text>
                     <TouchableOpacity onPress={onClose}>
@@ -81,18 +83,18 @@ const ProductModal = ({
                                         style={styles.rowContent}
                                         onPress={() => initiateProductSelection(item)}
                                     >
-                                        <View>
-                                            <Text style={styles.rowTitle}>{item.name}</Text>
+                                        <View style={{ flex: 1, marginRight: 15 }}>
+                                            <Text style={styles.rowTitle} numberOfLines={2}>{item.name}</Text>
                                             <Text style={[styles.rowSubtitle, { color: available <= 0 ? '#e74c3c' : '#888' }]}>
                                                 Disp: {available} {!(userRole === 'admin' || userRole === 'leader') && <Text style={{ fontSize: 9, color: '#d4af37' }}>(STOCK CBA)</Text>}
                                             </Text>
                                         </View>
-                                        <Text style={styles.rowPrice}>${displayPrice}</Text>
+                                        <Text style={styles.rowPrice} numberOfLines={1}>${displayPrice}</Text>
                                     </TouchableOpacity>
                                 ) : (
                                     <View>
                                         <View style={styles.expandedHeader}>
-                                            <Text style={styles.expandedTitle}>{item.name}</Text>
+                                            <Text style={[styles.expandedTitle, { flex: 1, marginRight: 15 }]} numberOfLines={2}>{item.name}</Text>
                                             <Text style={styles.expandedPrice}>${displayPrice}</Text>
                                         </View>
 
@@ -175,12 +177,17 @@ const ProductModal = ({
                 <TouchableOpacity style={styles.finishBtn} onPress={onClose}>
                     <Text style={styles.finishText}>Terminar Selección</Text>
                 </TouchableOpacity>
-            </View>
+                </View>
+            </SafeAreaView>
         </Modal>
     );
 };
 
 const styles = StyleSheet.create({
+    safeArea: {
+        flex: 1,
+        backgroundColor: '#000'
+    },
     modalContent: { flex: 1, backgroundColor: '#000', padding: 20 },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
     modalTitle: { color: '#d4af37', fontSize: 20, fontWeight: 'bold' },

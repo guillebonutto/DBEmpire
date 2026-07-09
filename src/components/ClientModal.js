@@ -1,5 +1,6 @@
 import React, { useRef, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator, PanResponder, Animated, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator, PanResponder, Animated } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 const GestureClientRow = ({ item, onSelectWithType }) => {
@@ -55,13 +56,13 @@ const GestureClientRow = ({ item, onSelectWithType }) => {
                 onPress={() => onSelectWithType(item, 'selected_only')}
             >
                 <Animated.View style={[styles.clientRow, { transform: [{ translateX: pan.x }], backgroundColor }]}>
-                    <View style={styles.clientInfo}>
+                    <View style={[styles.clientInfo, { flex: 1, marginRight: 10 }]}>
                         <View style={styles.avatar}>
                             <Text style={styles.avatarText}>{item ? item.name.charAt(0).toUpperCase() : '?'}</Text>
                         </View>
-                        <View>
-                            <Text style={styles.rowTitle}>{item ? item.name : 'Cliente Anónimo (Venta de mostrador)'}</Text>
-                            <Text style={styles.gestureHint}>Toca para elegir • Desliza ↔ para acción rápida</Text>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.rowTitle} numberOfLines={1}>{item ? item.name : 'Cliente Anónimo (Venta de mostrador)'}</Text>
+                            <Text style={styles.gestureHint} numberOfLines={1}>Toca para elegir • Desliza ↔ para acción rápida</Text>
                         </View>
                     </View>
                     

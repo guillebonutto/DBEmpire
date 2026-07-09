@@ -224,7 +224,7 @@ const styles = StyleSheet.create({
         padding: 25,
         borderWidth: 1,
         borderColor: '#333',
-        shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 15, elevation: 10
+        boxShadow: '0px 0px 15px rgba(0, 0, 0, 0.5)', elevation: 10
     },
     sectionTitle: { fontSize: 14, fontWeight: '700', color: '#666', marginBottom: 20, textAlign: 'center', letterSpacing: 2 },
 

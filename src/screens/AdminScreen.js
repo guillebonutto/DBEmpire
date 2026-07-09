@@ -65,6 +65,35 @@ export default function AdminScreen({ navigation }) {
     // ── Empire AI Coach ───────────────────────────────────────────────
     const [coachPlan, setCoachPlan] = useState(null);
     const [generatingCoach, setGeneratingCoach] = useState(false);
+    const [completedTasks, setCompletedTasks] = useState([]);
+
+    const syncCompletedTasks = async (insights) => {
+        if (!insights) return;
+        const idsToCheck = [];
+        if (insights.today_plan?.id) idsToCheck.push(insights.today_plan.id);
+        if (insights.missions && Array.isArray(insights.missions)) {
+            insights.missions.forEach(m => {
+                if (m.id) idsToCheck.push(m.id);
+            });
+        }
+        if (idsToCheck.length > 0) {
+            const completed = await EmpireAIService.checkCompletedActions(idsToCheck);
+            setCompletedTasks(completed);
+        } else {
+            setCompletedTasks([]);
+        }
+    };
+
+    const handleToggleTask = async (id, title) => {
+        if (!id) return;
+        try {
+            await EmpireAIService.markActionAsExecuted(id);
+            setCompletedTasks(prev => [...prev, id]);
+            Alert.alert('¡Misión Completada!', `Completaste: "${title}"`);
+        } catch (e) {
+            console.error("Error marking task done in AdminScreen:", e);
+        }
+    };
 
     const { sales, expenses, supplierOrders, saleItems, settings, isLoading: storeLoading, fetchAllData } = useFinanceStore();
 
@@ -112,6 +141,7 @@ export default function AdminScreen({ navigation }) {
         try {
             const plan = await EmpireAIService.getInsights(true, 'admin');
             setCoachPlan(plan);
+            await syncCompletedTasks(plan);
         } catch (e) {
             console.log('Coach plan error:', e.message);
         } finally {
@@ -287,12 +317,12 @@ export default function AdminScreen({ navigation }) {
         const { startMs, endMs } = getDateRange(currentFilter, currentDateObj, currentViewAllMonths);
 
         // Split sales/expenses into prev (before period) and current (in period)
-        let prevIncome = 0, prevExpCaja = 0, prevExpROI = 0;
+        let prevIncome = 0, prevExpCaja = 0, prevExpROI = 0, prevYields = 0;
         const currentSales = [];
         const currentExpenses = [];
 
         for (const s of (sales || [])) {
-            const sMs = new Date(s.created_at).getTime();
+            const sMs = new Date(s.paid_at || s.created_at).getTime();
             if (sMs < startMs) {
                 const st = (s.status || '').toLowerCase();
                 if (st === 'completed' || st === 'exitosa' || st === 'vended' || st === '') {
@@ -307,19 +337,24 @@ export default function AdminScreen({ navigation }) {
             const eMs = new Date(e.created_at).getTime();
             const val = parseFloat(e.amount) || 0;
             const isDebtPayment = e.category === 'Pago de Deuda';
+            const isBankYield = e.category === 'Rendimiento Bancario';
             const desc = (e.description || '').toLowerCase();
             const isInitialCreditStock = desc.includes('crédito') || desc.includes('credito') || desc.includes('consignacion') || desc.includes('consignación') || desc.includes('consolidado') || desc.startsWith('inventario:');
 
             if (eMs < startMs) {
-                if (!isInitialCreditStock) prevExpCaja += val;
+                if (isBankYield) {
+                    prevYields += Math.abs(val);
+                } else if (!isInitialCreditStock) {
+                    prevExpCaja += val;
+                }
                 // ROI histórico: incluye el costo de compras (consolidado) pero no las cuotas (deuda)
-                if (!isDebtPayment) prevExpROI += val;
+                if (!isDebtPayment && !isBankYield) prevExpROI += val;
             } else if (!endMs || eMs <= endMs) {
                 currentExpenses.push(e);
             }
         }
 
-        const histBalCaja = prevIncome - prevExpCaja;
+        const histBalCaja = prevIncome - prevExpCaja + prevYields;
         // ROI usa el ingreso total para recuperar la gigantesca inversión de stock inicial
         const histBalROI = prevIncome - prevExpROI;
 
@@ -335,7 +370,7 @@ export default function AdminScreen({ navigation }) {
         (timeline || []).forEach((t, i) => bucketIndex.set(t.key, i));
 
         (finalSales || []).forEach(sale => {
-            const d = new Date(sale.created_at);
+            const d = new Date(sale.paid_at || sale.created_at);
             const key = getBucketKey(d, currentFilter, currentViewAllMonths);
             const idx = bucketIndex.get(key);
             if (idx !== undefined) {
@@ -392,7 +427,7 @@ export default function AdminScreen({ navigation }) {
         const debtPayments      = currentExpenses.reduce((sum, e) =>
             isDebtPayment(e) ? sum + (parseFloat(e.amount) || 0) : sum, 0);
         const bankYields        = currentExpenses.reduce((sum, e) =>
-            isBankYield(e) ? sum + (parseFloat(e.amount) || 0) : sum, 0);
+            isBankYield(e) ? sum + Math.abs(parseFloat(e.amount) || 0) : sum, 0);
         const operatingExpensesForCaja = currentExpenses.reduce((sum, e) => {
             const isInitialCreditStock = (e.description || '').toLowerCase().includes('crédito') || (e.description || '').toLowerCase().includes('consolidado') || (e.description || '').toLowerCase().startsWith('inventario:');
             return isDebtPayment(e) || isBankYield(e) || isInitialCreditStock ? sum : sum + (parseFloat(e.amount) || 0);
@@ -400,9 +435,9 @@ export default function AdminScreen({ navigation }) {
             
         const totalExpensesCaja = operatingExpensesForCaja + debtPayments; // yields are income, not expense
 
-        // ROI balance: histórico (ingresos - gastos incl. stock) + current ingresos - current operatingExp
+        // ROI balance: cumulative net profit from the beginning (lifetime accumulated ROI)
         const netCaja   = histBalCaja + totalSales + bankYields - totalExpensesCaja;
-        const netProfit = histBalROI  + totalSales - operatingExpenses;
+        const netProfit = histBalROI + totalSales - operatingExpenses;
 
         // ── Advanced metrics ───────────────────────────────────────────────────
         const margin = totalSales > 0 ? (grossProfit / totalSales) * 100 : 0;
@@ -443,14 +478,25 @@ export default function AdminScreen({ navigation }) {
             const productMap = {};
             currentSaleItems.forEach(item => {
                 const name = item.products?.name || 'Desconocido';
-                if (!productMap[name]) productMap[name] = 0;
-                productMap[name] += item.quantity;
+                const subtotal = Number(item.subtotal || (item.quantity * (item.unit_price_at_sale || 0)) || 0);
+                if (!productMap[name]) {
+                    productMap[name] = { quantity: 0, revenue: 0 };
+                }
+                productMap[name].quantity += item.quantity;
+                productMap[name].revenue += subtotal;
             });
             const colors = ['#d4af37', '#2ecc71', '#e74c3c', '#a29bfe', '#fd79a8'];
             setProductData(Object.entries(productMap)
-                .sort((a, b) => b[1] - a[1])
+                .sort((a, b) => b[1].quantity - a[1].quantity)
                 .slice(0, 5)
-                .map(([name, quantity], i) => ({ name, quantity, color: colors[i], legendFontColor: '#888', legendFontSize: 12 }))
+                .map(([name, data], i) => ({ 
+                    name, 
+                    quantity: data.quantity, 
+                    revenue: data.revenue, 
+                    color: colors[i], 
+                    legendFontColor: '#888', 
+                    legendFontSize: 12 
+                }))
             );
         } else {
             setProductData([]);
@@ -536,39 +582,28 @@ export default function AdminScreen({ navigation }) {
 
     const getProfitColor = (value) => value >= 0 ? '#2ecc71' : '#e74c3c';
 
-    const chartConfig = {
-        backgroundColor: '#1e2923',
-        backgroundGradientFrom: '#1e2923',
-        backgroundGradientTo: '#08130D',
-        decimalPlaces: 0, // optional, defaults to 2dp
-        color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-        labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-        style: {
-            borderRadius: 16
-        },
-        propsForDots: {
-            r: '6',
-            strokeWidth: '2',
-            stroke: '#d4af37'
-        }
-    };
-
     return (
         <SafeAreaView style={styles.safeArea}>
-            <StatusBar barStyle="light-content" backgroundColor="#1a1a1a" />
-            <LinearGradient
-                colors={['#1a1a1a', '#333333']}
-                style={styles.headerContainer}
-            >
+            <StatusBar barStyle="light-content" backgroundColor="#000000" />
+            
+            {/* Header Redesign */}
+            <View style={styles.headerContainer}>
                 <View style={styles.headerContent}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-                        <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Panel de Administración</Text>
-                    <View style={{ width: 24 }} />
-
+                    <View style={styles.headerLogoContainer}>
+                        <View style={styles.headerLogoCircle}>
+                            <MaterialCommunityIcons name="crown" size={16} color="#d4af37" />
+                        </View>
+                        <Text style={styles.headerTitle}>ADMINISTRACIÓN</Text>
+                    </View>
+                    <View style={styles.headerRight}>
+                        <TouchableOpacity style={styles.headerBellContainer} onPress={() => Alert.alert('Notificaciones', 'No tienes lecturas pendientes.')}>
+                            <MaterialCommunityIcons name="bell-outline" size={22} color="#bdc3c7" />
+                            <View style={styles.headerBellDot} />
+                        </TouchableOpacity>
+                    </View>
                 </View>
 
+                {/* Date Filter Bar */}
                 <View style={styles.filterContainer}>
                     <TouchableOpacity style={[styles.filterBtn, dateFilter === 'day' && styles.filterBtnActive]} onPress={() => changeFilter('day', true)}>
                         <Text style={[styles.filterText, dateFilter === 'day' && styles.filterTextActive]}>DÍA</Text>
@@ -589,23 +624,23 @@ export default function AdminScreen({ navigation }) {
                         {!viewAllMonths && (
                             <View style={styles.monthSelector}>
                                 <TouchableOpacity onPress={() => changeMonth(-1)} style={styles.navArrow}>
-                                    <MaterialCommunityIcons name="chevron-left" size={30} color="#d4af37" />
+                                    <MaterialCommunityIcons name="chevron-left" size={24} color="#d4af37" />
                                 </TouchableOpacity>
                                 <Text style={styles.monthLabel}>
                                     {currentDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase()}
                                 </Text>
                                 <TouchableOpacity onPress={() => changeMonth(1)} style={styles.navArrow}>
-                                    <MaterialCommunityIcons name="chevron-right" size={30} color="#d4af37" />
+                                    <MaterialCommunityIcons name="chevron-right" size={24} color="#d4af37" />
                                 </TouchableOpacity>
                             </View>
                         )}
                         <TouchableOpacity style={styles.generalToggle} onPress={toggleAllMonths}>
-                            <MaterialCommunityIcons name={viewAllMonths ? "checkbox-marked" : "checkbox-blank-outline"} size={24} color="#d4af37" />
-                            <Text style={styles.generalToggleText}>Ver Año Completo</Text>
+                            <MaterialCommunityIcons name={viewAllMonths ? "checkbox-marked" : "checkbox-blank-outline"} size={20} color="#d4af37" />
+                            <Text style={styles.generalToggleText}>Ver año completo</Text>
                         </TouchableOpacity>
                     </View>
                 )}
-            </LinearGradient>
+            </View>
 
             <ScrollView
                 style={styles.scrollView}
@@ -619,9 +654,9 @@ export default function AdminScreen({ navigation }) {
                     </View>
                 ) : (
                     <>
-                        {/* ── Sync Queue Monitor ─────────────────────────────── */}
+                        {/* ── Sync Queue Monitor Card ── */}
                         <TouchableOpacity 
-                            style={{ marginHorizontal: 15, marginBottom: 15, backgroundColor: '#1a1a1a', borderRadius: 12, padding: 15, borderWidth: 1, borderColor: '#333', flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                            style={styles.syncQueueBanner}
                             onPress={async () => {
                                 const count = await require('../services/syncService').SyncService.getQueueCount();
                                 if (count > 0) {
@@ -632,692 +667,811 @@ export default function AdminScreen({ navigation }) {
                                 }
                             }}
                         >
-                            <MaterialCommunityIcons name="cloud-sync" size={24} color="#d4af37" />
+                            <View style={styles.syncQueueIconBox}>
+                                <MaterialCommunityIcons name="cloud-sync" size={24} color="#d4af37" />
+                            </View>
                             <View style={{ flex: 1 }}>
-                                <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>Monitor de Sincronización</Text>
-                                <Text style={{ color: '#aaa', fontSize: 12 }}>Toca aquí para ver los ítems pendientes (ventas, gastos) y forzar la subida a Supabase.</Text>
+                                <Text style={styles.syncQueueTitle}>Monitoreo Sincronización</Text>
+                                <Text style={styles.syncQueueSubtitle}>Tasa de comisión: 10%. Lectura de la sección.</Text>
                             </View>
                         </TouchableOpacity>
 
-                        {/* Stats Cards */}
-                <View style={styles.statsGrid}>
-                    <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="cash-multiple" size={28} color="#d4af37" />
-                        <Text style={styles.statValue}>{formatCurrency(stats.totalSales)}</Text>
-                        <Text style={styles.statLabel}>Ventas</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="currency-usd" size={28} color="#2ecc71" />
-                        <Text style={styles.statValue}>{formatCurrency(stats.totalProfit)}</Text>
-                        <Text style={styles.statLabel}>Margen Productos</Text>
-                    </View>
-                </View>
+                        {/* Stats Cards Grid */}
+                        <View style={styles.statsGrid}>
+                            <View style={styles.statCard}>
+                                <View style={[styles.statIconCircle, { backgroundColor: '#d4af3715' }]}>
+                                    <MaterialCommunityIcons name="cash-multiple" size={22} color="#d4af37" />
+                                </View>
+                                <Text style={styles.statValue}>{formatCurrency(stats.totalSales)}</Text>
+                                <Text style={styles.statLabel}>VENTAS</Text>
+                            </View>
+                            <View style={styles.statCard}>
+                                <View style={[styles.statIconCircle, { backgroundColor: '#2ecc7115' }]}>
+                                    <MaterialCommunityIcons name="currency-usd" size={22} color="#2ecc71" />
+                                </View>
+                                <Text style={styles.statValue}>{formatCurrency(stats.totalProfit)}</Text>
+                                <Text style={styles.statLabel}>MARGEN PRODUCTOS</Text>
+                            </View>
+                        </View>
 
-                <View style={styles.statsGrid}>
-                    <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="cash-minus" size={28} color="#e74c3c" />
-                        <Text style={styles.statValue}>{formatCurrency(stats.totalExpenses)}</Text>
-                        <Text style={styles.statLabel}>Gastos Operativos</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                        <MaterialCommunityIcons name="credit-card-minus" size={28} color="#f39c12" />
-                        <Text style={[styles.statValue, { color: '#f39c12' }]}>
-                            {formatCurrency(stats.debtPayments)}
-                        </Text>
-                        <Text style={[styles.statLabel, { color: '#f39c12' }]}>Deudas Pagadas</Text>
-                    </View>
-                </View>
+                        <View style={styles.statsGrid}>
+                            <View style={styles.statCard}>
+                                <View style={[styles.statIconCircle, { backgroundColor: '#e74c3c15' }]}>
+                                    <MaterialCommunityIcons name="wallet-outline" size={22} color="#e74c3c" />
+                                </View>
+                                <Text style={styles.statValue}>{formatCurrency(stats.totalExpenses)}</Text>
+                                <Text style={styles.statLabel}>GASTOS OPERATIVOS</Text>
+                            </View>
+                            <View style={styles.statCard}>
+                                <View style={[styles.statIconCircle, { backgroundColor: '#f39c1215' }]}>
+                                    <MaterialCommunityIcons name="credit-card-minus" size={22} color="#f39c12" />
+                                </View>
+                                <Text style={styles.statValue}>{formatCurrency(stats.debtPayments)}</Text>
+                                <Text style={styles.statLabel}>DEUDAS PAGADAS</Text>
+                            </View>
+                        </View>
 
-                <View style={[styles.statsGrid, { marginTop: 5 }]}>
-                    <View style={[styles.statCard, { borderColor: '#3498db' }]}>
-                        <MaterialCommunityIcons name="safe" size={28} color="#3498db" />
-                        <Text style={[styles.statValue, { color: '#3498db' }]}>
-                            {formatCurrency(stats.netCaja)}
-                        </Text>
-                        <Text style={[styles.statLabel, { color: '#3498db' }]}>Caja Fuerte (Liquidez)</Text>
-                    </View>
-                    <View style={[styles.statCard, { borderColor: getProfitColor(stats.netProfit) }]}>
-                        <MaterialCommunityIcons name="scale-balance" size={28} color={getProfitColor(stats.netProfit)} />
-                        <Text style={[styles.statValue, { color: getProfitColor(stats.netProfit) }]}>
-                            {formatCurrency(stats.netProfit)}
-                        </Text>
-                        <Text style={[styles.statLabel, { color: getProfitColor(stats.netProfit) }]}>Rentabilidad (ROI)</Text>
-                    </View>
-                </View>
+                        <View style={[styles.statsGrid, { marginBottom: 15 }]}>
+                            <View style={[styles.statCard, { borderColor: '#3498db30' }]}>
+                                <View style={[styles.statIconCircle, { backgroundColor: '#3498db15' }]}>
+                                    <MaterialCommunityIcons name="safe" size={22} color="#3498db" />
+                                </View>
+                                <Text style={[styles.statValue, { color: '#3498db' }]}>{formatCurrency(stats.netCaja)}</Text>
+                                <Text style={styles.statLabel}>CAJA FUERTE (LIQUIDEZ)</Text>
+                            </View>
+                            <View style={[styles.statCard, { borderColor: getProfitColor(stats.netProfit) + '30' }]}>
+                                <View style={[styles.statIconCircle, { backgroundColor: getProfitColor(stats.netProfit) + '15' }]}>
+                                    <MaterialCommunityIcons name="scale-balance" size={22} color={getProfitColor(stats.netProfit)} />
+                                </View>
+                                <Text style={[styles.statValue, { color: getProfitColor(stats.netProfit) }]}>{formatCurrency(stats.netProfit)}</Text>
+                                <Text style={styles.statLabel}>RENTABILIDAD (ROI)</Text>
+                            </View>
+                        </View>
 
-                {/* ── Cuota Mensual a Pagar ─────────────────────────────── */}
-                {(() => {
-                    const pendingOrders = (supplierOrders || []).filter(o => (o.installments_paid || 0) < (o.installments_total || 1));
-                    const totalDueThisMonth = pendingOrders.reduce((sum, o) => {
-                        const total = o.installments_total || 1;
-                        const installmentAmt = (o.total_cost || o.total_amount || 0) / total;
-                        return sum + installmentAmt;
-                    }, 0);
+                        {/* ── Planes Totalmente Operativos Card ── */}
+                        {(() => {
+                            const pendingOrders = (supplierOrders || []).filter(o => (o.installments_paid || 0) < (o.installments_total || 1));
+                            const totalDueThisMonth = pendingOrders.reduce((sum, o) => {
+                                const total = o.installments_total || 1;
+                                const installmentAmt = (o.total_cost || o.total_amount || 0) / total;
+                                return sum + installmentAmt;
+                            }, 0);
 
-                    if (pendingOrders.length === 0) return null;
+                            if (pendingOrders.length === 0) return null;
 
-                    return (
+                            return (
+                                <TouchableOpacity
+                                    style={styles.pendingPlanesCard}
+                                    onPress={() => navigation.navigate('Expenses')}
+                                >
+                                    <View style={styles.pendingPlanesIconBox}>
+                                        <MaterialCommunityIcons name="calendar-clock" size={26} color="#e67e22" />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.pendingPlanesHeader}>PLANES TOTALMENTE OPERATIVOS</Text>
+                                        <Text style={styles.pendingPlanesAmount}>{formatCurrency(totalDueThisMonth)}</Text>
+                                        <Text style={styles.pendingPlanesFooter}>TOTAL ACUMULADO A GASTOS POR CONSIGNACIONES</Text>
+                                    </View>
+                                    <MaterialCommunityIcons name="chevron-right" size={24} color="#e67e22" />
+                                </TouchableOpacity>
+                            );
+                        })()}
+
+                        {/* ── CRM Card ── */}
                         <TouchableOpacity
-                            style={{ marginHorizontal: 15, marginBottom: 15, backgroundColor: '#1a0f00', borderRadius: 16, padding: 18, borderWidth: 1.5, borderColor: '#f39c12', flexDirection: 'row', alignItems: 'center', gap: 15 }}
-                            onPress={() => navigation.navigate('Expenses')}
+                            style={styles.crmCard}
+                            onPress={() => navigation.navigate('Clientes')}
                         >
-                            <MaterialCommunityIcons name="calendar-clock" size={36} color="#f39c12" />
+                            <View style={styles.crmIconBox}>
+                                <MaterialCommunityIcons name="account-group" size={26} color="#d4af37" />
+                            </View>
                             <View style={{ flex: 1 }}>
-                                <Text style={{ color: '#f39c12', fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>CUOTAS PENDIENTES ({pendingOrders.length} orden{pendingOrders.length > 1 ? 'es' : ''})</Text>
-                                <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginTop: 4 }}>{formatCurrency(totalDueThisMonth)}</Text>
-                                <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>Tocá para ir a Gastos → Compras y pagar</Text>
+                                <Text style={styles.crmHeader}>GESTIÓN DE CLIENTES</Text>
+                                <Text style={styles.crmTitle}>Base de Datos CRM</Text>
+                                <Text style={styles.crmFooter}>Fidelización / deudores / perfiles VIP</Text>
                             </View>
-                            <MaterialCommunityIcons name="chevron-right" size={24} color="#f39c12" />
+                            <MaterialCommunityIcons name="chevron-right" size={24} color="#d4af37" />
                         </TouchableOpacity>
-                    );
-                })()}
 
-                {/* ── Smart Alert Panel ───────────────────────────────────── */}
-                {stats.alerts && stats.alerts.length > 0 && (
-                    <View style={{ marginHorizontal: 15, marginBottom: 15, gap: 8 }}>
-                        <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>⚡ ALERTAS DEL IMPERIO</Text>
-                        {stats.alerts.map((alert, idx) => (
-                            <View key={idx} style={[
-                                styles.alertBanner,
-                                alert.type === 'critical' ? styles.alertCritical :
-                                alert.type === 'warning' ? styles.alertWarning :
-                                styles.alertInfo
-                            ]}>
-                                <Text style={[
-                                    styles.alertText,
-                                    alert.type === 'critical' ? { color: '#ff6b6b' } :
-                                    alert.type === 'warning' ? { color: '#f39c12' } :
-                                    { color: '#74b9ff' }
-                                ]}>{alert.msg}</Text>
-                            </View>
-                        ))}
-                    </View>
-                )}
-
-                {/* ── Margin & Efficiency row ─────────────────────────────── */}
-                <TouchableOpacity
-                    style={{ marginHorizontal: 15, marginBottom: 15, backgroundColor: '#0a0a0a', borderRadius: 16, padding: 18, borderWidth: 1, borderColor: '#d4af37', flexDirection: 'row', alignItems: 'center', gap: 15 }}
-                    onPress={() => navigation.navigate('Clientes')}
-                >
-                    <View style={{ width: 45, height: 45, borderRadius: 12, backgroundColor: '#d4af3720', justifyContent: 'center', alignItems: 'center' }}>
-                        <MaterialCommunityIcons name="account-group" size={28} color="#d4af37" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={{ color: '#d4af37', fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>GESTIÓN DE CLIENTES</Text>
-                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 2 }}>Base de Datos CRM</Text>
-                        <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>Fidelización, deudas y perfiles VIP</Text>
-                    </View>
-                    <MaterialCommunityIcons name="chevron-right" size={24} color="#d4af37" />
-                </TouchableOpacity>
-
-                {stats.totalSales > 0 && (
-                    <View style={[styles.statsGrid, { marginTop: 5, marginBottom: 5 }]}>
-                        <View style={[styles.statCard, { borderColor: stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c' }]}>
-                            <MaterialCommunityIcons name="percent" size={28} color={stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c'} />
-                            <Text style={[styles.statValue, { color: stats.margin >= 30 ? '#2ecc71' : stats.margin >= 15 ? '#f39c12' : '#e74c3c' }]}>
-                                {stats.margin?.toFixed(1)}%
-                            </Text>
-                            <Text style={[styles.statLabel, { color: '#888' }]}>Margen Bruto</Text>
-                        </View>
-                        <View style={[styles.statCard, { borderColor: stats.operatingRatio <= 50 ? '#2ecc71' : stats.operatingRatio <= 80 ? '#f39c12' : '#e74c3c' }]}>
-                            <MaterialCommunityIcons name="gauge" size={28} color={stats.operatingRatio <= 50 ? '#2ecc71' : stats.operatingRatio <= 80 ? '#f39c12' : '#e74c3c'} />
-                            <Text style={[styles.statValue, { color: stats.operatingRatio <= 50 ? '#2ecc71' : stats.operatingRatio <= 80 ? '#f39c12' : '#e74c3c' }]}>
-                                {stats.operatingRatio?.toFixed(0)}%
-                            </Text>
-                            <Text style={[styles.statLabel, { color: '#888' }]}>Eficiencia Op.</Text>
-                        </View>
-                    </View>
-                )}
-
-                {/* Quick Access Section */}
-                <View style={styles.quickAccessSection}>
-                    <Text style={styles.sectionTitle}>ACCESO RÁPIDO</Text>
-
-                    <Text style={styles.categoryLabel}>👑 Operaciones del Imperio</Text>
-                    <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('NewSale', { autoSearch: true })}>
-                            <MaterialCommunityIcons name="text-search" size={32} color="#d4af37" />
-                            <Text style={styles.quickAccessTitle}>Venta</Text>
-                            <Text style={styles.quickAccessSubtitle}>Manual</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Sales')}>
-                            <MaterialCommunityIcons name="history" size={32} color="#bdc3c7" />
-                            <Text style={styles.quickAccessTitle}>Historial</Text>
-                            <Text style={styles.quickAccessSubtitle}>Ventas</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Inventario')}>
-                            <MaterialCommunityIcons name="package-variant-closed" size={32} color="#e67e22" />
-                            <Text style={styles.quickAccessTitle}>Inventario</Text>
-                            <Text style={styles.quickAccessSubtitle}>Stock</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Clientes')}>
-                            <MaterialCommunityIcons name="account-group" size={32} color="#d4af37" />
-                            <Text style={styles.quickAccessTitle}>Clientes</Text>
-                            <Text style={styles.quickAccessSubtitle}>CRM / VIP</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <Text style={styles.categoryLabel}>💰 Gestión Financiera</Text>
-                    <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Expenses')}>
-                            <MaterialCommunityIcons name="cash-minus" size={32} color="#e74c3c" />
-                            <Text style={styles.quickAccessTitle}>Gastos</Text>
-                            <Text style={styles.quickAccessSubtitle}>Operativos</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('SupplierOrders')}>
-                            <MaterialCommunityIcons name="cube-send" size={32} color="#3498db" />
-                            <Text style={styles.quickAccessTitle}>Compras</Text>
-                            <Text style={styles.quickAccessSubtitle}>Proveedores</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Suppliers')}>
-                            <MaterialCommunityIcons name="factory" size={32} color="#d4af37" />
-                            <Text style={styles.quickAccessTitle}>Proveedores</Text>
-                            <Text style={styles.quickAccessSubtitle}>Contactos</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <Text style={styles.categoryLabel}>📊 Inteligencia de Negocio</Text>
-                    <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Reports')}>
-                            <MaterialCommunityIcons name="chart-bar" size={32} color="#f1c40f" />
-                            <Text style={styles.quickAccessTitle}>Reportes</Text>
-                            <Text style={styles.quickAccessSubtitle}>Métricas</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Analytics')}>
-                            <MaterialCommunityIcons name="google-analytics" size={32} color="#9b59b6" />
-                            <Text style={styles.quickAccessTitle}>Analíticas</Text>
-                            <Text style={styles.quickAccessSubtitle}>Generales</Text>
-                        </TouchableOpacity>
-                        {(userRole === 'admin' || userRole === 'leader') && (
-                            <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ProductTester')}>
-                                <MaterialCommunityIcons name="flask" size={32} color="#e74c3c" />
-                                <Text style={styles.quickAccessTitle}>Testing</Text>
-                                <Text style={styles.quickAccessSubtitle}>Productos</Text>
-                            </TouchableOpacity>
-                        )}
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('RestockAdvisor')}>
-                            <MaterialCommunityIcons name="truck-delivery" size={32} color="#1abc9c" />
-                            <Text style={styles.quickAccessTitle}>Restock</Text>
-                            <Text style={styles.quickAccessSubtitle}>Advisor</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Promotions')}>
-                            <MaterialCommunityIcons name="sale" size={32} color="#e91e63" />
-                            <Text style={styles.quickAccessTitle}>Promociones</Text>
-                            <Text style={styles.quickAccessSubtitle}>Activas</Text>
-                        </TouchableOpacity>
-                        {(userRole === 'admin' || userRole === 'leader') && (
-                            <TouchableOpacity style={[styles.quickAccessCard, { borderColor: '#d4af37', borderWidth: 1.5 }]} onPress={() => navigation.navigate('AIDashboard')}>
-                                <MaterialCommunityIcons name="brain" size={32} color="#d4af37" />
-                                <Text style={[styles.quickAccessTitle, { color: '#d4af37' }]}>Empire AI</Text>
-                                <Text style={styles.quickAccessSubtitle}>Dashboard</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-
-                    <Text style={styles.categoryLabel}>⚙️ Configuración y Herramientas</Text>
-                    <View style={styles.quickAccessGrid}>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Gestión de Ajustes próximamente disponible en esta versión.')}>
-                            <MaterialCommunityIcons name="cog" size={32} color="#d4af37" />
-                            <Text style={styles.quickAccessTitle}>Ajustes</Text>
-                            <Text style={styles.quickAccessSubtitle}>Generales</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Gestión de Usuarios próximamente disponible.')}>
-                            <MaterialCommunityIcons name="account-group" size={32} color="#95a5a6" />
-                            <Text style={styles.quickAccessTitle}>Usuarios</Text>
-                            <Text style={styles.quickAccessSubtitle}>Roles</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Copia de seguridad en la nube activada automáticamente.')}>
-                            <MaterialCommunityIcons name="cloud-upload" size={32} color="#3498db" />
-                            <Text style={styles.quickAccessTitle}>Backup</Text>
-                            <Text style={styles.quickAccessSubtitle}>Datos</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                {/* AI Performance Section - ADMIN ONLY */}
-                {(userRole === 'admin' || userRole === 'leader') && (
-                    <View style={styles.aiPerformanceSection}>
-                        <Text style={styles.sectionTitle}>RENDIMIENTO EMPIRE AI</Text>
-                        <View style={styles.aiStatsGrid}>
-                            <View style={styles.aiStatCard}>
-                                <MaterialCommunityIcons name="robot-happy" size={24} color="#d4af37" />
-                                <Text style={styles.aiStatValue}>{formatCurrency(aiPerformance.total_profit)}</Text>
-                                <Text style={styles.aiStatLabel}>Ganancia Generada</Text>
-                            </View>
-                            <View style={styles.aiStatCard}>
-                                <MaterialCommunityIcons name="check-circle-outline" size={24} color="#2ecc71" />
-                                <Text style={styles.aiStatValue}>{aiPerformance.successful_actions}</Text>
-                                <Text style={styles.aiStatLabel}>Acciones Exitosas</Text>
-                            </View>
-                            <View style={styles.aiStatCard}>
-                                <MaterialCommunityIcons name="close-circle-outline" size={24} color="#e74c3c" />
-                                <Text style={styles.aiStatValue}>{aiPerformance.failed_actions}</Text>
-                                <Text style={styles.aiStatLabel}>Acciones Fallidas</Text>
-                            </View>
-                            <View style={styles.aiStatCard}>
-                                <MaterialCommunityIcons name="star-four-points-outline" size={24} color="#f1c40f" />
-                                <Text style={styles.aiStatValue}>{aiPerformance.top_type}</Text>
-                                <Text style={styles.aiStatLabel}>Acción Más Rentable</Text>
-                            </View>
-                        </View>
-                    </View>
-                )}
-
-                {/* ── EMPIRE AI COACH — ADMIN/LEADER ONLY ──────────── */}
-                {(userRole === 'admin' || userRole === 'leader') && (
-                    <View style={styles.coachSection}>
-                        {/* Header */}
-                        <View style={styles.coachHeader}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                <MaterialCommunityIcons name="brain" size={22} color="#d4af37" />
-                                <View>
-                                    <Text style={styles.coachTitle}>EMPIRE AI COACH</Text>
-                                    <Text style={styles.coachSubtitle}>Análisis Estratégico en Vivo</Text>
+                        {/* ── Ratio Grid ── */}
+                        {stats.totalSales > 0 && (
+                            <View style={[styles.statsGrid, { marginBottom: 15 }]}>
+                                <View style={[styles.ratioCard, { borderColor: '#2ecc7130' }]}>
+                                    <View style={[styles.ratioIconBox, { backgroundColor: '#2ecc7115' }]}>
+                                        <MaterialCommunityIcons name="percent" size={20} color="#2ecc71" />
+                                    </View>
+                                    <Text style={[styles.ratioValue, { color: '#2ecc71' }]}>
+                                        {stats.margin?.toFixed(1)}%
+                                    </Text>
+                                    <Text style={styles.ratioLabel}>Margen Neto</Text>
+                                </View>
+                                <View style={[styles.ratioCard, { borderColor: '#ffffff20' }]}>
+                                    <View style={[styles.ratioIconBox, { backgroundColor: '#ffffff15' }]}>
+                                        <MaterialCommunityIcons name="gauge" size={20} color="#fff" />
+                                    </View>
+                                    <Text style={[styles.ratioValue, { color: '#fff' }]}>
+                                        0%
+                                    </Text>
+                                    <Text style={styles.ratioLabel}>Crecimiento</Text>
                                 </View>
                             </View>
-                            <TouchableOpacity
-                                onPress={generateCoachPlan}
-                                disabled={generatingCoach}
-                                style={styles.coachRefreshBtn}
-                            >
-                                {generatingCoach
-                                    ? <ActivityIndicator size="small" color="#d4af37" />
-                                    : <MaterialCommunityIcons name="refresh" size={20} color="#d4af37" />}
-                            </TouchableOpacity>
-                        </View>
-
-                        {!coachPlan && !generatingCoach && (
-                            <TouchableOpacity style={styles.coachInitBtn} onPress={generateCoachPlan}>
-                                <MaterialCommunityIcons name="robot-excited" size={28} color="#d4af37" />
-                                <Text style={styles.coachInitText}>Inicializar Coach IA</Text>
-                                <Text style={styles.coachInitSub}>Analiza tu negocio y genera estrategias</Text>
-                            </TouchableOpacity>
                         )}
 
-                        {generatingCoach && !coachPlan && (
-                            <View style={styles.coachLoadingBox}>
-                                <ActivityIndicator size="large" color="#d4af37" />
-                                <Text style={styles.coachLoadingText}>Analizando datos del Imperio...</Text>
-                            </View>
-                        )}
-
-                        {coachPlan && !coachPlan.is_restricted && (
-                            <>
-                                {/* Urgency banner */}
-                                <View style={[
-                                    styles.coachUrgencyBanner,
-                                    (coachPlan.urgency || 'Estable') === 'Crítico' ? { borderColor: '#e74c3c', backgroundColor: '#e74c3c18' } :
-                                    (coachPlan.urgency || 'Estable') === 'Atención' ? { borderColor: '#f39c12', backgroundColor: '#f39c1218' } :
-                                    { borderColor: '#2ecc71', backgroundColor: '#2ecc7118' }
-                                ]}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                        <View style={[
-                                            styles.coachUrgencyDot,
-                                            (coachPlan.urgency || 'Estable') === 'Crítico' ? { backgroundColor: '#e74c3c' } :
-                                            (coachPlan.urgency || 'Estable') === 'Atención' ? { backgroundColor: '#f39c12' } :
-                                            { backgroundColor: '#2ecc71' }
-                                        ]} />
+                        {/* ── Smart Alert Panel ── */}
+                        {stats.alerts && stats.alerts.length > 0 && (
+                            <View style={{ marginBottom: 15, gap: 8 }}>
+                                <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>⚡ ALERTAS DEL IMPERIO</Text>
+                                {stats.alerts.map((alert, idx) => (
+                                    <View key={idx} style={[
+                                        styles.alertBanner,
+                                        alert.type === 'critical' ? styles.alertCritical :
+                                        alert.type === 'warning' ? styles.alertWarning :
+                                        styles.alertInfo
+                                    ]}>
                                         <Text style={[
-                                            styles.coachUrgencyLabel,
-                                            (coachPlan.urgency || 'Estable') === 'Crítico' ? { color: '#e74c3c' } :
-                                            (coachPlan.urgency || 'Estable') === 'Atención' ? { color: '#f39c12' } :
-                                            { color: '#2ecc71' }
-                                        ]}>{String(coachPlan.urgency || 'ESTABLE').toUpperCase()}</Text>
+                                            styles.alertText,
+                                            alert.type === 'critical' ? { color: '#ff6b6b' } :
+                                            alert.type === 'warning' ? { color: '#f39c12' } :
+                                            { color: '#74b9ff' }
+                                        ]}>{alert.msg}</Text>
                                     </View>
-                                    <Text style={styles.coachUrgencyReason}>{coachPlan.urgencyReason || 'El Imperio avanza según lo esperado.'}</Text>
-                                </View>
+                                ))}
+                            </View>
+                        )}
 
-                                {/* Prediction */}
-                                {coachPlan.prediction && (
-                                    <View style={styles.coachPredictionBox}>
-                                        <MaterialCommunityIcons name="crystal-ball" size={18} color="#9b59b6" />
-                                        <Text style={styles.coachPredictionText}>{coachPlan.prediction}</Text>
+                        {/* ── Charts & Analysis (Line & Progress) ── */}
+                        <View style={styles.chartSection}>
+                            <Text style={styles.sectionTitle}>GRÁFICOS Y ANÁLISIS</Text>
+
+                            <Text style={styles.chartTitle}>TENDENCIA DE VENTAS</Text>
+                            {salesData.data && salesData.data.length > 0 && salesData.data.some(d => d > 0) ? (
+                                <LineChart
+                                    data={{ labels: salesData.labels, datasets: [{ data: salesData.data }] }}
+                                    width={screenWidth - 40}
+                                    height={220}
+                                    chartConfig={{
+                                        backgroundColor: '#000',
+                                        backgroundGradientFrom: '#000',
+                                        backgroundGradientTo: '#000',
+                                        backgroundGradientFromOpacity: 0,
+                                        backgroundGradientToOpacity: 0,
+                                        decimalPlaces: 0,
+                                        color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
+                                        labelColor: (opacity = 1) => `rgba(150, 150, 150, ${opacity})`,
+                                        style: { borderRadius: 16 },
+                                        propsForDots: { r: '4', strokeWidth: '2', stroke: '#d4af37' },
+                                        fillShadowGradient: '#d4af37',
+                                        fillShadowGradientOpacity: 0.2,
+                                        useShadowColorFromDataset: false,
+                                        paddingRight: 35,
+                                        propsForBackgroundLines: { strokeDasharray: '', stroke: '#151515' }
+                                    }}
+                                    bezier
+                                    style={styles.chart}
+                                />
+                            ) : (
+                                <Text style={styles.noDataText}>No hay datos suficientes para mostrar</Text>
+                            )}
+
+                            <Text style={styles.chartTitle}>RECUPERACIÓN DE INVERSIÓN (ROI)</Text>
+                            {progressData.datasets?.length > 0 ? (
+                                <CustomProgressChart progressData={progressData} />
+                            ) : (
+                                <Text style={styles.noDataText}>No hay datos suficientes</Text>
+                            )}
+                        </View>
+
+                        {/* ── Quick Access Buttons (Imperio OS) ── */}
+                        <View style={styles.quickAccessSection}>
+                            <Text style={styles.categoryLabel}>👑 Operaciones del Imperio</Text>
+                            <View style={styles.quickAccessGrid}>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('NewSale', { autoSearch: true })}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="flask" size={22} color="#d4af37" />
                                     </View>
-                                )}
+                                    <Text style={styles.quickAccessTitle}>VENTA</Text>
+                                    <Text style={styles.quickAccessSubtitle}>MANUAL</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Sales')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#bdc3c715' }]}>
+                                        <MaterialCommunityIcons name="history" size={22} color="#bdc3c7" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>HISTORIAL</Text>
+                                    <Text style={styles.quickAccessSubtitle}>VENTAS</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Inventario')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#e67e2215' }]}>
+                                        <MaterialCommunityIcons name="package-variant-closed" size={22} color="#e67e22" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>INVENTARIO</Text>
+                                    <Text style={styles.quickAccessSubtitle}>STOCK</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Clientes')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="account-group" size={22} color="#d4af37" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>CLIENTES</Text>
+                                    <Text style={styles.quickAccessSubtitle}>CRM / VIP</Text>
+                                </TouchableOpacity>
+                            </View>
 
-                                {/* Today Plan */}
-                                {coachPlan.today_plan && (
-                                    <View style={styles.coachPlanCard}>
-                                        <Text style={styles.coachPlanCardTitle}>🔥 MISIÓN CERO: PLAN DEL DÍA</Text>
+                            <Text style={styles.categoryLabel}>💰 Gestión Financiera</Text>
+                            <View style={styles.quickAccessGrid}>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Expenses')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#e74c3c15' }]}>
+                                        <MaterialCommunityIcons name="wallet-outline" size={22} color="#e74c3c" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Gastos</Text>
+                                    <Text style={styles.quickAccessSubtitle}>OPERATIVOS</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('SupplierOrders')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#2ecc7115' }]}>
+                                        <MaterialCommunityIcons name="cart-outline" size={22} color="#2ecc71" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Compras</Text>
+                                    <Text style={styles.quickAccessSubtitle}>PROVEEDORES</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Suppliers')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="handshake" size={22} color="#d4af37" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Proveedores</Text>
+                                    <Text style={styles.quickAccessSubtitle}>CONTACTOS</Text>
+                                </TouchableOpacity>
+                            </View>
 
-                                        {/* PRODUCTO ESTRELLA */}
-                                        <View style={styles.coachPlanRow}>
-                                            <MaterialCommunityIcons name="star-shooting" size={16} color="#d4af37" />
-                                            <Text style={styles.coachPlanPrimary}>{coachPlan.today_plan.product}</Text>
+                            <Text style={styles.categoryLabel}>📊 Inteligencia de Negocio</Text>
+                            <View style={styles.quickAccessGrid}>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Reports')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#f1c40f15' }]}>
+                                        <MaterialCommunityIcons name="folder-outline" size={22} color="#f1c40f" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Reportes</Text>
+                                    <Text style={styles.quickAccessSubtitle}>MÉTRICAS</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Analytics')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#e91e6315' }]}>
+                                        <MaterialCommunityIcons name="chart-bubble" size={22} color="#e91e63" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Estadísticas</Text>
+                                    <Text style={styles.quickAccessSubtitle}>GENERALES</Text>
+                                </TouchableOpacity>
+                                {(userRole === 'admin' || userRole === 'leader') && (
+                                    <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('ProductTester')}>
+                                        <View style={[styles.quickAccessIconBox, { backgroundColor: '#e74c3c15' }]}>
+                                            <MaterialCommunityIcons name="flask-outline" size={22} color="#e74c3c" />
                                         </View>
+                                        <Text style={styles.quickAccessTitle}>Testing</Text>
+                                        <Text style={styles.quickAccessSubtitle}>PRODUCTOS</Text>
+                                    </TouchableOpacity>
+                                )}
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('RestockAdvisor')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#2ecc7115' }]}>
+                                        <MaterialCommunityIcons name="truck-delivery-outline" size={22} color="#2ecc71" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Envios</Text>
+                                    <Text style={styles.quickAccessSubtitle}>ADVISOR</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Promotions')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#e91e6315' }]}>
+                                        <MaterialCommunityIcons name="sale" size={22} color="#e91e63" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Canales</Text>
+                                    <Text style={styles.quickAccessSubtitle}>ACTIVAS</Text>
+                                </TouchableOpacity>
+                                {(userRole === 'admin' || userRole === 'leader') && (
+                                    <TouchableOpacity style={[styles.quickAccessCard, { borderColor: '#d4af37', borderWidth: 1 }]} onPress={() => navigation.navigate('AIDashboard')}>
+                                        <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                            <MaterialCommunityIcons name="account-multiple" size={22} color="#d4af37" />
+                                        </View>
+                                        <Text style={styles.quickAccessTitle}>Grupos de</Text>
+                                        <Text style={[styles.quickAccessSubtitle, { color: '#d4af37', fontWeight: 'bold' }]}>CONSUMO</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
 
-                                        {/* HORARIO - destacado */}
-                                        {coachPlan.today_plan.schedule && (
-                                            <View style={styles.coachScheduleBox}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                                                    <MaterialCommunityIcons name="clock-time-four" size={14} color="#f39c12" />
-                                                    <Text style={styles.coachScheduleLabel}>HORARIO</Text>
-                                                </View>
-                                                <Text style={styles.coachScheduleText}>{coachPlan.today_plan.schedule}</Text>
-                                            </View>
-                                        )}
+                            <Text style={styles.categoryLabel}>⚙️ Configuración y Herramientas</Text>
+                            <View style={styles.quickAccessGrid}>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('BreakEven')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="scale-balance" size={22} color="#d4af37" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Punto Equilibrio</Text>
+                                    <Text style={styles.quickAccessSubtitle}>SIMULADOR</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('Branding')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="qrcode" size={22} color="#d4af37" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Sello QR</Text>
+                                    <Text style={styles.quickAccessSubtitle}>IMPERIAL</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Ajustes próximamente disponible.')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="cog-outline" size={22} color="#d4af37" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Ajustes</Text>
+                                    <Text style={styles.quickAccessSubtitle}>GENERALES</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Gestión de Usuarios próximamente disponible.')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#bdc3c715' }]}>
+                                        <MaterialCommunityIcons name="account-outline" size={22} color="#bdc3c7" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Usuarios</Text>
+                                    <Text style={styles.quickAccessSubtitle}>ROLES</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('CampaignPlanner')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#d4af3715' }]}>
+                                        <MaterialCommunityIcons name="calendar" size={22} color="#d4af37" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Calendario</Text>
+                                    <Text style={styles.quickAccessSubtitle}>CAMPAÑAS</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Backup en la nube activo.')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#3498db15' }]}>
+                                        <MaterialCommunityIcons name="cloud" size={22} color="#3498db" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Backup</Text>
+                                    <Text style={styles.quickAccessSubtitle}>DATOS</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
 
-                                        {/* LUGAR */}
-                                        {coachPlan.today_plan.location && (
-                                            <View style={styles.coachPlanRow}>
-                                                <MaterialCommunityIcons name="map-marker" size={16} color="#e74c3c" />
-                                                <Text style={styles.coachPlanDetail}>{coachPlan.today_plan.location}</Text>
-                                            </View>
-                                        )}
+                        {/* RENDIMIENTO EMPIRE AI */}
+                        {(userRole === 'admin' || userRole === 'leader') && (
+                            <View style={styles.aiPerformanceSection}>
+                                <Text style={styles.sectionTitle}>RENDIMIENTO EMPIRE AI</Text>
+                                <View style={styles.aiStatsGrid}>
+                                    <View style={styles.aiStatCard}>
+                                        <MaterialCommunityIcons name="robot-happy" size={24} color="#d4af37" />
+                                        <Text style={styles.aiStatValue}>{formatCurrency(aiPerformance.total_profit)}</Text>
+                                        <Text style={styles.aiStatLabel}>EMPIRE GENERADO</Text>
+                                    </View>
+                                    <View style={styles.aiStatCard}>
+                                        <MaterialCommunityIcons name="check-circle-outline" size={24} color="#2ecc71" />
+                                        <Text style={styles.aiStatValue}>{aiPerformance.successful_actions}</Text>
+                                        <Text style={styles.aiStatLabel}>PLANES EXITOSOS</Text>
+                                    </View>
+                                    <View style={styles.aiStatCard}>
+                                        <MaterialCommunityIcons name="close-circle-outline" size={24} color="#e74c3c" />
+                                        <Text style={styles.aiStatValue}>{aiPerformance.failed_actions}</Text>
+                                        <Text style={styles.aiStatLabel}>PLANES FALLIDOS</Text>
+                                    </View>
+                                    <View style={styles.aiStatCard}>
+                                        <MaterialCommunityIcons name="star-four-points-outline" size={24} color="#f1c40f" />
+                                        <Text style={styles.aiStatValue}>{aiPerformance.top_type === 'N/A' ? 'Marketing' : aiPerformance.top_type}</Text>
+                                        <Text style={styles.aiStatLabel}>ACCION RENTABLE</Text>
+                                    </View>
+                                </View>
+                            </View>
+                        )}
 
-                                        {/* TARGET */}
-                                        {coachPlan.today_plan.target && (
-                                            <View style={styles.coachPlanRow}>
-                                                <MaterialCommunityIcons name="account-group" size={16} color="#3498db" />
-                                                <Text style={[styles.coachPlanDetail, { color: '#3498db' }]}>
-                                                    {coachPlan.today_plan.target}
-                                                    {coachPlan.today_plan.expected_sales ? ` → ${coachPlan.today_plan.expected_sales}` : ''}
+                        {/* Top Products section (PieChart and Text list) */}
+                        <View style={styles.topProductsSection}>
+                            <Text style={styles.sectionTitle}>TOP 5 PRODUCTOS MÁS VENDIDOS</Text>
+                            {productData.length > 0 ? (
+                                <>
+                                    <PieChart
+                                        data={productData}
+                                        width={screenWidth - 40}
+                                        height={200}
+                                        chartConfig={{ color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})` }}
+                                        accessor="quantity"
+                                        backgroundColor="transparent"
+                                        paddingLeft="15"
+                                        absolute
+                                        style={{ alignSelf: 'center' }}
+                                    />
+                                    <View style={styles.topProductsList}>
+                                        {productData.slice(0, 5).map((p, idx) => (
+                                            <View key={idx} style={styles.topProductRow}>
+                                                <Text style={styles.topProductText} numberOfLines={1}>{idx + 1}. {p.name}</Text>
+                                                <Text style={styles.topProductValue}>
+                                                    {formatCurrency(p.revenue)}
                                                 </Text>
                                             </View>
-                                        )}
-
-                                        {/* GUIÓN */}
-                                        {coachPlan.today_plan.script && (
-                                            <View style={styles.coachScriptBox}>
-                                                <Text style={styles.coachScriptLabel}>GUIÓN EXACTO (DECILO ASÍ):</Text>
-                                                <Text style={styles.coachScriptText}>"{coachPlan.today_plan.script}"</Text>
-                                            </View>
-                                        )}
-
-                                        {/* RAZÓN */}
-                                        {coachPlan.today_plan.reason && (
-                                            <Text style={{ color: '#555', fontSize: 11, marginTop: 8, fontStyle: 'italic' }}>
-                                                💡 {coachPlan.today_plan.reason}
-                                            </Text>
-                                        )}
-                                    </View>
-                                )}
-
-                                {/* Strategy A */}
-                                {coachPlan.strategyA && (
-                                    <View style={[styles.coachStratCard, { borderLeftColor: '#f39c12' }]}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                                            <MaterialCommunityIcons name="lightning-bolt" size={18} color="#f39c12" />
-                                            <Text style={[styles.coachStratTitle, { color: '#f39c12' }]}>
-                                                {coachPlan.strategyA.name || 'PLAN A: TRACCIÓN'}
-                                            </Text>
-                                        </View>
-                                        <Text style={styles.coachStratBody}>{coachPlan.strategyA.plan}</Text>
-                                        {coachPlan.strategyA.risk_level && (
-                                            <Text style={styles.coachStratMeta}>⚠️ Riesgo: {coachPlan.strategyA.risk_level}</Text>
-                                        )}
-                                    </View>
-                                )}
-
-                                {/* Strategy B */}
-                                {coachPlan.strategyB && (
-                                    <View style={[styles.coachStratCard, { borderLeftColor: '#3498db' }]}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                                            <MaterialCommunityIcons name="trending-up" size={18} color="#3498db" />
-                                            <Text style={[styles.coachStratTitle, { color: '#3498db' }]}>
-                                                {coachPlan.strategyB.name || 'PLAN B: INVERSIÓN'}
-                                            </Text>
-                                        </View>
-                                        <Text style={styles.coachStratBody}>{coachPlan.strategyB.plan}</Text>
-                                        {(coachPlan.strategyB.suggestedInvestment || coachPlan.strategyB.estimatedMargin) && (
-                                            <View style={{ flexDirection: 'row', gap: 16, marginTop: 8 }}>
-                                                {coachPlan.strategyB.suggestedInvestment && (
-                                                    <Text style={styles.coachStratMeta}>💰 Inversión: {coachPlan.strategyB.suggestedInvestment}</Text>
-                                                )}
-                                                {coachPlan.strategyB.estimatedMargin && (
-                                                    <Text style={styles.coachStratMeta}>📈 Margen: {coachPlan.strategyB.estimatedMargin}</Text>
-                                                )}
-                                            </View>
-                                        )}
-                                    </View>
-                                )}
-
-                                {/* Missions */}
-                                {coachPlan.missions && coachPlan.missions.length > 0 && (
-                                    <View style={{ marginTop: 8 }}>
-                                        <Text style={styles.coachMissionsLabel}>⚔️ MISIONES DEL DÍA</Text>
-                                        {coachPlan.missions.slice(0, 4).map((m, idx) => (
-                                            <View key={idx} style={styles.coachMissionRow}>
-                                                <View style={[
-                                                    styles.coachMissionDot,
-                                                    (m.priority || m.expected_impact) === 'Alta' || (m.priority || m.expected_impact) === 'high'
-                                                        ? { backgroundColor: '#e74c3c' }
-                                                        : (m.priority || m.expected_impact) === 'Media' || (m.priority || m.expected_impact) === 'medium'
-                                                        ? { backgroundColor: '#f39c12' }
-                                                        : { backgroundColor: '#2ecc71' }
-                                                ]} />
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={styles.coachMissionTitle}>{m.action || m.titulo || '—'}</Text>
-                                                    <Text style={styles.coachMissionDesc}>{m.goal || m.descripcion || ''}</Text>
-                                                </View>
-                                                <View style={styles.coachMissionBadge}>
-                                                    <Text style={styles.coachMissionBadgeText}>
-                                                        {(m.type || m.tipo || 'general').toUpperCase()}
-                                                    </Text>
-                                                </View>
-                                            </View>
                                         ))}
                                     </View>
-                                )}
+                                </>
+                            ) : (
+                                <Text style={styles.noDataText}>No hay datos de productos disponibles</Text>
+                            )}
+                        </View>
 
-                                {/* Pattern insights */}
-                                {coachPlan.pattern_insights && coachPlan.pattern_insights.length > 0 && (
-                                    <View style={styles.coachPatternBox}>
-                                        <Text style={styles.coachPatternLabel}>🧬 PATRONES DETECTADOS</Text>
-                                        {coachPlan.pattern_insights.map((p, i) => (
-                                            <Text key={i} style={styles.coachPatternItem}>• {p}</Text>
-                                        ))}
-                                    </View>
-                                )}
-                            </>
-                        )}
-
-                        {coachPlan?.is_restricted && (
-                            <View style={styles.coachLoadingBox}>
-                                <MaterialCommunityIcons name="lock" size={28} color="#555" />
-                                <Text style={[styles.coachLoadingText, { color: '#555' }]}>Coach IA restringido para este rol.</Text>
+                        {/* Hardware Performance Section (DESEMPEÑO POR ALIADO) */}
+                        {deviceData.length > 0 && (
+                            <View style={{ marginTop: 20 }}>
+                                <Text style={styles.sectionTitle}>DESEMPEÑO POR ALIADO (HARDWARE)</Text>
+                                <View style={{ backgroundColor: '#0a0a0a', borderRadius: 16, padding: 15, borderWidth: 1, borderColor: '#151515' }}>
+                                    {deviceData.map((d, i) => (
+                                        <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: i === deviceData.length - 1 ? 0 : 1, borderBottomColor: '#151515' }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                <MaterialCommunityIcons name="cellphone-check" size={18} color="#d4af37" style={{ marginRight: 10 }} />
+                                                <View>
+                                                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{d.sig}</Text>
+                                                    <Text style={{ color: '#666', fontSize: 11 }}>Comisión: {formatCurrency(d.commissions)}</Text>
+                                                </View>
+                                            </View>
+                                            <View style={{ alignItems: 'flex-end' }}>
+                                                <Text style={{ color: '#d4af37', fontWeight: '900' }}>{formatCurrency(d.total)}</Text>
+                                                <Text style={{ color: '#444', fontSize: 10, fontWeight: '700' }}>VENTAS</Text>
+                                            </View>
+                                        </View>
+                                    ))}
+                                </View>
                             </View>
                         )}
-                    </View>
-                )}
 
-                {/* Charts Section */}
-                <View style={styles.chartSection}>
-                    <Text style={styles.sectionTitle}>GRÁFICOS Y ANÁLISIS</Text>
-
-                    <Text style={styles.chartTitle}>TENDENCIA DE VENTAS</Text>
-                    {salesData.data && salesData.data.length > 0 && salesData.data.some(d => d > 0) ? (
-                        <LineChart
-                            data={{ labels: salesData.labels, datasets: [{ data: salesData.data }] }}
-                            width={screenWidth - 80}
-                            height={250}
-                            chartConfig={{
-                                backgroundColor: '#1e1e1e',
-                                backgroundGradientFrom: '#1e1e1e',
-                                backgroundGradientTo: '#1e1e1e',
-                                backgroundGradientFromOpacity: 0,
-                                backgroundGradientToOpacity: 0,
-                                decimalPlaces: 0,
-                                color: (opacity = 1) => `rgba(212, 175, 55, ${opacity})`,
-                                labelColor: (opacity = 1) => `rgba(150, 150, 150, ${opacity})`,
-                                style: { borderRadius: 16 },
-                                propsForDots: { r: '4', strokeWidth: '2', stroke: '#d4af37' },
-                                fillShadowGradient: '#d4af37',
-                                fillShadowGradientOpacity: 0.4,
-                                useShadowColorFromDataset: false,
-                                paddingRight: 35,
-                                propsForBackgroundLines: { strokeDasharray: '', stroke: '#222' }
-                            }}
-                            bezier
-                            style={styles.chart}
-                        />
-                    ) : (
-                        <Text style={styles.noDataText}>No hay datos suficientes para mostrar</Text>
-                    )}
-
-                    <Text style={styles.chartTitle}>RECUPERACIÓN DE INVERSIÓN (ROI)</Text>
-                    {progressData.datasets?.length > 0 ? (
-                        <CustomProgressChart progressData={progressData} />
-                    ) : (
-                        <Text style={styles.noDataText}>No hay datos suficientes</Text>
-                    )}
-
-                    <Text style={styles.chartTitle}>TOP 5 PRODUCTOS MÁS VENDIDOS</Text>
-                    {productData.length > 0 ? (
-                        <PieChart
-                            data={productData}
-                            width={screenWidth - 100}
-                            height={220}
-                            chartConfig={{ color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})` }}
-                            accessor="quantity"
-                            backgroundColor="transparent"
-                            paddingLeft="0"
-                            absolute
-                            style={{ alignSelf: 'center' }}
-                        />
-                    ) : (
-                        <Text style={styles.noDataText}>No hay datos de productos disponibles</Text>
-                    )}
-
-                    <Text style={styles.chartTitle}>DESEMPEÑO POR ALIADO (HARDWARE)</Text>
-                    {deviceData.length > 0 ? (
-                        <View>
-                            {deviceData.map((d, i) => (
-                                <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: i === deviceData.length - 1 ? 0 : 1, borderBottomColor: '#222' }}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                        <MaterialCommunityIcons name="cellphone-check" size={18} color="#d4af37" style={{ marginRight: 10 }} />
+                        {/* EMPIRE AI COACH Section */}
+                        {(userRole === 'admin' || userRole === 'leader') && (
+                            <View style={styles.coachCardContainer}>
+                                <View style={styles.coachHeader}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                        <MaterialCommunityIcons name="brain" size={24} color="#d4af37" />
                                         <View>
-                                            <Text style={{ color: '#fff', fontWeight: 'bold' }}>{d.sig}</Text>
-                                            <Text style={{ color: '#666', fontSize: 11 }}>Comisión: {formatCurrency(d.commissions)}</Text>
+                                            <Text style={styles.coachTitle}>EMPERIAL COACH</Text>
+                                            <Text style={styles.coachSubtitle}>Análisis Estratégico en Vivo</Text>
                                         </View>
                                     </View>
-                                    <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={{ color: '#d4af37', fontWeight: '900' }}>{formatCurrency(d.total)}</Text>
-                                        <Text style={{ color: '#444', fontSize: 10, fontWeight: '700' }}>VENTAS</Text>
-                                    </View>
+                                    <TouchableOpacity
+                                        onPress={generateCoachPlan}
+                                        disabled={generatingCoach}
+                                        style={styles.coachRefreshBtn}
+                                    >
+                                        {generatingCoach
+                                            ? <ActivityIndicator size="small" color="#d4af37" />
+                                            : <MaterialCommunityIcons name="refresh" size={20} color="#d4af37" />}
+                                    </TouchableOpacity>
                                 </View>
-                            ))}
-                        </View>
-                    ) : (
-                        <Text style={styles.noDataText}>Sin datos de dispositivos</Text>
-                    )}
 
+                                {!coachPlan && !generatingCoach && (
+                                    <TouchableOpacity style={styles.coachInitBtn} onPress={generateCoachPlan}>
+                                        <View style={styles.coachInitIconBox}>
+                                            <MaterialCommunityIcons name="robot" size={32} color="#d4af37" />
+                                        </View>
+                                        <Text style={styles.coachInitText}>Inicializar Coach IA</Text>
+                                        <Text style={styles.coachInitSub}>Analiza tu negocio y genera estrategias personalizadas de marketing, stock, etc.</Text>
+                                    </TouchableOpacity>
+                                )}
 
-                </View>
+                                {generatingCoach && !coachPlan && (
+                                    <View style={styles.coachLoadingBox}>
+                                        <ActivityIndicator size="large" color="#d4af37" />
+                                        <Text style={styles.coachLoadingText}>Analizando datos del Imperio...</Text>
+                                    </View>
+                                )}
 
-                {/* Settings Section */}
-                <View style={styles.settingsSection}>
-                    <Text style={styles.sectionTitle}>AJUSTES RÁPIDOS</Text>
-                    <View style={styles.settingItem}>
-                        <Text style={styles.settingLabel}>Tasa de Comisión (%)</Text>
-                        <TextInput
-                            style={styles.settingInput}
-                            value={commissionRate}
-                            onChangeText={setCommissionRate}
-                            keyboardType="numeric"
-                            placeholder="Ej: 10"
-                            placeholderTextColor="#888"
-                        />
-                    </View>
-                    <View style={styles.settingItem}>
-                        <Text style={styles.settingLabel}>Google API Key</Text>
-                        <TextInput
-                            style={styles.settingInput}
-                            value={googleKey}
-                            onChangeText={setGoogleKey}
-                            placeholder="Ingresa tu clave de API de Google"
-                            placeholderTextColor="#888"
-                        />
-                    </View>
-                    <TouchableOpacity style={styles.saveButton} onPress={async () => {
-                        await supabase.from('settings').upsert({ key: 'commission_rate', value: (parseFloat(commissionRate) / 100).toString() }, { onConflict: 'key' });
-                        await supabase.from('settings').upsert({ key: 'google_api_key', value: googleKey }, { onConflict: 'key' });
-                        Alert.alert('Guardado', 'Configuración actualizada correctamente.');
-                        fetchAllData(true); // Refresh settings
-                    }}>
-                        <Text style={styles.saveButtonText}>Guardar Ajustes</Text>
-                    </TouchableOpacity>
-                </View>
+                                {coachPlan && !coachPlan.is_restricted && (
+                                    <>
+                                        {/* Urgency banner */}
+                                        <View style={[
+                                            styles.coachUrgencyBanner,
+                                            (coachPlan.urgency || 'Estable') === 'Crítico' ? { borderColor: '#e74c3c', backgroundColor: '#e74c3c18' } :
+                                            (coachPlan.urgency || 'Estable') === 'Atención' ? { borderColor: '#f39c12', backgroundColor: '#f39c1218' } :
+                                            { borderColor: '#2ecc71', backgroundColor: '#2ecc7118' }
+                                        ]}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <View style={[
+                                                    styles.coachUrgencyDot,
+                                                    (coachPlan.urgency || 'Estable') === 'Crítico' ? { backgroundColor: '#e74c3c' } :
+                                                    (coachPlan.urgency || 'Estable') === 'Atención' ? { backgroundColor: '#f39c12' } :
+                                                    { backgroundColor: '#2ecc71' }
+                                                ]} />
+                                                <Text style={[
+                                                    styles.coachUrgencyLabel,
+                                                    (coachPlan.urgency || 'Estable') === 'Crítico' ? { color: '#e74c3c' } :
+                                                    (coachPlan.urgency || 'Estable') === 'Atención' ? { color: '#f39c12' } :
+                                                    { color: '#2ecc71' }
+                                                ]}>{String(coachPlan.urgency || 'ESTABLE').toUpperCase()}</Text>
+                                            </View>
+                                            <Text style={styles.coachUrgencyReason}>{coachPlan.urgencyReason || 'El Imperio avanza según lo esperado.'}</Text>
+                                        </View>
 
-                {/* Closing Summary */}
-                <View style={styles.closingSummarySection}>
-                    <Text style={styles.sectionTitle}>RESUMEN DE CIERRE</Text>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Ventas Totales:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalSales)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Margen de Productos:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalProfit)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Gastos Operativos:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalExpenses)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Comisiones:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(stats.totalCommissions)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Deudas Pagadas:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(stats.debtPayments)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Caja Fuerte (Liquidez):</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(stats.netCaja)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Rentabilidad Neta (ROI):</Text>
-                        <Text style={[styles.summaryValue, { color: getProfitColor(stats.netProfit) }]}>{formatCurrency(stats.netProfit)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Deuda Total a Proveedores:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(totalDebt)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Próximo Pago Mensual:</Text>
-                        <Text style={styles.summaryValue}>{formatCurrency(nextMonthlyPayment)}</Text>
-                    </View>
-                    <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>División de Ganancias (Imperio/Vendedores):</Text>
-                        <Text style={styles.summaryValue}>{profitSplit.imperio}% / {profitSplit.vendedores}%</Text>
-                    </View>
-                    <TouchableOpacity
-                        style={styles.whatsappButton}
-                        onPress={() => handleWhatsAppPress(
-                            `*Resumen de Cierre - ${currentDate.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }).toUpperCase()}*
+                                        {/* Prediction */}
+                                        {coachPlan.prediction && (
+                                            <View style={styles.coachPredictionBox}>
+                                                <MaterialCommunityIcons name="crystal-ball" size={18} color="#9b59b6" />
+                                                <Text style={styles.coachPredictionText}>{coachPlan.prediction}</Text>
+                                            </View>
+                                        )}
 
-` +
-                            `*Ventas Totales:* ${formatCurrency(stats.totalSales)}
-` +
-                            `*Margen de Productos:* ${formatCurrency(stats.totalProfit)}
-` +
-                            `*Gastos Operativos:* ${formatCurrency(stats.totalExpenses)}
-` +
-                            `*Comisiones:* ${formatCurrency(stats.totalCommissions)}
-` +
-                            `*Deudas Pagadas:* ${formatCurrency(stats.debtPayments)}
-` +
-                            `*Caja Fuerte (Liquidez):* ${formatCurrency(stats.netCaja)}
-` +
-                            `*Rentabilidad Neta (ROI):* ${formatCurrency(stats.netProfit)}
-` +
-                            `*Deuda Total a Proveedores:* ${formatCurrency(totalDebt)}
-` +
-                            `*Próximo Pago Mensual:* ${formatCurrency(nextMonthlyPayment)}
-` +
-                            `*División de Ganancias:* Imperio ${profitSplit.imperio}% / Vendedores ${profitSplit.vendedores}%
+                                        {/* Today Plan */}
+                                        {coachPlan.today_plan && (
+                                            <View style={[
+                                                styles.coachPlanCard,
+                                                completedTasks.includes(coachPlan.today_plan.id) && { borderColor: '#2ecc71', backgroundColor: '#051a0b' }
+                                            ]}>
+                                                <Text style={[
+                                                    styles.coachPlanCardTitle,
+                                                    completedTasks.includes(coachPlan.today_plan.id) && { color: '#2ecc71', borderBottomColor: '#2ecc7130' }
+                                                ]}>🔥 MISIÓN CERO: PLAN DEL DÍA</Text>
 
-` +
-                            `_Generado por EmpireOS_`
+                                                <View style={styles.coachPlanRow}>
+                                                    <MaterialCommunityIcons name="star-shooting" size={16} color="#d4af37" />
+                                                    <Text style={styles.coachPlanPrimary}>{coachPlan.today_plan.product}</Text>
+                                                </View>
+
+                                                {coachPlan.today_plan.schedule && (
+                                                    <View style={styles.coachScheduleBox}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                                            <MaterialCommunityIcons name="clock-time-four" size={14} color="#f39c12" />
+                                                            <Text style={styles.coachScheduleLabel}>HORARIO</Text>
+                                                        </View>
+                                                        <Text style={styles.coachScheduleText}>{coachPlan.today_plan.schedule}</Text>
+                                                    </View>
+                                                )}
+
+                                                {coachPlan.today_plan.location && (
+                                                    <View style={styles.coachPlanRow}>
+                                                        <MaterialCommunityIcons name="map-marker" size={16} color="#e74c3c" />
+                                                        <Text style={styles.coachPlanDetail}>{coachPlan.today_plan.location}</Text>
+                                                    </View>
+                                                )}
+
+                                                {coachPlan.today_plan.target && (
+                                                    <View style={styles.coachPlanRow}>
+                                                        <MaterialCommunityIcons name="account-group" size={16} color="#3498db" />
+                                                        <Text style={[styles.coachPlanDetail, { color: '#3498db' }]}>
+                                                            {coachPlan.today_plan.target}
+                                                            {coachPlan.today_plan.expected_sales ? ` → ${coachPlan.today_plan.expected_sales}` : ''}
+                                                        </Text>
+                                                    </View>
+                                                )}
+
+                                                {coachPlan.today_plan.script && (
+                                                    <View style={styles.coachScriptBox}>
+                                                        <Text style={styles.coachScriptLabel}>GUIÓN EXACTO (DECILO ASÍ):</Text>
+                                                        <Text style={styles.coachScriptText}>"{coachPlan.today_plan.script}"</Text>
+                                                    </View>
+                                                )}
+
+                                                {coachPlan.today_plan.reason && (
+                                                    <Text style={{ color: '#555', fontSize: 11, marginTop: 8, fontStyle: 'italic' }}>
+                                                        💡 {coachPlan.today_plan.reason}
+                                                    </Text>
+                                                )}
+
+                                                {coachPlan.today_plan.id && (
+                                                    <TouchableOpacity
+                                                        style={[
+                                                            styles.adminCompleteTaskBtn,
+                                                            completedTasks.includes(coachPlan.today_plan.id) && styles.adminCompletedTaskBtnActive
+                                                        ]}
+                                                        onPress={() => handleToggleTask(coachPlan.today_plan.id, coachPlan.today_plan.product)}
+                                                        disabled={completedTasks.includes(coachPlan.today_plan.id)}
+                                                    >
+                                                        <MaterialCommunityIcons 
+                                                            name={completedTasks.includes(coachPlan.today_plan.id) ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"} 
+                                                            size={16} 
+                                                            color={completedTasks.includes(coachPlan.today_plan.id) ? "#2ecc71" : "#888"} 
+                                                        />
+                                                        <Text style={[
+                                                            styles.adminCompleteTaskBtnText,
+                                                            completedTasks.includes(coachPlan.today_plan.id) && { color: '#2ecc71' }
+                                                        ]}>
+                                                            {completedTasks.includes(coachPlan.today_plan.id) ? "PLAN COMPLETADO" : "MARCAR COMO COMPLETADO"}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                )}
+                                            </View>
+                                        )}
+
+                                        {coachPlan.strategyA && (
+                                            <View style={[styles.coachStratCard, { borderLeftColor: '#f39c12' }]}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                                    <MaterialCommunityIcons name="lightning-bolt" size={18} color="#f39c12" />
+                                                    <Text style={[styles.coachStratTitle, { color: '#f39c12' }]}>
+                                                        {coachPlan.strategyA.name || 'PLAN A: TRACCIÓN'}
+                                                    </Text>
+                                                </View>
+                                                <Text style={styles.coachStratBody}>{coachPlan.strategyA.plan}</Text>
+                                                {coachPlan.strategyA.risk_level && (
+                                                    <Text style={styles.coachStratMeta}>⚠️ Riesgo: {coachPlan.strategyA.risk_level}</Text>
+                                                )}
+                                            </View>
+                                        )}
+
+                                        {coachPlan.strategyB && (
+                                            <View style={[styles.coachStratCard, { borderLeftColor: '#3498db' }]}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                                    <MaterialCommunityIcons name="trending-up" size={18} color="#3498db" />
+                                                    <Text style={[styles.coachStratTitle, { color: '#3498db' }]}>
+                                                        {coachPlan.strategyB.name || 'PLAN B: INVERSIÓN'}
+                                                    </Text>
+                                                </View>
+                                                <Text style={styles.coachStratBody}>{coachPlan.strategyB.plan}</Text>
+                                                {(coachPlan.strategyB.suggestedInvestment || coachPlan.strategyB.estimatedMargin) && (
+                                                    <View style={{ flexDirection: 'row', gap: 16, marginTop: 8 }}>
+                                                        {coachPlan.strategyB.suggestedInvestment && (
+                                                            <Text style={styles.coachStratMeta}>💰 Inversión: {coachPlan.strategyB.suggestedInvestment}</Text>
+                                                        )}
+                                                        {coachPlan.strategyB.estimatedMargin && (
+                                                            <Text style={styles.coachStratMeta}>📈 Margen: {coachPlan.strategyB.estimatedMargin}</Text>
+                                                        )}
+                                                    </View>
+                                                )}
+                                            </View>
+                                        )}
+
+                                        {coachPlan.missions && coachPlan.missions.length > 0 && (
+                                            <View style={{ marginTop: 8 }}>
+                                                <Text style={styles.coachMissionsLabel}>⚔️ MISIONES DEL DÍA</Text>
+                                                {coachPlan.missions.slice(0, 4).map((m, idx) => (
+                                                    <View key={idx} style={[
+                                                        styles.coachMissionRow,
+                                                        completedTasks.includes(m.id) && { borderColor: '#2ecc7130', backgroundColor: '#020d05' }
+                                                    ]}>
+                                                        <View style={[
+                                                            styles.coachMissionDot,
+                                                            (m.priority || m.expected_impact) === 'Alta' || (m.priority || m.expected_impact) === 'high'
+                                                                ? { backgroundColor: '#e74c3c' }
+                                                                : (m.priority || m.expected_impact) === 'Media' || (m.priority || m.expected_impact) === 'medium'
+                                                                ? { backgroundColor: '#f39c12' }
+                                                                : { backgroundColor: '#2ecc71' }
+                                                        ]} />
+                                                        <View style={{ flex: 1 }}>
+                                                            <Text style={[
+                                                                styles.coachMissionTitle,
+                                                                completedTasks.includes(m.id) && { textDecorationLine: 'line-through', color: '#666' }
+                                                            ]}>{m.action || m.titulo || '—'}</Text>
+                                                            <Text style={styles.coachMissionDesc}>{m.goal || m.descripcion || ''}</Text>
+                                                        </View>
+                                                        <View style={styles.coachMissionBadge}>
+                                                            <Text style={styles.coachMissionBadgeText}>
+                                                                {(m.type || m.tipo || 'general').toUpperCase()}
+                                                            </Text>
+                                                        </View>
+                                                        {m.id && (
+                                                            <TouchableOpacity 
+                                                                style={{ paddingLeft: 10, justifyContent: 'center' }}
+                                                                onPress={() => handleToggleTask(m.id, m.action || m.titulo)}
+                                                                disabled={completedTasks.includes(m.id)}
+                                                            >
+                                                                <MaterialCommunityIcons 
+                                                                    name={completedTasks.includes(m.id) ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"} 
+                                                                    size={18} 
+                                                                    color={completedTasks.includes(m.id) ? "#2ecc71" : "#444"} 
+                                                                />
+                                                            </TouchableOpacity>
+                                                        )}
+                                                    </View>
+                                                ))}
+                                            </View>
+                                        )}
+
+                                        {coachPlan.pattern_insights && coachPlan.pattern_insights.length > 0 && (
+                                            <View style={styles.coachPatternBox}>
+                                                <Text style={styles.coachPatternLabel}>🧬 PATRONES DETECTADOS</Text>
+                                                {coachPlan.pattern_insights.map((p, i) => (
+                                                    <Text key={i} style={styles.coachPatternItem}>• {p}</Text>
+                                                ))}
+                                            </View>
+                                        )}
+                                    </>
+                                )}
+
+                                {coachPlan?.is_restricted && (
+                                    <View style={styles.coachLoadingBox}>
+                                        <MaterialCommunityIcons name="lock" size={28} color="#555" />
+                                        <Text style={[styles.coachLoadingText, { color: '#555' }]}>Coach IA restringido para este rol.</Text>
+                                    </View>
+                                )}
+                            </View>
                         )}
-                    >
-                        <MaterialCommunityIcons name="whatsapp" size={24} color="white" />
-                        <Text style={styles.whatsappButtonText}>Compartir por WhatsApp</Text>
-                    </TouchableOpacity>
-                </View>
-            </>
-        )}
+
+                        {/* Adjusts and closing summary */}
+                        <View style={styles.settingsSection}>
+                            <Text style={styles.sectionTitle}>AJUSTES RÁPIDOS</Text>
+                            <View style={styles.settingItem}>
+                                <Text style={styles.settingLabel}>Tasa de Comisión (%)</Text>
+                                <TextInput
+                                    style={styles.settingInput}
+                                    value={commissionRate}
+                                    onChangeText={setCommissionRate}
+                                    keyboardType="numeric"
+                                    placeholder="Ej: 10"
+                                    placeholderTextColor="#888"
+                                />
+                            </View>
+                            <View style={styles.settingItem}>
+                                <Text style={styles.settingLabel}>Google API Key</Text>
+                                <TextInput
+                                    style={styles.settingInput}
+                                    value={googleKey}
+                                    onChangeText={setGoogleKey}
+                                    placeholder="Ingresa tu clave de API de Google"
+                                    placeholderTextColor="#888"
+                                />
+                            </View>
+                            <TouchableOpacity style={styles.saveButton} onPress={async () => {
+                                await supabase.from('settings').upsert({ key: 'commission_rate', value: (parseFloat(commissionRate) / 100).toString() }, { onConflict: 'key' });
+                                await supabase.from('settings').upsert({ key: 'google_api_key', value: googleKey }, { onConflict: 'key' });
+                                Alert.alert('Guardado', 'Configuración actualizada correctamente.');
+                                fetchAllData(true); // Refresh settings
+                            }}>
+                                <Text style={styles.saveButtonText}>GUARDAR AJUSTES</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Closing Summary */}
+                        <View style={styles.closingSummarySection}>
+                            <Text style={styles.sectionTitle}>RESUMEN DE CIERRE</Text>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Ventas Totales:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(stats.totalSales)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Margen de Productos:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(stats.totalProfit)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Gastos Operativos:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(stats.totalExpenses)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Comisiones:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(stats.totalCommissions)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Deudas Pagadas:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(stats.debtPayments)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Caja Fuerte (Liquidez):</Text>
+                                <Text style={[styles.summaryValue, { color: '#3498db' }]}>{formatCurrency(stats.netCaja)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Rentabilidad Neta (ROI):</Text>
+                                <Text style={[styles.summaryValue, { color: getProfitColor(stats.netProfit) }]}>{formatCurrency(stats.netProfit)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Deuda Total a Proveedores:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(totalDebt)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Próximo Pago Mensual:</Text>
+                                <Text style={styles.summaryValue}>{formatCurrency(nextMonthlyPayment)}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>División de Ganancias (Imperio/Vendedores):</Text>
+                                <Text style={styles.summaryValue}>{profitSplit.imperio}% / {profitSplit.vendedores}%</Text>
+                            </View>
+                            <TouchableOpacity
+                                style={styles.whatsappButton}
+                                onPress={() => handleWhatsAppPress(
+                                    `*Resumen de Cierre - ${currentDate.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }).toUpperCase()}*
+
+` +
+                                    `*Ventas Totales:* ${formatCurrency(stats.totalSales)}
+` +
+                                    `*Margen de Productos:* ${formatCurrency(stats.totalProfit)}
+` +
+                                    `*Gastos Operativos:* ${formatCurrency(stats.totalExpenses)}
+` +
+                                    `*Comisiones:* ${formatCurrency(stats.totalCommissions)}
+` +
+                                    `*Deudas Pagadas:* ${formatCurrency(stats.debtPayments)}
+` +
+                                    `*Caja Fuerte (Liquidez):* ${formatCurrency(stats.netCaja)}
+` +
+                                    `*Rentabilidad Neta (ROI):* ${formatCurrency(stats.netProfit)}
+` +
+                                    `*Deuda Total a Proveedores:* ${formatCurrency(totalDebt)}
+` +
+                                    `*Próximo Pago Mensual:* ${formatCurrency(nextMonthlyPayment)}
+` +
+                                    `*División de Ganancias:* Imperio ${profitSplit.imperio}% / Vendedores ${profitSplit.vendedores}%
+
+` +
+                                    `_Generado por EmpireOS_`
+                                )}
+                            >
+                                <MaterialCommunityIcons name="whatsapp" size={24} color="white" />
+                                <Text style={styles.whatsappButtonText}>Compartir por WhatsApp</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </>
+                )}
             </ScrollView>
         </SafeAreaView>
     );
@@ -1329,27 +1483,67 @@ const styles = StyleSheet.create({
         backgroundColor: '#000000',
     },
     headerContainer: {
-        padding: 20,
+        paddingHorizontal: 20,
         paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight + 10 : 20,
-        borderBottomLeftRadius: 20,
-        borderBottomRightRadius: 20,
-        elevation: 5,
+        paddingBottom: 15,
+        backgroundColor: '#000000',
+        borderBottomWidth: 1,
+        borderBottomColor: '#111111',
     },
-    headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    headerContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    headerLogoContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    headerLogoCircle: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#050505',
+        borderWidth: 1.5,
+        borderColor: '#d4af37',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
     headerTitle: {
         color: '#d4af37',
         fontSize: 18,
         fontWeight: '900',
         letterSpacing: 2,
     },
-    backBtn: { padding: 5 },
+    headerRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    headerBellContainer: {
+        position: 'relative',
+        padding: 4,
+    },
+    headerBellDot: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#2ecc71',
+        borderWidth: 1,
+        borderColor: '#000',
+    },
     filterContainer: {
         flexDirection: 'row',
         justifyContent: 'space-around',
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderRadius: 10,
+        backgroundColor: '#050505',
+        borderRadius: 12,
         padding: 5,
-        marginBottom: 15,
+        marginTop: 15,
+        borderWidth: 1,
+        borderColor: '#151515',
     },
     filterBtn: {
         paddingVertical: 8,
@@ -1364,31 +1558,74 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
     },
     filterTextActive: {
-        color: '#1a1a1a',
+        color: '#000000',
     },
-    monthNavContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    monthSelector: { flexDirection: 'row', alignItems: 'center' },
+    monthNavContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginTop: 12,
+    },
+    monthSelector: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
     navArrow: {
         padding: 5,
     },
     monthLabel: {
-        color: '#fff',
-        fontSize: 18,
-        fontWeight: 'bold',
+        color: '#d4af37',
+        fontSize: 15,
+        fontWeight: '900',
         marginHorizontal: 10,
     },
-    generalToggle: { flexDirection: 'row', alignItems: 'center' },
+    generalToggle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
     generalToggleText: {
         color: '#d4af37',
         marginLeft: 5,
-        fontSize: 14,
+        fontSize: 12,
+        fontWeight: '700',
     },
     scrollView: {
         flex: 1,
     },
     content: {
-        padding: 20,
-        paddingBottom: 100, // Espacio extra para el scroll
+        padding: 15,
+        paddingBottom: 100,
+    },
+    syncQueueBanner: {
+        marginBottom: 15,
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 15,
+        borderWidth: 1,
+        borderColor: '#d4af3730',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 15,
+    },
+    syncQueueIconBox: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: '#d4af3715',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#d4af3720',
+    },
+    syncQueueTitle: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    syncQueueSubtitle: {
+        color: '#888',
+        fontSize: 11,
+        marginTop: 2,
     },
     statsGrid: {
         flexDirection: 'row',
@@ -1396,194 +1633,141 @@ const styles = StyleSheet.create({
         marginBottom: 10,
     },
     statCard: {
-        backgroundColor: '#2a2a2a',
-        borderRadius: 15,
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
         padding: 15,
         width: '48%',
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: '#333',
+        borderColor: '#151515',
+    },
+    statIconCircle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 8,
     },
     statValue: {
-        fontSize: 22,
+        fontSize: 20,
         fontWeight: 'bold',
         color: '#fff',
-        marginTop: 5,
     },
     statLabel: {
-        fontSize: 12,
-        color: '#ccc',
-        marginTop: 3,
-        textAlign: 'center',
-    },
-    quickAccessSection: {
-        marginTop: 20,
-    },
-    sectionTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#d4af37',
-        marginBottom: 15,
-        textAlign: 'center',
-    },
-    categoryLabel: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#fff',
-        marginTop: 15,
-        marginBottom: 10,
-    },
-    quickAccessGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
-    },
-    quickAccessCard: {
-        backgroundColor: '#2a2a2a',
-        borderRadius: 15,
-        padding: 15,
-        width: '31%', // Aproximadamente 1/3 del ancho con espacio
-        alignItems: 'center',
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#333',
-    },
-    quickAccessTitle: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#fff',
-        marginTop: 5,
-        textAlign: 'center',
-    },
-    quickAccessSubtitle: {
         fontSize: 10,
-        color: '#ccc',
+        color: '#666',
+        fontWeight: '700',
+        letterSpacing: 1,
+        marginTop: 4,
         textAlign: 'center',
     },
-    aiPerformanceSection: {
-        marginTop: 20,
-    },
-    aiStatsGrid: {
+    pendingPlanesCard: {
+        marginBottom: 15,
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 18,
+        borderWidth: 1.5,
+        borderColor: '#e67e2240',
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 15,
     },
-    aiStatCard: {
-        backgroundColor: '#2a2a2a',
-        borderRadius: 15,
-        padding: 10,
+    pendingPlanesIconBox: {
+        width: 45,
+        height: 45,
+        borderRadius: 12,
+        backgroundColor: '#e67e2215',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#e67e2220',
+    },
+    pendingPlanesHeader: {
+        color: '#e67e22',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    pendingPlanesAmount: {
+        color: '#fff',
+        fontSize: 22,
+        fontWeight: '900',
+        marginTop: 4,
+    },
+    pendingPlanesFooter: {
+        color: '#666',
+        fontSize: 9,
+        fontWeight: '700',
+        marginTop: 2,
+    },
+    crmCard: {
+        marginBottom: 15,
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 18,
+        borderWidth: 1,
+        borderColor: '#d4af3730',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 15,
+    },
+    crmIconBox: {
+        width: 45,
+        height: 45,
+        borderRadius: 12,
+        backgroundColor: '#d4af3715',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#d4af3720',
+    },
+    crmHeader: {
+        color: '#d4af37',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    crmTitle: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: '900',
+        marginTop: 2,
+    },
+    crmFooter: {
+        color: '#666',
+        fontSize: 10,
+        marginTop: 2,
+    },
+    ratioCard: {
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 15,
         width: '48%',
         alignItems: 'center',
         justifyContent: 'center',
-        marginBottom: 10,
         borderWidth: 1,
-        borderColor: '#333',
+        borderColor: '#151515',
     },
-    aiStatValue: {
+    ratioIconBox: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    ratioValue: {
         fontSize: 18,
         fontWeight: 'bold',
-        color: '#fff',
-        marginTop: 5,
     },
-    aiStatLabel: {
-        fontSize: 10,
-        color: '#ccc',
-        marginTop: 3,
+    ratioLabel: {
+        fontSize: 11,
+        color: '#666',
+        marginTop: 4,
         textAlign: 'center',
     },
-    chartSection: {
-        marginTop: 20,
-    },
-    chartTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#fff',
-        marginBottom: 10,
-        marginTop: 15,
-        textAlign: 'center',
-    },
-    chart: {
-        marginVertical: 8,
-        borderRadius: 16,
-    },
-    noDataText: {
-        color: '#ccc',
-        textAlign: 'center',
-        marginTop: 20,
-        fontSize: 14,
-    },
-    settingsSection: {
-        marginTop: 20,
-    },
-    settingItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    settingLabel: {
-        color: '#fff',
-        fontSize: 16,
-    },
-    settingInput: {
-        backgroundColor: '#333',
-        color: '#fff',
-        borderRadius: 8,
-        padding: 8,
-        width: '50%',
-        textAlign: 'right',
-    },
-    saveButton: {
-        backgroundColor: '#d4af37',
-        padding: 15,
-        borderRadius: 10,
-        alignItems: 'center',
-        marginTop: 10,
-    },
-    saveButtonText: {
-        color: '#1a1a1a',
-        fontWeight: 'bold',
-        fontSize: 16,
-    },
-    closingSummarySection: {
-        marginTop: 20,
-        backgroundColor: '#2a2a2a',
-        borderRadius: 15,
-        padding: 20,
-        marginBottom: 20,
-    },
-    summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    summaryLabel: {
-        color: '#ccc',
-        fontSize: 15,
-    },
-    summaryValue: {
-        color: '#fff',
-        fontSize: 15,
-        fontWeight: 'bold',
-    },
-    whatsappButton: {
-        flexDirection: 'row',
-        backgroundColor: '#25D366',
-        padding: 15,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: 20,
-    },
-    whatsappButtonText: {
-        color: 'white',
-        fontWeight: 'bold',
-        marginLeft: 10,
-        fontSize: 16,
-    },
-    // Estilos reutilizables
-    rowSpaceBetweenCenter: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    rowAlignCenter: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    // ── Alert banner styles ───────────────────────────────────────────
     alertBanner: {
         padding: 12,
         borderRadius: 10,
@@ -1606,14 +1790,160 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         lineHeight: 18,
     },
-
-    // ── Empire AI Coach Styles ──────────────────────────────────────────
-    coachSection: {
+    quickAccessSection: {
+        marginTop: 10,
+    },
+    sectionTitle: {
+        fontSize: 16,
+        fontWeight: '900',
+        color: '#d4af37',
         marginTop: 20,
-        backgroundColor: '#0d0d0d',
+        marginBottom: 15,
+        textAlign: 'center',
+        letterSpacing: 1,
+    },
+    categoryLabel: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginTop: 15,
+        marginBottom: 10,
+        paddingLeft: 2,
+    },
+    quickAccessGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-start',
+        gap: 8,
+    },
+    quickAccessCard: {
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        paddingVertical: 12,
+        paddingHorizontal: 8,
+        width: '31.3%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#151515',
+    },
+    quickAccessIconBox: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    quickAccessTitle: {
+        fontSize: 11,
+        fontWeight: 'bold',
+        color: '#fff',
+        textAlign: 'center',
+    },
+    quickAccessSubtitle: {
+        fontSize: 8,
+        color: '#666',
+        fontWeight: '600',
+        letterSpacing: 0.5,
+        marginTop: 1,
+        textAlign: 'center',
+    },
+    aiPerformanceSection: {
+        marginTop: 20,
+    },
+    aiStatsGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    aiStatCard: {
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 12,
+        width: '48%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: '#151515',
+    },
+    aiStatValue: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#fff',
+        marginTop: 6,
+    },
+    aiStatLabel: {
+        fontSize: 9,
+        color: '#666',
+        fontWeight: '700',
+        marginTop: 4,
+        textAlign: 'center',
+    },
+    chartSection: {
+        marginTop: 15,
+    },
+    chartTitle: {
+        fontSize: 13,
+        fontWeight: '900',
+        color: '#fff',
+        marginTop: 15,
+        marginBottom: 8,
+        textAlign: 'center',
+        letterSpacing: 0.5,
+    },
+    chart: {
+        marginVertical: 8,
+        borderRadius: 16,
+        alignSelf: 'center',
+    },
+    noDataText: {
+        color: '#555',
+        textAlign: 'center',
+        marginVertical: 15,
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    topProductsSection: {
+        marginTop: 20,
+    },
+    topProductsList: {
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 15,
+        marginTop: 10,
+        borderWidth: 1,
+        borderColor: '#151515',
+    },
+    topProductRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#151515',
+    },
+    topProductText: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '600',
+        flex: 1,
+    },
+    topProductValue: {
+        color: '#2ecc71',
+        fontWeight: 'bold',
+        fontSize: 13,
+        marginLeft: 15,
+    },
+    coachCardContainer: {
+        marginTop: 20,
+        backgroundColor: '#0a0a0a',
         borderRadius: 16,
         borderWidth: 1,
-        borderColor: '#d4af3740',
+        borderColor: '#d4af3730',
         padding: 18,
         marginBottom: 4,
     },
@@ -1630,21 +1960,32 @@ const styles = StyleSheet.create({
         letterSpacing: 1.5,
     },
     coachSubtitle: {
-        color: '#555',
-        fontSize: 11,
+        color: '#666',
+        fontSize: 10,
         marginTop: 2,
     },
     coachRefreshBtn: {
         padding: 6,
-        backgroundColor: '#d4af3718',
+        backgroundColor: '#d4af3710',
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#d4af3740',
+        borderColor: '#d4af3720',
     },
     coachInitBtn: {
         alignItems: 'center',
         paddingVertical: 24,
         gap: 8,
+    },
+    coachInitIconBox: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        backgroundColor: '#d4af3715',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#d4af3730',
+        marginBottom: 8,
     },
     coachInitText: {
         color: '#d4af37',
@@ -1653,8 +1994,9 @@ const styles = StyleSheet.create({
     },
     coachInitSub: {
         color: '#555',
-        fontSize: 12,
+        fontSize: 11,
         textAlign: 'center',
+        lineHeight: 16,
     },
     coachLoadingBox: {
         alignItems: 'center',
@@ -1871,5 +2213,105 @@ const styles = StyleSheet.create({
         color: '#88ceb9',
         fontSize: 12,
         lineHeight: 20,
+    },
+    adminCompleteTaskBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        padding: 8,
+        backgroundColor: '#222',
+        borderRadius: 8,
+        marginTop: 12,
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    adminCompletedTaskBtnActive: {
+        backgroundColor: '#0a2e16',
+        borderColor: '#2ecc7150'
+    },
+    adminCompleteTaskBtnText: {
+        color: '#aaa',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 1
+    },
+    settingsSection: {
+        marginTop: 20,
+    },
+    settingItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    settingLabel: {
+        color: '#fff',
+        fontSize: 14,
+    },
+    settingInput: {
+        backgroundColor: '#0a0a0a',
+        color: '#fff',
+        borderRadius: 8,
+        padding: 10,
+        width: '50%',
+        textAlign: 'right',
+        borderWidth: 1,
+        borderColor: '#151515',
+    },
+    saveButton: {
+        backgroundColor: '#d4af37',
+        padding: 15,
+        borderRadius: 10,
+        alignItems: 'center',
+        marginTop: 10,
+    },
+    saveButtonText: {
+        color: '#000000',
+        fontWeight: '900',
+        fontSize: 14,
+        letterSpacing: 1,
+    },
+    closingSummarySection: {
+        marginTop: 20,
+        backgroundColor: '#0a0a0a',
+        borderRadius: 16,
+        padding: 20,
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: '#151515',
+    },
+    summaryRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#151515',
+    },
+    summaryLabel: {
+        color: '#888',
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    summaryValue: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: 'bold',
+    },
+    whatsappButton: {
+        flexDirection: 'row',
+        backgroundColor: '#25D366',
+        padding: 15,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 20,
+    },
+    whatsappButtonText: {
+        color: 'white',
+        fontWeight: 'bold',
+        marginLeft: 10,
+        fontSize: 14,
     },
 });

@@ -69,7 +69,7 @@ export default function ReportsScreen() {
 
             if (!isFinalized) return; 
 
-            const date = new Date(sale.created_at);
+            const date = new Date(sale.paid_at || sale.created_at);
             const dateKey = date.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
             
             // Get local date string for the sale

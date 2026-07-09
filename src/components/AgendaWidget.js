@@ -460,7 +460,7 @@ const styles = StyleSheet.create({
     // Floating Button Badge
     floatingBadge: {
         position: 'absolute',
-        right: 15,
+        alignSelf: 'center',
         width: 44,
         height: 44,
         borderRadius: 22,

@@ -9,6 +9,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useAuthStore } from '../store/useAuthStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { OtaUpdateService } from '../services/OtaUpdateService';
 
 const fmt = (n) => `$${Math.abs(n || 0).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`;
 
@@ -47,6 +48,10 @@ export default function ProfileScreen({ navigation }) {
                 }
             ]
         );
+    };
+
+    const handleCheckForUpdates = () => {
+        OtaUpdateService.checkAndPromptManual();
     };
 
     return (
@@ -137,6 +142,7 @@ export default function ProfileScreen({ navigation }) {
                     <MenuItem icon="headphones" label="Soporte y Ayuda" />
                     <MenuItem icon="bell-ring" label="Notificaciones Empire" />
                     <MenuItem icon="database-sync" label="Sincronización Cloud" />
+                    <MenuItem icon="cellphone-arrow-down" label="Buscar Actualizaciones" onPress={handleCheckForUpdates} />
                     <MenuItem 
                         icon="logout" 
                         label="Cerrar Sesión" 

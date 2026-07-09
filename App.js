@@ -16,6 +16,7 @@ import { useReminderStore } from './src/store/useReminderStore';
 import AgendaWidget from './src/components/AgendaWidget';
 
 import { checkUalaListenerPermission } from './src/services/UalaNotificationListener';
+import { OtaUpdateService } from './src/services/OtaUpdateService';
 
 export default function App() {
   React.useEffect(() => {
@@ -31,6 +32,9 @@ export default function App() {
         await useReminderStore.getState().initStore();
         console.log('🚀 Empire App Initialized Successfully');
         await checkUalaListenerPermission();
+        
+        // Check for updates Over-the-Air
+        await OtaUpdateService.runAutoCheck();
       } catch (err) {
         console.error('Initialization failed:', err);
       }

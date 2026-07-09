@@ -58,7 +58,7 @@ export default function AssetsScreen({ navigation }) {
 
     const pickImage = async () => {
         const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.All,
+            mediaTypes: [ImagePicker.MediaType.IMAGE, ImagePicker.MediaType.VIDEO],
             allowsEditing: true,
             quality: 0.7,
             base64: true,

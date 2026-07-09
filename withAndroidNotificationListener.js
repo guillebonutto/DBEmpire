@@ -7,7 +7,7 @@ function withAndroidNotificationListener(config) {
 
     const service = {
       $: {
-        'android:name': 'com.jhagoba.RNAndroidNotificationListener.RNAndroidNotificationListener',
+        'android:name': 'com.lesimoes.androidnotificationlistener.RNAndroidNotificationListener',
         'android:label': '@string/app_name',
         'android:permission': 'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE',
         'android:exported': 'true'
@@ -29,7 +29,7 @@ function withAndroidNotificationListener(config) {
       app.service = [];
     }
 
-    const serviceExists = app.service.some(s => s.$ && s.$['android:name'] === 'com.jhagoba.RNAndroidNotificationListener.RNAndroidNotificationListener');
+    const serviceExists = app.service.some(s => s.$ && s.$['android:name'] === 'com.lesimoes.androidnotificationlistener.RNAndroidNotificationListener');
     if (!serviceExists) {
       app.service.push(service);
     }

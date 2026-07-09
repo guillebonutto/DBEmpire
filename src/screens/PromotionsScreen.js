@@ -60,7 +60,7 @@ export default function PromotionsScreen({ navigation }) {
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
-            if (data) setPromos(data);
+            if (data) setPromos(data.filter(p => p.type !== 'psychological_combo'));
         } catch (e) {
             console.error('[Promotions] Error fetching promos:', e.message);
             Alert.alert('Error', 'No se pudieron cargar las promociones. Revisa tu conexión.');

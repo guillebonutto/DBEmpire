@@ -141,10 +141,14 @@ export const SyncService = {
     },
 
     _processSaleSync: async (payload, metadata) => {
+        // Remove payment_method since it only exists in local SQLite, not in Supabase schema
+        const cleanPayload = { ...payload };
+        delete cleanPayload.payment_method;
+
         // Insert sale
         const { data: saleData, error: saleError } = await supabase
             .from('sales')
-            .insert(payload)
+            .insert(cleanPayload)
             .select()
             .single();
 

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, Modal,
-    StatusBar, Dimensions, ScrollView, Alert, ActivityIndicator, TextInput, Linking
+    StatusBar, Dimensions, ScrollView, Alert, ActivityIndicator, TextInput, Linking, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,6 +16,57 @@ import { DeviceAuthService } from '../services/deviceAuth';
 import * as Clipboard from 'expo-clipboard';
 import CustomAlert from '../components/CustomAlert';
 import { useAlert } from '../hooks/useAlert';
+import { CampaignNotificationService } from '../services/CampaignNotificationService';
+
+const getNthSunday = (year, month, n) => {
+    let count = 0;
+    for (let day = 1; day <= 31; day++) {
+        const date = new Date(year, month, day);
+        if (date.getDay() === 0) {
+            count++;
+            if (count === n) return date;
+        }
+    }
+    return new Date(year, month, 15);
+};
+
+const getSeasonalEvents = (year) => [
+    { id: 'valentines', name: 'San Valentín 💖', month: 1, day: 14, isFixed: true },
+    { id: 'hotsale', name: 'Hot Sale 🔥', month: 4, day: 15, isFixed: true },
+    { id: 'father', name: 'Día del Padre 👔', month: 5, getNthSunday: (y) => getNthSunday(y, 5, 3), isFixed: false },
+    { id: 'friend', name: 'Día del Amigo 🤝', month: 6, day: 20, isFixed: true },
+    { id: 'child', name: 'Día del Niño 🎮', month: 7, getNthSunday: (y) => getNthSunday(y, 7, 3), isFixed: false },
+    { id: 'mother', name: 'Día de la Madre 🌸', month: 9, getNthSunday: (y) => getNthSunday(y, 9, 3), isFixed: false },
+    { id: 'cybermonday', name: 'CyberMonday ⚡', month: 10, day: 4, isFixed: true },
+    { id: 'christmas', name: 'Navidad 🎄', month: 11, day: 25, isFixed: true }
+];
+
+const calculateEventDetails = (event, today, currentYear) => {
+    let targetDate;
+    if (event.isCustom) {
+        targetDate = new Date(event.dateString + 'T00:00:00');
+        if (targetDate < today) {
+            targetDate.setFullYear(currentYear + 1);
+        }
+    } else {
+        if (event.isFixed) {
+            targetDate = new Date(currentYear, event.month, event.day);
+        } else {
+            targetDate = event.getNthSunday(currentYear);
+        }
+        if (targetDate < today) {
+            const nextYear = currentYear + 1;
+            if (event.isFixed) {
+                targetDate = new Date(nextYear, event.month, event.day);
+            } else {
+                targetDate = event.getNthSunday(nextYear);
+            }
+        }
+    }
+    const diffTime = targetDate - today;
+    const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return { ...event, date: targetDate, daysRemaining };
+};
 
 const { width } = Dimensions.get('window');
 
@@ -31,6 +82,40 @@ export default function HomeScreen({ navigation }) {
     const [simulatorQuery, setSimulatorQuery] = useState('');
     const [hardwareRole, setHardwareRole] = useState(null);
     const { showAlert, alertProps } = useAlert();
+    const [completedTasks, setCompletedTasks] = useState([]);
+    const [nextCampaign, setNextCampaign] = useState(null);
+
+    const syncCompletedTasks = async (insights) => {
+        if (!insights) return;
+        const idsToCheck = [];
+        if (insights.today_plan?.id) idsToCheck.push(insights.today_plan.id);
+        if (insights.missions && Array.isArray(insights.missions)) {
+            insights.missions.forEach(m => {
+                if (m.id) idsToCheck.push(m.id);
+            });
+        }
+        if (idsToCheck.length > 0) {
+            const completed = await EmpireAIService.checkCompletedActions(idsToCheck);
+            setCompletedTasks(completed);
+        } else {
+            setCompletedTasks([]);
+        }
+    };
+
+    const handleToggleTask = async (id, title) => {
+        if (!id) return;
+        try {
+            await EmpireAIService.markActionAsExecuted(id);
+            setCompletedTasks(prev => [...prev, id]);
+            showAlert({
+                type: 'success',
+                title: '¡Misión Completada!',
+                message: `Completaste: "${title}"`
+            });
+        } catch (e) {
+            console.error("Error marking task done:", e);
+        }
+    };
 
     const loadDashboardData = useCallback(async () => {
         try {
@@ -61,6 +146,30 @@ export default function HomeScreen({ navigation }) {
             setLoadingAI(true);
             const insights = await EmpireAIService.getInsights(false, currentRole);
             setAiAdvice(insights);
+            await syncCompletedTasks(insights);
+
+            // Cargar y calcular el evento más cercano
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const currentYear = today.getFullYear();
+            let customEvents = [];
+            try {
+                const customData = await AsyncStorage.getItem('custom_campaign_events');
+                if (customData) customEvents = JSON.parse(customData);
+            } catch(e) {}
+            
+            const allEvents = [
+                ...getSeasonalEvents(currentYear),
+                ...customEvents.map(e => ({ ...e, isCustom: true }))
+            ].map(e => calculateEventDetails(e, today, currentYear));
+            
+            allEvents.sort((a, b) => a.daysRemaining - b.daysRemaining);
+            if (allEvents.length > 0) {
+                setNextCampaign(allEvents[0]);
+            }
+            
+            // Programar notificaciones locales
+            CampaignNotificationService.scheduleCampaignReminders();
         } catch (error) {
             console.error('Dashboard load error:', error);
         } finally {
@@ -73,6 +182,7 @@ export default function HomeScreen({ navigation }) {
         try {
             const insights = await EmpireAIService.getInsights(force, userRole || 'seller');
             setAiAdvice(insights);
+            await syncCompletedTasks(insights);
         } catch (e) { console.log('AI refresh error:', e); }
         finally { setLoadingAI(false); }
     };
@@ -160,8 +270,14 @@ export default function HomeScreen({ navigation }) {
 
                                     {/* Misión Cero */}
                                     {a.today_plan && (
-                                        <View style={styles.misionCero}>
-                                            <Text style={styles.misionCeroTitle}>🔥 MISIÓN CERO: EL PLAN DE HOY</Text>
+                                        <View style={[
+                                            styles.misionCero,
+                                            completedTasks.includes(a.today_plan.id) && { borderColor: '#2ecc71', backgroundColor: '#051a0b' }
+                                        ]}>
+                                            <Text style={[
+                                                styles.misionCeroTitle,
+                                                completedTasks.includes(a.today_plan.id) && { color: '#2ecc71', borderBottomColor: '#2ecc7130' }
+                                            ]}>🔥 MISIÓN CERO: EL PLAN DE HOY</Text>
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                                                 <MaterialCommunityIcons name="star-shooting" size={14} color="#d4af37" />
                                                 <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>{a.today_plan.product}</Text>
@@ -247,6 +363,29 @@ export default function HomeScreen({ navigation }) {
                                                     <Text style={{ color: '#777', fontSize: 11, fontStyle: 'italic', flex: 1, lineHeight: 16 }}>{a.today_plan.reason}</Text>
                                                 </View>
                                             )}
+
+                                            {a.today_plan.id && (
+                                                <TouchableOpacity
+                                                    style={[
+                                                        styles.completeTaskBtn,
+                                                        completedTasks.includes(a.today_plan.id) && styles.completedTaskBtnActive
+                                                    ]}
+                                                    onPress={() => handleToggleTask(a.today_plan.id, a.today_plan.product)}
+                                                    disabled={completedTasks.includes(a.today_plan.id)}
+                                                >
+                                                    <MaterialCommunityIcons 
+                                                        name={completedTasks.includes(a.today_plan.id) ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"} 
+                                                        size={18} 
+                                                        color={completedTasks.includes(a.today_plan.id) ? "#2ecc71" : "#888"} 
+                                                    />
+                                                    <Text style={[
+                                                        styles.completeTaskBtnText,
+                                                        completedTasks.includes(a.today_plan.id) && { color: '#2ecc71' }
+                                                    ]}>
+                                                        {completedTasks.includes(a.today_plan.id) ? "PLAN COMPLETADO" : "MARCAR PLAN COMO COMPLETADO"}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
                                         </View>
                                     )}
 
@@ -283,13 +422,32 @@ export default function HomeScreen({ navigation }) {
                                         <View>
                                             <Text style={styles.missionsLabel}>⚔️ MISIONES DEL DÍA</Text>
                                             {a.missions.slice(0, 3).map((m, i) => (
-                                                <View key={i} style={styles.missionRow}>
+                                                <View key={i} style={[
+                                                    styles.missionRow,
+                                                    completedTasks.includes(m.id) && { borderColor: '#2ecc7130', backgroundColor: '#020d05' }
+                                                ]}>
                                                     <View style={[styles.mDot, { backgroundColor: m.priority === 'Alta' ? '#e74c3c' : m.priority === 'Media' ? '#f39c12' : '#2ecc71' }]} />
                                                     <View style={{ flex: 1 }}>
-                                                        <Text style={styles.mTitle}>{m.action || '—'}</Text>
+                                                        <Text style={[
+                                                            styles.mTitle,
+                                                            completedTasks.includes(m.id) && { textDecorationLine: 'line-through', color: '#666' }
+                                                        ]}>{m.action || '—'}</Text>
                                                         <Text style={styles.mDesc}>{m.goal || ''}</Text>
                                                     </View>
                                                     <View style={styles.mBadge}><Text style={styles.mBadgeText}>{(m.type || 'general').toUpperCase()}</Text></View>
+                                                    {m.id && (
+                                                        <TouchableOpacity 
+                                                            style={{ paddingLeft: 10, justifyContent: 'center' }}
+                                                            onPress={() => handleToggleTask(m.id, m.action)}
+                                                            disabled={completedTasks.includes(m.id)}
+                                                        >
+                                                            <MaterialCommunityIcons 
+                                                                name={completedTasks.includes(m.id) ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"} 
+                                                                size={20} 
+                                                                color={completedTasks.includes(m.id) ? "#2ecc71" : "#444"} 
+                                                            />
+                                                        </TouchableOpacity>
+                                                    )}
                                                 </View>
                                             ))}
                                         </View>
@@ -345,20 +503,40 @@ export default function HomeScreen({ navigation }) {
         const offset = now.getTimezoneOffset() * 60000;
         const localISOTime = new Date(now.getTime() - offset).toISOString();
         const today = localISOTime.split('T')[0];
+
+        // Get yesterday's date in local time
+        const yesterdayDate = new Date(now.getTime() - offset - 86400000);
+        const yesterday = yesterdayDate.toISOString().split('T')[0];
+
         const currentSales = (sales || []);
         
         const todaySales = currentSales.filter(s => {
             const st = (s.status || '').toLowerCase();
+            const saleDate = s.paid_at || s.created_at;
             return (st === 'completed' || st === 'exitosa' || st === 'vended' || st === '') && 
-                   s.created_at && s.created_at.startsWith(today);
+                   saleDate && saleDate.startsWith(today);
         });
 
-        // Totals for Admin
+        const yesterdaySales = currentSales.filter(s => {
+            const st = (s.status || '').toLowerCase();
+            const saleDate = s.paid_at || s.created_at;
+            return (st === 'completed' || st === 'exitosa' || st === 'vended' || st === '') && 
+                   saleDate && saleDate.startsWith(yesterday);
+        });
+
+        // Totals for Admin/Leader Today
         const revenueToday = todaySales.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
         const profitToday = todaySales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
 
-        // Commission for Seller
+        // Totals for Admin/Leader Yesterday
+        const revenueYesterday = yesterdaySales.reduce((sum, s) => sum + (parseFloat(s.total_amount) || 0), 0);
+        const profitYesterday = yesterdaySales.reduce((sum, s) => sum + (parseFloat(s.profit_generated) || 0), 0);
+
+        // Commission for Seller Today
         const commissionToday = todaySales.reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
+        // Commission for Seller Yesterday
+        const commissionYesterday = yesterdaySales.reduce((sum, s) => sum + (parseFloat(s.commission_amount) || 0), 0);
+
         const totalCommissionAccumulated = currentSales.reduce((sum, s) => {
             const st = (s.status || '').toLowerCase();
             if (st === 'completed' || st === 'exitosa' || st === 'vended' || st === '') {
@@ -367,7 +545,27 @@ export default function HomeScreen({ navigation }) {
             return sum;
         }, 0);
 
-        return { revenueToday, profitToday, commissionToday, totalCommissionAccumulated };
+        // Helper to calculate percentage change
+        const getPercentChange = (current, previous) => {
+            if (previous === 0) {
+                return current > 0 ? 100 : 0;
+            }
+            return Math.round(((current - previous) / previous) * 100);
+        };
+
+        const revenueChange = getPercentChange(revenueToday, revenueYesterday);
+        const profitChange = getPercentChange(profitToday, profitYesterday);
+        const commissionChange = getPercentChange(commissionToday, commissionYesterday);
+
+        return { 
+            revenueToday, 
+            profitToday, 
+            commissionToday, 
+            totalCommissionAccumulated,
+            revenueChange,
+            profitChange,
+            commissionChange
+        };
     };
 
     const stats = getStats();
@@ -448,107 +646,161 @@ export default function HomeScreen({ navigation }) {
                             <MaterialCommunityIcons name="account-group" size={22} color="#d4af37" />
                         </TouchableOpacity>
 
+                        <TouchableOpacity onPress={() => navigation.navigate('Combos')} style={styles.miniAdminBtn} title="Combos">
+                            <MaterialCommunityIcons name="package-variant-closed" size={22} color="#d4af37" />
+                        </TouchableOpacity>
+
                         <TouchableOpacity onPress={() => navigation.navigate('Balance')} style={styles.miniAdminBtn}>
                             <MaterialCommunityIcons name="chart-line" size={22} color="#d4af37" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.miniAdminBtn}>
+                            <MaterialCommunityIcons name="account" size={22} color="#d4af37" />
                         </TouchableOpacity>
                     </View>
                 </View>
 
                 <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
                     
-                    {/* Stats Bricks DUAL MODE */}
-                    <View style={styles.statsGrid}>
-                        {(userRole === 'admin' || userRole === 'leader') ? (
-                            <>
-                                <View style={styles.statBrick}>
-                                    <Text style={styles.statLab}>Ventas Hoy</Text>
-                                    <Text style={styles.statVal}>{formatCurrency(stats.revenueToday)}</Text>
+                    {/* KPI Command Center (Bento style) */}
+                    <View style={styles.kpiContainer}>
+                        <View style={styles.kpiRow}>
+                            <Text style={styles.kpiLabel}>{(userRole === 'admin' || userRole === 'leader') ? 'VENTAS' : 'COMISIÓN'}</Text>
+                            <View style={styles.kpiRight}>
+                                <Text style={styles.kpiValue}>
+                                    {formatCurrency((userRole === 'admin' || userRole === 'leader') ? stats.revenueToday : stats.commissionToday)}
+                                </Text>
+                                <View style={[styles.trendBadge, { backgroundColor: ((userRole === 'admin' || userRole === 'leader') ? stats.revenueChange : stats.commissionChange) >= 0 ? 'rgba(0, 228, 117, 0.1)' : 'rgba(255, 71, 87, 0.1)' }]}>
+                                    <MaterialCommunityIcons 
+                                        name={((userRole === 'admin' || userRole === 'leader') ? stats.revenueChange : stats.commissionChange) >= 0 ? "arrow-up" : "arrow-down"} 
+                                        size={10} 
+                                        color={((userRole === 'admin' || userRole === 'leader') ? stats.revenueChange : stats.commissionChange) >= 0 ? "#00e475" : "#ff4757"} 
+                                    />
+                                    <Text style={[styles.trendText, { color: ((userRole === 'admin' || userRole === 'leader') ? stats.revenueChange : stats.commissionChange) >= 0 ? "#00e475" : "#ff4757" }]}>
+                                        {Math.abs((userRole === 'admin' || userRole === 'leader') ? stats.revenueChange : stats.commissionChange)}%
+                                    </Text>
                                 </View>
-                                <View style={styles.statBrick}>
-                                    <Text style={styles.statLab}>Ganancia Hoy</Text>
-                                    <Text style={[styles.statVal, { color: '#00ff88' }]}>{formatCurrency(stats.profitToday)}</Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.kpiDivider} />
+
+                        <View style={styles.kpiRow}>
+                            <Text style={styles.kpiLabel}>{(userRole === 'admin' || userRole === 'leader') ? 'GANANCIA' : 'TOTAL ACUMULADO'}</Text>
+                            <View style={styles.kpiRight}>
+                                <Text style={[styles.kpiValue, { color: ((userRole === 'admin' || userRole === 'leader') ? '#fff6df' : '#00ff88') }]}>
+                                    {formatCurrency((userRole === 'admin' || userRole === 'leader') ? stats.profitToday : stats.totalCommissionAccumulated)}
+                                </Text>
+                                <View style={[styles.trendBadge, { backgroundColor: ((userRole === 'admin' || userRole === 'leader') ? stats.profitChange : 0) >= 0 ? 'rgba(0, 228, 117, 0.1)' : 'rgba(255, 71, 87, 0.1)' }]}>
+                                    <MaterialCommunityIcons 
+                                        name={((userRole === 'admin' || userRole === 'leader') ? stats.profitChange : 0) >= 0 ? "arrow-up" : "arrow-down"} 
+                                        size={10} 
+                                        color={((userRole === 'admin' || userRole === 'leader') ? stats.profitChange : 0) >= 0 ? "#00e475" : "#ff4757"} 
+                                    />
+                                    <Text style={[styles.trendText, { color: ((userRole === 'admin' || userRole === 'leader') ? stats.profitChange : 0) >= 0 ? "#00e475" : "#ff4757" }]}>
+                                        {Math.abs((userRole === 'admin' || userRole === 'leader') ? stats.profitChange : 0)}%
+                                    </Text>
                                 </View>
-                            </>
-                        ) : (
-                            <>
-                                <View style={styles.statBrick}>
-                                    <Text style={styles.statLab}>Comisión Hoy</Text>
-                                    <Text style={[styles.statVal, { color: '#00ff88' }]}>{formatCurrency(stats.commissionToday)}</Text>
-                                </View>
-                                <View style={styles.statBrick}>
-                                    <Text style={styles.statLab}>Total Acumulado</Text>
-                                    <Text style={styles.statVal}>{formatCurrency(stats.totalCommissionAccumulated)}</Text>
-                                </View>
-                            </>
-                        )}
+                            </View>
+                        </View>
                     </View>
 
-                    {/* ALIAS DE TRANSFERENCIA COMPARTIDO (RÁPIDO) */}
+                    {/* Financial Transfer Shortcut */}
                     <TouchableOpacity
                         onPress={async () => {
                             await Clipboard.setStringAsync('grb1m.uala');
                             showAlert({ type: 'success', title: '¡Alias Copiado!', message: 'El alias "grb1m.uala" se copió al portapapeles.' });
                         }}
-                        style={styles.aliasContainer}
+                        style={styles.transferShortcut}
                         activeOpacity={0.7}
                     >
-                        <View style={styles.aliasContent}>
-                            <MaterialCommunityIcons name="bank" size={20} color="#d4af37" />
+                        <View style={styles.transferLeft}>
+                            <View style={styles.transferIconWrapper}>
+                                <MaterialCommunityIcons name="bank" size={18} color="#ffe16d" />
+                            </View>
                             <View style={{ marginLeft: 12 }}>
-                                <Text style={styles.aliasLabel}>CBU / ALIAS DE TRANSFERENCIAS:</Text>
-                                <Text style={styles.aliasVal}>grb1m.uala</Text>
+                                <Text style={styles.transferLabel}>CBU / ALIAS</Text>
+                                <Text style={styles.transferValue}>grb1m.uala</Text>
                             </View>
                         </View>
-                        <MaterialCommunityIcons name="content-copy" size={18} color="#d4af37" style={{ opacity: 0.8 }} />
+                        <MaterialCommunityIcons name="content-copy" size={18} color="#aaa" />
                     </TouchableOpacity>
 
-                    {/* AI Insight Summary */}
+                    {/* AI Coach Banner */}
                     <TouchableOpacity
-                        style={styles.aiInsightBox}
+                        style={styles.aiCoachContainer}
                         onPress={() => setAiModalVisible(true)}
                         activeOpacity={0.8}
                     >
-                        <LinearGradient
-                            colors={['rgba(212, 175, 55, 0.15)', 'rgba(212, 175, 55, 0.02)']}
-                            style={styles.aiInsightGrad}
-                        >
-                            <View style={styles.aiHeader}>
-                                <MaterialCommunityIcons name="lightning-bolt" size={18} color="#d4af37" />
-                                <Text style={styles.aiTitle}>EMPIRE AI COACH</Text>
-                                {loadingAI
-                                    ? <ActivityIndicator size="small" color="#d4af37" style={{ marginLeft: 'auto' }} />
-                                    : <MaterialCommunityIcons name="chevron-right" size={18} color="#d4af3780" style={{ marginLeft: 'auto' }} />
-                                }
-                            </View>
-                            <Text style={styles.aiText} numberOfLines={2}>
-                                {aiAdvice?.summary || aiAdvice?.prediction || 'Tocá para activar el análisis estratégico...'}
-                            </Text>
-                        </LinearGradient>
+                        <View style={styles.aiCoachHeader}>
+                            <MaterialCommunityIcons name="lightning-bolt" size={18} color="#ffe16d" />
+                            <Text style={styles.aiCoachTitle}>AI COACH</Text>
+                        </View>
+                        <Text style={styles.aiCoachText} numberOfLines={1}>
+                            {aiAdvice?.summary || aiAdvice?.prediction || 'CFO: Generando estrategias de alta fidelidad...'}
+                        </Text>
+                        {loadingAI ? (
+                            <ActivityIndicator size="small" color="#ffe16d" style={{ marginLeft: 'auto' }} />
+                        ) : (
+                            <MaterialCommunityIcons name="chevron-right" size={18} color="#ffe16d" style={{ marginLeft: 'auto' }} />
+                        )}
                     </TouchableOpacity>
 
-                    {/* AI DUAL PLANS (A/B) */}
-                    <View style={styles.missionsContainer}>
-                        <Text style={styles.sectionLabel}>PLAN ESTRATÉGICO {(userRole === 'admin' || userRole === 'leader') ? 'DE CAMPO' : 'DE REDES'}</Text>
-                        <View style={styles.plansRow}>
-                            <TouchableOpacity style={styles.planCard} onPress={() => setAiModalVisible(true)}>
-                                <Text style={styles.planTag}>PLAN A</Text>
-                                <Text style={styles.planName} numberOfLines={1}>{aiAdvice?.strategyA?.name || 'Cargando...'}</Text>
-                                <Text style={styles.planDesc} numberOfLines={2}>{aiAdvice?.strategyA?.plan || 'Tocá para analizar'}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.planCard} onPress={() => setAiModalVisible(true)}>
-                                <Text style={[styles.planTag, { color: '#3498db' }]}>PLAN B</Text>
-                                <Text style={styles.planName} numberOfLines={1}>{aiAdvice?.strategyB?.name || 'Cargando...'}</Text>
-                                <Text style={styles.planDesc} numberOfLines={2}>{aiAdvice?.strategyB?.plan || 'Tocá para analizar'}</Text>
-                            </TouchableOpacity>
-                        </View>
+                    {/* Campaign Banner */}
+                    {nextCampaign && (
+                        <TouchableOpacity
+                            style={styles.campaignContainer}
+                            onPress={() => navigation.navigate('CampaignPlanner')}
+                            activeOpacity={0.8}
+                        >
+                            <View style={styles.campaignLeft}>
+                                <MaterialCommunityIcons name="bell-ring" size={18} color="#ff4757" />
+                                <Text style={styles.campaignTitle} numberOfLines={1}>{nextCampaign.name}</Text>
+                                <View style={styles.campaignDaysBadge}>
+                                    <Text style={styles.campaignDaysText}>{nextCampaign.daysRemaining}D</Text>
+                                </View>
+                            </View>
+                            <View style={styles.campaignBtn}>
+                                <Text style={styles.campaignBtnText}>LANZAR</Text>
+                            </View>
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Field Strategic Plan (Bento style) */}
+                    <View style={styles.bentoContainer}>
+                        <TouchableOpacity style={styles.bentoCard} onPress={() => setAiModalVisible(true)}>
+                            <View style={styles.bentoHeader}>
+                                <Text style={[styles.bentoPlanTag, { color: '#00e475' }]}>PLAN A</Text>
+                                <MaterialCommunityIcons name="google-analytics" size={14} color="#00e475" style={{ opacity: 0.5 }} />
+                            </View>
+                            <Text style={styles.bentoTitle} numberOfLines={1}>
+                                {aiAdvice?.strategyA?.name?.toUpperCase() || 'LIQUIDACIÓN'}
+                            </Text>
+                            <View style={styles.bentoProgressBarBg}>
+                                <View style={[styles.bentoProgressBar, { backgroundColor: '#00e475', width: '66%' }]} />
+                            </View>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={styles.bentoCard} onPress={() => setAiModalVisible(true)}>
+                            <View style={styles.bentoHeader}>
+                                <Text style={[styles.bentoPlanTag, { color: '#ffe16d' }]}>PLAN B</Text>
+                                <MaterialCommunityIcons name="clipboard-text-outline" size={14} color="#ffe16d" style={{ opacity: 0.5 }} />
+                            </View>
+                            <Text style={styles.bentoTitle} numberOfLines={1}>
+                                {aiAdvice?.strategyB?.name?.toUpperCase() || 'DEMANDA'}
+                            </Text>
+                            <View style={styles.bentoProgressBarBg}>
+                                <View style={[styles.bentoProgressBar, { backgroundColor: '#ffe16d', width: '33%' }]} />
+                            </View>
+                        </TouchableOpacity>
                     </View>
 
                     {renderAIModal()}
 
-                    {/* Scanner Center */}
-                    <View style={styles.scannerCenter}>
+                    {/* QR Scanner Section (Breathing room) */}
+                    <View style={styles.scannerRow}>
                         <TouchableOpacity
-                            style={styles.scannerTap}
+                            style={styles.qrCircleBtn}
                             onPress={async () => {
                                 if (!permission || !permission.granted) {
                                     const res = await requestPermission();
@@ -561,18 +813,16 @@ export default function HomeScreen({ navigation }) {
                             }}
                             activeOpacity={0.8}
                         >
-                            <LinearGradient colors={['#000', '#0a0a0a']} style={styles.scannerCircle}>
-                                <MaterialCommunityIcons name="qrcode-scan" size={60} color="#d4af37" />
-                                <Text style={styles.scannerLabel}>LECTOR DE CÓDIGOS</Text>
-                            </LinearGradient>
+                            <MaterialCommunityIcons name="qrcode-scan" size={28} color="#ffe16d" />
                         </TouchableOpacity>
 
-                        <TouchableOpacity 
-                            style={styles.manualEntryBtn} 
+                        <TouchableOpacity
+                            style={styles.manualEntryRowBtn}
                             onPress={() => navigation.navigate('NewSale', { autoSearch: true })}
+                            activeOpacity={0.8}
                         >
-                            <MaterialCommunityIcons name="keyboard-outline" size={18} color="#555" />
-                            <Text style={styles.manualEntryText}>VENTA MANUAL / BUSCADOR</Text>
+                            <MaterialCommunityIcons name="keyboard-outline" size={18} color="#ffe16d" />
+                            <Text style={styles.manualEntryRowText}>VENTA MANUAL</Text>
                         </TouchableOpacity>
                     </View>
 
@@ -595,105 +845,262 @@ const styles = StyleSheet.create({
 
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 20, marginBottom: 20 },
     brandContainer: { alignItems: 'center' },
-    brandName: { color: '#d4af37', fontSize: 18, fontWeight: '900', letterSpacing: 3 },
-    headerRole: { color: '#444', fontSize: 9, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1 },
+    brandName: { color: '#d4af37', fontSize: 22, fontWeight: '900', letterSpacing: 3 },
+    headerRole: { color: '#444', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1 },
     miniAiBtn: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#151515' },
     spyModeBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(212, 175, 55, 0.1)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.3)' },
     miniClientsBtn: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#151515' },
     miniAdminBtn: { width: 42, height: 42, borderRadius: 12, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#151515' },
 
-    statsGrid: { flexDirection: 'row', gap: 12, marginBottom: 15 },
-    statBrick: { flex: 1, backgroundColor: '#080808', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#151515' },
-    statLab: { color: '#555', fontSize: 10, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
-    statVal: { color: '#fff', fontSize: 22, fontWeight: '900' },
-
-    aliasContainer: { 
-        flexDirection: 'row', 
-        alignItems: 'center', 
-        backgroundColor: '#080808', 
-        paddingHorizontal: 20, 
-        paddingVertical: 15, 
-        borderRadius: 18, 
-        borderWidth: 1, 
-        borderColor: 'rgba(212, 175, 55, 0.2)', 
-        marginBottom: 20,
+    kpiContainer: {
+        backgroundColor: '#1c1b1b',
+        borderWidth: 1,
+        borderColor: '#4d4732',
+        borderRadius: 12,
+        marginBottom: 16,
+        overflow: 'hidden'
+    },
+    kpiRow: {
+        paddingHorizontal: 16,
+        paddingVertical: 18,
+        flexDirection: 'row',
+        alignItems: 'center',
         justifyContent: 'space-between'
     },
-    aliasContent: { flexDirection: 'row', alignItems: 'center' },
-    aliasLabel: { color: '#555', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-    aliasVal: { color: '#fff', fontSize: 15, fontWeight: '900', marginTop: 2, letterSpacing: 0.5 },
-
-    aiInsightBox: { marginBottom: 20, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(212, 175, 55, 0.3)' },
-    aiInsightGrad: { padding: 18 },
-    aiHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
-    aiTitle: { color: '#d4af37', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
-    aiText: { color: '#ccc', fontSize: 14, lineHeight: 20, fontWeight: '500' },
-
-    missionsContainer: { marginBottom: 30 },
-    sectionLabel: { color: '#444', fontSize: 10, fontWeight: '900', letterSpacing: 1.5, marginBottom: 15 },
-    
-    plansRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-    planCard: { flex: 1, backgroundColor: '#080808', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#151515' },
-    planTag: { color: '#2ecc71', fontSize: 9, fontWeight: '900', marginBottom: 5 },
-    planName: { color: '#fff', fontSize: 13, fontWeight: 'bold', marginBottom: 5 },
-    planDesc: { color: '#666', fontSize: 11, lineHeight: 16 },
-
-    missionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#080808', padding: 15, borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: '#151515' },
-    missionIcon: { width: 45, height: 45, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-    missionInfo: { flex: 1, marginLeft: 15 },
-    missionTitle: { color: '#d4af37', fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 2 },
-    missionDesc: { color: '#eee', fontSize: 13, fontWeight: '600' },
-
-    modulesGrid: { flexDirection: 'row', gap: 12, marginBottom: 25 },
-    moduleCard: { 
-        flex: 1, 
-        backgroundColor: '#080808', 
-        padding: 15, 
-        borderRadius: 18, 
-        alignItems: 'center', 
-        borderWidth: 1, 
-        borderColor: '#151515' 
+    kpiDivider: {
+        height: 1,
+        backgroundColor: '#4d4732',
+        opacity: 0.8
     },
-    moduleIcon: { 
-        width: 45, 
-        height: 45, 
-        borderRadius: 12, 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        marginBottom: 10 
+    kpiLabel: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#d0c6ab',
+        letterSpacing: 1,
+        textTransform: 'uppercase'
     },
-    moduleTitle: { color: '#888', fontSize: 11, fontWeight: '800' },
-
-    scannerCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
-    scannerTap: {
-        width: 220,
-        height: 220,
-        borderRadius: 110,
-        backgroundColor: '#000',
-        shadowColor: '#d4af37',
-        shadowOpacity: 0.7,
-        shadowRadius: 35,
-        elevation: 15,
+    kpiRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8
+    },
+    kpiValue: {
+        color: '#fff6df',
+        fontSize: 24,
+        fontWeight: '900',
+        letterSpacing: 0.5
+    },
+    trendBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(0, 228, 117, 0.1)',
+        paddingHorizontal: 6,
+        paddingVertical: 3,
+        borderRadius: 4
+    },
+    trendText: {
+        color: '#00e475',
+        fontSize: 11,
+        fontWeight: 'bold',
+        marginLeft: 2
+    },
+    transferShortcut: {
+        backgroundColor: '#1c1b1b',
+        borderWidth: 1,
+        borderColor: '#4d4732',
+        borderRadius: 12,
+        padding: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 16
+    },
+    transferLeft: {
+        flexDirection: 'row',
+        alignItems: 'center'
+    },
+    transferIconWrapper: {
+        backgroundColor: 'rgba(255, 230, 223, 0.05)',
+        width: 36,
+        height: 36,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center'
+    },
+    transferLabel: {
+        fontSize: 12,
+        fontWeight: '900',
+        color: '#d0c6ab',
+        letterSpacing: 1,
+        opacity: 0.6
+    },
+    transferValue: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#ffe16d',
+        marginTop: 1
+    },
+    aiCoachContainer: {
+        backgroundColor: '#1a1a1a',
+        borderLeftWidth: 4,
+        borderLeftColor: '#ffe16d',
+        borderRadius: 12,
+        padding: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 16
+    },
+    aiCoachHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginRight: 10
+    },
+    aiCoachTitle: {
+        fontSize: 12,
+        fontWeight: '900',
+        color: '#ffe16d',
+        letterSpacing: 1.5,
+        marginLeft: 4
+    },
+    aiCoachText: {
+        flex: 1,
+        fontSize: 14,
+        color: '#e5e2e1',
+        fontWeight: '600'
+    },
+    campaignContainer: {
+        backgroundColor: '#1d1212',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 100, 100, 0.2)',
+        borderRadius: 16,
+        padding: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 16
+    },
+    campaignLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+        marginRight: 10
+    },
+    campaignTitle: {
+        color: '#ffe16d',
+        fontWeight: 'bold',
+        fontSize: 16,
+        marginLeft: 8,
+        marginRight: 8,
+        flexShrink: 1
+    },
+    campaignDaysBadge: {
+        backgroundColor: 'rgba(255, 100, 100, 0.1)',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 999
+    },
+    campaignDaysText: {
+        color: '#ffb4ab',
+        fontSize: 12,
+        fontWeight: '900'
+    },
+    campaignBtn: {
+        backgroundColor: '#ffe16d',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 6
+    },
+    campaignBtnText: {
+        color: '#3a3000',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1
+    },
+    bentoContainer: {
+        flexDirection: 'row',
+        gap: 12,
+        marginBottom: 20
+    },
+    bentoCard: {
+        flex: 1,
+        backgroundColor: '#1c1b1b',
+        borderWidth: 1,
+        borderColor: '#4d4732',
+        borderRadius: 12,
+        padding: 12,
+        flexDirection: 'column'
+    },
+    bentoHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 6
+    },
+    bentoPlanTag: {
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1
+    },
+    bentoTitle: {
+        color: '#e5e2e1',
+        fontSize: 15,
+        fontWeight: 'bold',
+        marginBottom: 10
+    },
+    bentoProgressBarBg: {
+        height: 4,
+        backgroundColor: '#353534',
+        borderRadius: 2,
+        overflow: 'hidden'
+    },
+    bentoProgressBar: {
+        height: '100%',
+        borderRadius: 2
+    },
+    scannerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 16,
+        marginVertical: 15
+    },
+    qrCircleBtn: {
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 230, 223, 0.2)',
+        backgroundColor: '#0e0e0e',
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: '#d4af3730'
+        boxShadow: '0px 0px 15px rgba(255, 225, 109, 0.15)',
+        elevation: 8
     },
-    scannerCircle: { width: 210, height: 210, borderRadius: 105, justifyContent: 'center', alignItems: 'center', padding: 20 },
-    scannerLabel: { color: '#d4af37', fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 15, letterSpacing: 1.5 },
-    manualEntryBtn: { marginTop: 30, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 15, backgroundColor: '#050505', borderRadius: 15, borderWidth: 1, borderColor: '#111' },
-    manualEntryText: { color: '#666', fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
-
+    manualEntryRowBtn: {
+        flex: 1,
+        height: 52,
+        backgroundColor: '#1c1b1b',
+        borderWidth: 1,
+        borderColor: '#4d4732',
+        borderRadius: 12,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 8
+    },
+    manualEntryRowText: {
+        color: '#d0c6ab',
+        fontSize: 14,
+        fontWeight: 'bold',
+        letterSpacing: 1.5
+    },
     footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 40 },
     onlineText: { color: '#222', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
     statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#2ecc71' },
-
     scannerFull: { flex: 1, backgroundColor: '#000' },
     scannerOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
     scannerOutline: { width: 250, height: 250, borderWidth: 2, borderColor: '#d4af37', borderRadius: 30, borderStyle: 'dashed' },
     scannerText: { color: '#fff', marginTop: 25, fontWeight: '900', fontSize: 11, backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 },
     closeBtn: { position: 'absolute', top: 50, right: 30 },
-
     // ── AI Coach Modal ───────────────────────────────────────────────
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
     modalBox: { flex: 1, marginTop: 80, backgroundColor: '#0a0a0a', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 40, borderWidth: 1, borderColor: '#d4af3730', flexDirection: 'column' },
@@ -734,4 +1141,25 @@ const styles = StyleSheet.create({
     execBtn: { backgroundColor: '#d4af37', borderRadius: 12, padding: 16, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 },
     execBtnText: { color: '#000', fontSize: 15, fontWeight: '900', letterSpacing: 1 },
     refreshBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#d4af3730' },
+    completeTaskBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        padding: 10,
+        backgroundColor: '#222',
+        borderRadius: 8,
+        marginTop: 12,
+        borderWidth: 1,
+        borderColor: '#333'
+    },
+    completedTaskBtnActive: {
+        backgroundColor: '#0a2e16',
+        borderColor: '#2ecc7150'
+    },
+    completeTaskBtnText: {
+        color: '#aaa',
+        fontSize: 11,
+        letterSpacing: 1
+    }
 });

@@ -150,6 +150,27 @@ export const EmpireAIService = {
                 .filter(p => p.current_stock === 0)
                 .map(p => p.name);
 
+            let recentCompleted = [];
+            try {
+                const { data: compData, error: compErr } = await supabase
+                    .from('ai_action_logs')
+                    .select('action_type, title, description, executed_at, context_snapshot')
+                    .eq('executed', true)
+                    .order('executed_at', { ascending: false })
+                    .limit(15);
+                if (compErr) console.error("Error fetching completed tasks for AI:", compErr);
+                else recentCompleted = compData || [];
+            } catch (e) {
+                console.error("AI completed tasks fetch failed:", e);
+            }
+
+            const todaySpan = new Date().toLocaleDateString('es-AR', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+
             const aiPayload = {
                 metrics: {
                     monthlyRevenue,
@@ -162,7 +183,15 @@ export const EmpireAIService = {
                 inventory: {
                     criticalStock: lowStockProducts.slice(0, 10),
                     outOfStock: outOfStockProducts.slice(0, 5)
-                }
+                },
+                current_date: todaySpan,
+                recent_completed_tasks: recentCompleted.map(c => ({
+                    action_type: c.action_type,
+                    title: c.title,
+                    description: c.description,
+                    completed_at: c.executed_at,
+                    details: c.context_snapshot
+                }))
             };
 
             const { data: topActions } = await supabase
@@ -283,6 +312,18 @@ export const EmpireAIService = {
 
                 REGLA CRÍTICA: Debes fusionar la consistencia matemática de Gemini, la empatía y tacto de Claude en el trato y guiones, y la astucia táctica callejera de Grok. Sé EXTREMADAMENTE CONCRETO en zonas geográficas de Jujuy, horarios y productos.
 
+                * REGLAS DE ROTACIÓN DE LUGARES DE JUJUY:
+                Debes rotar los lugares de Jujuy de manera que no sugieras siempre el mismo.
+                Zonas posibles para rotación en Jujuy Capital:
+                - Peatonal Belgrano (frente al Banco Nación)
+                - Plaza Belgrano (frente a la Catedral o frente a Casa de Gobierno)
+                - Parque San Martín (cerca de la punta o por la zona de los juegos)
+                - Salida UNJU (Facultad de Humanidades en calle Otero o Facultad de Ingeniería en calle Gorriti)
+                - Plaza España (atrás de Casa de Gobierno)
+                - Vieja Estación de Trenes (frente al Centro Cultural Manuel Belgrano)
+
+                Lee la lista 'recent_completed_tasks' en el contexto del negocio. Si el usuario ya realizó ventas en un lugar recientemente (es decir, figura en esa lista), NO sugieras ese mismo lugar para hoy. Sugiere una ubicación diferente de la lista de zonas posibles. Si ya visitó todas las zonas recientes, sugiere la que tenga la fecha de ejecución más antigua. Explica en el campo 'reason' de forma muy concisa por qué se rota hoy a este lugar.
+
                 DEVUELVE ÚNICAMENTE JSON PURO (sin markdown, sin texto extra):
                 {
                   "today_plan": {
@@ -326,6 +367,14 @@ export const EmpireAIService = {
                 
                 REGLA CRÍTICA: Fusiona la creatividad viral de Grok con la delicadeza humana y narrativa de Claude, respaldado por la estructura rigurosa de Gemini.
 
+                * REGLAS DE SEGUIMIENTO Y SECUENCIA DE VIDEOS:
+                Analiza las tareas y videos completados en 'recent_completed_tasks'.
+                Si ya se recomendó y completó un video (por ejemplo, gancho visual/verbal para el producto X), NO repitas la misma idea ni el mismo ángulo exacto. Avanza en la secuencia del embudo de ventas:
+                - Si ya se hizo un video de atracción (gancho) para el producto X, sugiere ahora un video demostrando el problema/solución, un unboxing, un video mostrando testimonios o respondiendo objeciones sobre ese producto X.
+                - O bien, sugiere un video de atracción para un producto diferente Y que tenga buen stock y margen.
+                - O bien, sugiere una estrategia de combo de productos.
+                Asegúrate de que la recomendación en 'today_plan' y en 'missions' represente una progresión lógica para el negocio.
+
                 DEVUELVE JSON PURO: {
                   "today_plan": { 
                     "product": "Nombre del producto", 
@@ -357,8 +406,11 @@ export const EmpireAIService = {
             let response;
             let retries = 3;
             let backoff = 1000;
-            while (retries > 0) {
-                response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${settingsData.value}`, {
+            const primaryModel = 'gemini-3.5-flash';
+            const fallbackModel = 'gemini-2.5-flash';
+            
+            const makeRequest = async (modelName) => {
+                return await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${settingsData.value}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -368,11 +420,22 @@ export const EmpireAIService = {
                         }
                     })
                 });
-                if (response.status === 429) {
+            };
+
+            while (retries > 0) {
+                response = await makeRequest(primaryModel);
+                if (response.status === 429 || response.status === 503) {
+                    console.warn(`[EmpireAIService] Gemini API Overloaded/RateLimited (HTTP ${response.status}). Retrying primary model... Retries left: ${retries - 1}`);
                     retries--;
                     await new Promise(r => setTimeout(r, backoff));
                     backoff *= 2;
                 } else break;
+            }
+
+            // Fallback to gemini-2.5-flash if primary failed with 503/404
+            if (!response.ok && (response.status === 503 || response.status === 404)) {
+                console.log(`[EmpireAIService] Primary model ${primaryModel} failed with status ${response.status}. Falling back to ${fallbackModel}...`);
+                response = await makeRequest(fallbackModel);
             }
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -387,6 +450,84 @@ export const EmpireAIService = {
                 text = text.substring(firstBrace, lastBrace + 1);
             }
             const parsedInsights = JSON.parse(text);
+
+            // Save today_plan and missions into the DB for tracking
+            try {
+                // Delete existing unexecuted plan and missions
+                const fromQuery = supabase.from('ai_action_logs');
+                if (typeof fromQuery.delete === 'function') {
+                    const deleteQuery = fromQuery.delete();
+                    if (typeof deleteQuery.eq === 'function') {
+                        await deleteQuery
+                            .eq('executed', false)
+                            .in('action_type', ['today_plan', 'mission']);
+                    }
+                }
+
+                // Prepare inserts
+                const inserts = [];
+                
+                // 1. Insert today_plan
+                if (parsedInsights.today_plan) {
+                    const planTitle = userRole === 'admin' || userRole === 'leader'
+                        ? `Venta Jujuy: ${parsedInsights.today_plan.product} en ${parsedInsights.today_plan.location || 'Jujuy'}`
+                        : `Video: ${parsedInsights.today_plan.product} (${parsedInsights.today_plan.platform || 'Redes'})`;
+
+                    inserts.push({
+                        action_type: 'today_plan',
+                        title: planTitle,
+                        description: parsedInsights.today_plan.reason || parsedInsights.today_plan.script || 'Plan del día',
+                        context_snapshot: parsedInsights.today_plan,
+                        executed: false,
+                        confidence_score: 0.95
+                    });
+                }
+
+                // 2. Insert missions
+                if (parsedInsights.missions && Array.isArray(parsedInsights.missions)) {
+                    parsedInsights.missions.forEach(m => {
+                        inserts.push({
+                            action_type: 'mission',
+                            title: m.action || 'Misión del día',
+                            description: m.goal || '',
+                            context_snapshot: m,
+                            executed: false,
+                            confidence_score: m.priority === 'Alta' ? 0.9 : m.priority === 'Media' ? 0.7 : 0.5
+                        });
+                    });
+                }
+
+                if (inserts.length > 0) {
+                    const insertQuery = supabase.from('ai_action_logs').insert(inserts);
+                    
+                    const { data: insertedRows, error: insertError } = typeof insertQuery.select === 'function'
+                        ? await insertQuery.select('*')
+                        : await insertQuery;
+
+                    if (insertError) {
+                        console.error("Error inserting generated plans/missions:", insertError);
+                    } else if (insertedRows && insertedRows.length > 0) {
+                        // Map the database IDs back to the parsedInsights object
+                        const planRow = insertedRows.find(r => r.action_type === 'today_plan');
+                        if (planRow && parsedInsights.today_plan) {
+                            parsedInsights.today_plan.id = planRow.id;
+                        }
+
+                        const missionRows = insertedRows.filter(r => r.action_type === 'mission');
+                        if (parsedInsights.missions && Array.isArray(parsedInsights.missions)) {
+                            parsedInsights.missions = parsedInsights.missions.map(m => {
+                                const matchedRow = missionRows.find(mr => mr.title === m.action);
+                                return {
+                                    ...m,
+                                    id: matchedRow ? matchedRow.id : null
+                                };
+                            });
+                        }
+                    }
+                }
+            } catch (dbErr) {
+                console.error("Database tracking logging failed:", dbErr);
+            }
             
             cachedResponse = parsedInsights;
             lastFetchTime = Date.now();
@@ -428,6 +569,41 @@ export const EmpireAIService = {
                 actionText: "VER INVENTARIO",
                 is_fallback: true
             };
+        }
+    },
+
+    markActionAsExecuted: async (id) => {
+        if (!id) return;
+        try {
+            const { error } = await supabase
+                .from('ai_action_logs')
+                .update({ 
+                    executed: true, 
+                    executed_at: new Date().toISOString() 
+                })
+                .eq('id', id);
+            if (error) console.error("Error marking action as executed:", error);
+        } catch (e) {
+            console.error("Failed to mark action as executed:", e);
+        }
+    },
+
+    checkCompletedActions: async (ids) => {
+        if (!ids || ids.length === 0) return [];
+        try {
+            const { data, error } = await supabase
+                .from('ai_action_logs')
+                .select('id')
+                .in('id', ids)
+                .eq('executed', true);
+            if (error) {
+                console.error("Error checking completed actions:", error);
+                return [];
+            }
+            return (data || []).map(row => row.id);
+        } catch (e) {
+            console.error("Failed to check completed actions:", e);
+            return [];
         }
     }
 };

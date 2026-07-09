@@ -9,6 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { printOrSharePDF } from '../utils/pdfHelper';
 import { NotificationService } from '../services/notificationService';
 import { SyncService } from '../services/syncService';
 import NetInfo from '@react-native-community/netinfo';
@@ -60,6 +61,18 @@ export default function NewSaleScreen({ navigation, route }) {
         return parseFloat(product.sale_price) || 0;
     };
     const [promos, setPromos] = useState([]);
+    const availablePromos = React.useMemo(() => {
+        return promos.filter(p => {
+            if (p.type === 'psychological_combo') return false;
+            // Global promos (no links) are always available
+            if (!p.promotion_products || p.promotion_products.length === 0) return true;
+
+            // Linked promos only if cart contains relevant items with at least min_qty?
+            // Let's show it as available if they have at least 1, so they can see they need more to activate.
+            const linkedIds = p.promotion_products.map(pp => pp.product_id);
+            return cart.some(item => linkedIds.includes(item.id));
+        });
+    }, [promos, cart]);
     const [commissionRate, setCommissionRate] = useState(0.10);
 
     // Modals
@@ -83,6 +96,10 @@ export default function NewSaleScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const [isLeaderSale, setIsLeaderSale] = useState(false);
     const [assignToPartner, setAssignToPartner] = useState(false);
+    const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
+    const [pendingCheckoutType, setPendingCheckoutType] = useState('completed'); // Track the checkout type being processed
+    const [commissionType, setCommissionType] = useState('direct'); // 'direct' or 'closer'
+    const [selectClientFirstMode, setSelectClientFirstMode] = useState(false); // Track if we're selecting client before product
 
     // Inline Quantity State
     const [expandedProductId, setExpandedProductId] = useState(null);
@@ -90,6 +107,22 @@ export default function NewSaleScreen({ navigation, route }) {
     const [selectedColor, setSelectedColor] = useState(null);
     const [saleLocation, setSaleLocation] = useState(currentUserRole === 'seller' ? 'cordoba' : 'local'); // 'local' (BA) or 'cordoba'
     const isSeller = currentUserRole === 'seller' || ((currentUserRole === 'admin' || currentUserRole === 'leader') && assignToPartner);
+
+    const checkProductLocation = (product, currentLoc = saleLocation) => {
+        const hasCordobaStock = (product.stock_cordoba !== undefined && product.stock_cordoba !== null && product.stock_cordoba > 0);
+        const hasCordobaPrice = (product.sale_price_cordoba !== undefined && product.sale_price_cordoba !== null && product.sale_price_cordoba > 0);
+        
+        if (!hasCordobaStock && !hasCordobaPrice && currentLoc === 'cordoba') {
+            setSaleLocation('local');
+            showAlert({ 
+                type: 'warning', 
+                title: 'Cambio de Ubicación', 
+                message: `El producto "${product.name}" no tiene stock/precio en Córdoba. Se cambió a Jujuy automáticamente.` 
+            });
+            return 'local';
+        }
+        return currentLoc;
+    };
 
     // Scanner
     const [permission, requestPermission] = useCameraPermissions();
@@ -100,8 +133,36 @@ export default function NewSaleScreen({ navigation, route }) {
         requestAnimationFrame(() => {
             if (route.params?.preselectedProduct) {
                 const product = route.params.preselectedProduct;
+                const finalLoc = checkProductLocation(product, currentUserRole === 'seller' ? 'cordoba' : 'local');
                 addToCart(product, 1, selectedClient?.id);
                 navigation.setParams({ preselectedProduct: null });
+            }
+
+            if (route.params?.barcode) {
+                const scannedBarcode = route.params.barcode;
+                navigation.setParams({ barcode: null });
+                
+                const cleanScanned = String(scannedBarcode).trim().toUpperCase();
+                const product = products.find(p => 
+                    p.barcode && p.barcode.toString().trim().toUpperCase() === cleanScanned
+                );
+
+                if (product) {
+                    if (product.variants && product.variants.length > 0) {
+                        setProductModalVisible(true);
+                        initiateProductSelection(product);
+                    } else {
+                        const finalLoc = checkProductLocation(product, currentUserRole === 'seller' ? 'cordoba' : 'local');
+                        addToCart(product, 1, selectedClient?.id);
+                        showAlert({ type: 'success', title: 'Agregado', message: `${product.name} (+1)` });
+                    }
+                } else {
+                    showAlert({ 
+                        type: 'error', 
+                        title: 'No encontrado', 
+                        message: `No existe producto con código: ${scannedBarcode}` 
+                    });
+                }
             }
 
             if (route.params?.mode === 'quote') {
@@ -120,7 +181,7 @@ export default function NewSaleScreen({ navigation, route }) {
                 navigation.setParams({ autoSearch: null });
             }
         });
-    }, [route.params?.preselectedProduct, route.params?.mode, route.params?.autoSearch, route.params?.selectClientFirst]);
+    }, [route.params?.preselectedProduct, route.params?.mode, route.params?.autoSearch, route.params?.selectClientFirst, route.params?.barcode, products]);
 
     const fetchInitialData = async () => {
         const hasData = products.length > 0;
@@ -194,9 +255,10 @@ export default function NewSaleScreen({ navigation, route }) {
     };
 
     const handleBarcodeScanned = ({ data }) => {
+        if (!data) return;
         let barcodeData = data;
         // SMART QR HANDLE
-        if (data.includes('linktr.ee/digital_boost_empire')) {
+        if (data.includes('barcode=')) {
             const parts = data.split('barcode=');
             if (parts.length > 1) barcodeData = parts[1];
         }
@@ -204,8 +266,11 @@ export default function NewSaleScreen({ navigation, route }) {
         setScanned(true);
         setIsScanning(false); // Close immediately
 
-        // Find product
-        const product = products.find(p => p.barcode === barcodeData);
+        // Find product (robust clean case-insensitive match)
+        const cleanScanned = String(barcodeData).trim().toUpperCase();
+        const product = products.find(p => 
+            p.barcode && p.barcode.toString().trim().toUpperCase() === cleanScanned
+        );
 
         if (product) {
             // Check if it has variants
@@ -220,6 +285,7 @@ export default function NewSaleScreen({ navigation, route }) {
             const available = getAvailableStock(product);
             if (available > 0) {
                 // Add to cart directly (1 unit, no color)
+                checkProductLocation(product);
                 addToCart(product, 1, selectedClient?.id);
                 showAlert({ type: 'success', title: 'Agregado', message: `${product.name} (+1)` });
             } else {
@@ -237,6 +303,7 @@ export default function NewSaleScreen({ navigation, route }) {
             return;
         }
 
+        checkProductLocation(product);
         addToCart(product, tempQty, selectedClient?.id, selectedColor);
         
         setExpandedProductId(null);
@@ -383,10 +450,6 @@ export default function NewSaleScreen({ navigation, route }) {
 
     const { subtotal, total, totalProfit, commission, discount, promoDetail, manualDiscountAmt } = React.useMemo(() => calculateTotals(), [cart, selectedPromo, isLeaderSale, commissionRate, manualDiscount, manualDiscountType, commissionType, saleLocation, currentUserRole, assignToPartner]);
 
-    const [saleType, setSaleType] = useState('completed'); // completed, pending (debt), budget (quote)
-    const [pendingCheckoutType, setPendingCheckoutType] = useState('completed'); // Track the checkout type being processed
-    const [commissionType, setCommissionType] = useState('direct'); // 'direct' or 'closer'
-    const [selectClientFirstMode, setSelectClientFirstMode] = useState(false); // Track if we're selecting client before product
     
     // Ref to avoid setState async timing issues with modals
     const checkoutTypeRef = useRef('completed');
@@ -502,17 +565,6 @@ export default function NewSaleScreen({ navigation, route }) {
         return clients.filter(c => c.name.toLowerCase().includes(lowQuery));
     }, [searchQuery, clients]);
 
-    const availablePromos = React.useMemo(() => {
-        return promos.filter(p => {
-            // Global promos (no links) are always available
-            if (!p.promotion_products || p.promotion_products.length === 0) return true;
-
-            // Linked promos only if cart contains relevant items with at least min_qty?
-            // Let's show it as available if they have at least 1, so they can see they need more to activate.
-            const linkedIds = p.promotion_products.map(pp => pp.product_id);
-            return cart.some(item => linkedIds.includes(item.id));
-        });
-    }, [promos, cart]);
 
     const generateReceiptPDF = async (saleData, client, cart, docType = 'sale') => {
         try {
@@ -592,11 +644,10 @@ export default function NewSaleScreen({ navigation, route }) {
             `;
 
             const dialogTitle = isBudget ? 'Enviar Presupuesto' : 'Enviar Recibo';
-            const { uri } = await Print.printToFileAsync({ html: htmlContent });
-            await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: '.pdf', dialogTitle });
+            await printOrSharePDF(htmlContent, { dialogTitle });
         } catch (error) {
             console.log('Error generating PDF:', error);
-            showAlert({ type: 'error', title: 'Error', message: 'No se pudo generar el recibo digital.' });
+            showAlert({ type: 'error', title: 'Error', message: 'No se pudo generar el recibo digital. Detalle: ' + (error.message || error) });
         }
     };
 
@@ -639,7 +690,8 @@ export default function NewSaleScreen({ navigation, route }) {
                 manual_discount_amount: typeof manualDiscountAmt === 'number' ? manualDiscountAmt : 0,
                 manual_discount_type: manualDiscountType || 'fixed',
                 manual_discount_value: parseFloat(manualDiscount) || 0,
-                sale_location: saleLocation || 'local'
+                sale_location: saleLocation || 'local',
+                paid_at: (checkoutSaleType === 'completed' || !checkoutSaleType) ? new Date().toISOString() : null
             };
 
             const successMessage = `Total: $${total.toFixed(2)}\nCliente: ${client ? client.name : 'Anónimo'}\n\n¡Simulación finalizada sin errores!\n(No se guardó en BD real ni se modificó stock).`;
@@ -766,7 +818,8 @@ export default function NewSaleScreen({ navigation, route }) {
                 manual_discount_amount: typeof manualDiscountAmt === 'number' ? manualDiscountAmt : 0,
                 manual_discount_type: manualDiscountType || 'fixed',
                 manual_discount_value: parseFloat(manualDiscount) || 0,
-                sale_location: saleLocation || 'local'
+                sale_location: saleLocation || 'local',
+                paid_at: (checkoutSaleType === 'completed' || !checkoutSaleType) ? new Date().toISOString() : null
             };
 
             console.log('Sale payload created:', salePayload);
@@ -968,7 +1021,7 @@ export default function NewSaleScreen({ navigation, route }) {
     }
 
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
+        <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <StatusBar barStyle="light-content" />
             {renderHeader()}
 
@@ -1271,25 +1324,27 @@ export default function NewSaleScreen({ navigation, route }) {
 
             {/* BARCODE SCANNER MODAL */}
             <Modal visible={isScanning} animationType="slide">
-                <View style={{ flex: 1, backgroundColor: 'black' }}>
-                    <CameraView
-                        style={{ flex: 1 }}
-                        facing="back"
-                        onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
-                        barcodeScannerSettings={{
-                            barcodeTypes: ['qr', 'ean13', 'ean8', 'code128'],
-                        }}
-                    />
-                    <TouchableOpacity
-                        style={{ position: 'absolute', top: 50, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
-                        onPress={() => setIsScanning(false)}
-                    >
-                        <MaterialCommunityIcons name="close" size={30} color="white" />
-                    </TouchableOpacity>
-                    <View style={{ position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 }}>
-                        <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Escanea para agregar al carrito</Text>
+                <SafeAreaView style={{ flex: 1, backgroundColor: 'black' }}>
+                    <View style={{ flex: 1, backgroundColor: 'black' }}>
+                        <CameraView
+                            style={{ flex: 1 }}
+                            facing="back"
+                            onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+                            barcodeScannerSettings={{
+                                barcodeTypes: ['qr', 'ean13', 'ean8', 'code128', 'code39', 'code93', 'upc_a', 'upc_e'],
+                            }}
+                        />
+                        <TouchableOpacity
+                            style={{ position: 'absolute', top: Platform.OS === 'ios' ? 10 : 25, right: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                            onPress={() => setIsScanning(false)}
+                        >
+                            <MaterialCommunityIcons name="close" size={30} color="white" />
+                        </TouchableOpacity>
+                        <View style={{ position: 'absolute', bottom: 40, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 }}>
+                            <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Escanea para agregar al carrito</Text>
+                        </View>
                     </View>
-                </View>
+                </SafeAreaView>
             </Modal>
 
             {/* CUSTOM ALERT */}
