@@ -16,7 +16,8 @@ const ProductModal = ({
     adjustTempQty,
     initiateProductSelection,
     confirmAddToCart,
-    userRole // New prop
+    userRole, // New prop
+    onQuickCheckout
 }) => {
     const [searchQuery, setSearchQuery] = React.useState('');
 
@@ -81,10 +82,23 @@ const ProductModal = ({
                                 {!isExpanded ? (
                                     <TouchableOpacity
                                         style={styles.rowContent}
-                                        onPress={() => initiateProductSelection(item)}
+                                        onPress={() => {
+                                            if (!item.variants || item.variants.length === 0) {
+                                                confirmAddToCart(item);
+                                            } else {
+                                                initiateProductSelection(item);
+                                            }
+                                        }}
                                     >
                                         <View style={{ flex: 1, marginRight: 15 }}>
-                                            <Text style={styles.rowTitle} numberOfLines={2}>{item.name}</Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                                                <Text style={styles.rowTitle} numberOfLines={2}>{item.name}</Text>
+                                                {inCartQty > 0 && (
+                                                    <View style={styles.inCartBadge}>
+                                                        <Text style={styles.inCartBadgeText}>x{inCartQty}</Text>
+                                                    </View>
+                                                )}
+                                            </View>
                                             <Text style={[styles.rowSubtitle, { color: available <= 0 ? '#e74c3c' : '#888' }]}>
                                                 Disp: {available} {!(userRole === 'admin' || userRole === 'leader') && <Text style={{ fontSize: 9, color: '#d4af37' }}>(STOCK CBA)</Text>}
                                             </Text>
@@ -174,9 +188,23 @@ const ProductModal = ({
                         );
                     }}
                 />
-                <TouchableOpacity style={styles.finishBtn} onPress={onClose}>
-                    <Text style={styles.finishText}>Terminar Selección</Text>
-                </TouchableOpacity>
+                <View style={styles.modalFooterRow}>
+                    <TouchableOpacity style={[styles.finishBtn, { flex: 1, backgroundColor: '#222', borderWidth: 1, borderColor: '#333', marginTop: 0 }]} onPress={onClose}>
+                        <Text style={[styles.finishText, { color: '#fff' }]}>Volver</Text>
+                    </TouchableOpacity>
+                    <View style={{ width: 10 }} />
+                    <TouchableOpacity 
+                        style={[styles.finishBtn, { flex: 2, marginTop: 0 }]} 
+                        onPress={() => {
+                            onClose();
+                            if (onQuickCheckout) {
+                                setTimeout(() => onQuickCheckout(), 300);
+                            }
+                        }}
+                    >
+                        <Text style={styles.finishText}>COBRAR YA</Text>
+                    </TouchableOpacity>
+                </View>
                 </View>
             </SafeAreaView>
         </Modal>
@@ -256,7 +284,25 @@ const styles = StyleSheet.create({
     },
     variantPillText: { color: '#fff', fontSize: 13 },
     variantPillTextSelected: { color: '#000', fontWeight: 'bold' },
-    variantPillTextDisabled: { color: '#666' }
+    variantPillTextDisabled: { color: '#666' },
+    inCartBadge: {
+        backgroundColor: '#d4af3720',
+        borderColor: '#d4af37',
+        borderWidth: 0.5,
+        borderRadius: 8,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+    },
+    inCartBadgeText: {
+        color: '#d4af37',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    modalFooterRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 10,
+    },
 });
 
 export default ProductModal;

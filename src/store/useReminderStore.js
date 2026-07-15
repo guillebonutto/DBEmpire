@@ -59,31 +59,42 @@ export const useReminderStore = create((set, get) => ({
             return { reminders: newList };
         });
 
-        // Save to DB and schedule notification asynchronously
-        (async () => {
-            try {
-                await LocalDbService.saveItem('reminders', newReminder);
-                
-                let notificationId = null;
-                try {
-                    notificationId = await NotificationService.scheduleReminder(id, title, notes, dueDate);
-                } catch (e) {
-                    console.warn('[ReminderStore] Notification scheduling failed:', e);
-                }
+        let notificationId = null;
+        try {
+            notificationId = await NotificationService.scheduleReminder(id, title, notes, dueDate);
+        } catch (e) {
+            console.warn('[ReminderStore] Notification scheduling failed:', e);
+        }
 
-                if (notificationId) {
-                    const updatedReminder = { ...newReminder, notification_id: notificationId };
-                    await LocalDbService.saveItem('reminders', updatedReminder);
-                    set((state) => ({
-                        reminders: state.reminders.map(r => r.id === id ? updatedReminder : r)
-                    }));
-                }
-            } catch (err) {
-                console.error('[ReminderStore] Async save/schedule error:', err);
+        const reminderToSave = notificationId 
+            ? { ...newReminder, notification_id: notificationId }
+            : newReminder;
+
+        try {
+            await LocalDbService.saveItem('reminders', reminderToSave);
+            
+            if (notificationId) {
+                set((state) => ({
+                    reminders: state.reminders.map(r => r.id === id ? reminderToSave : r)
+                }));
             }
-        })();
-
-        return newReminder;
+            return reminderToSave;
+        } catch (err) {
+            console.error('[ReminderStore] Error saving reminder:', err);
+            // Cancel notification if DB save failed
+            if (notificationId) {
+                try {
+                    await NotificationService.cancelReminder(notificationId);
+                } catch (e) {
+                    console.warn('[ReminderStore] Error canceling notification on failure:', e);
+                }
+            }
+            // Remove from local state since save failed
+            set((state) => ({
+                reminders: state.reminders.filter(r => r.id !== id)
+            }));
+            throw err;
+        }
     },
 
     deleteReminder: async (id) => {

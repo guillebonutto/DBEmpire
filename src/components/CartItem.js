@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
-const CartItem = ({ item, onRemove, regionalPrice, onSplit, onOverride, manualOverride }) => {
+const CartItem = ({ item, onRemove, regionalPrice, onSplit, onOverride, manualOverride, onUpdateQty }) => {
     const displayPrice = regionalPrice !== undefined ? regionalPrice : item.sale_price;
 
     // Detection logic
@@ -14,8 +14,23 @@ const CartItem = ({ item, onRemove, regionalPrice, onSplit, onOverride, manualOv
                 <View style={styles.itemInfo}>
                     <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
                     <View style={styles.metaRow}>
+                        <View style={styles.qtyBadge}>
+                            <TouchableOpacity 
+                                onPress={() => onUpdateQty && onUpdateQty(item.id, item.qty - 1, item.color)} 
+                                style={styles.qtyActionBtn}
+                            >
+                                <MaterialCommunityIcons name="minus" size={14} color="#aaa" />
+                            </TouchableOpacity>
+                            <Text style={styles.qtyText}>{item.qty}</Text>
+                            <TouchableOpacity 
+                                onPress={() => onUpdateQty && onUpdateQty(item.id, item.qty + 1, item.color)} 
+                                style={styles.qtyActionBtn}
+                            >
+                                <MaterialCommunityIcons name="plus" size={14} color="#aaa" />
+                            </TouchableOpacity>
+                        </View>
                         <Text style={styles.itemMeta}>
-                            <Text style={{ fontWeight: '900', color: '#fff' }}>{item.qty}</Text> x ${displayPrice.toLocaleString('es-AR', { minimumFractionDigits: 0 })}
+                            x ${displayPrice.toLocaleString('es-AR', { minimumFractionDigits: 0 })}
                         </Text>
                         {item.color && (
                             <View style={styles.colorBadge}>
@@ -126,7 +141,33 @@ const styles = StyleSheet.create({
         backgroundColor: '#ff3b3b15', 
         justifyContent: 'center', 
         alignItems: 'center' 
-    }
+    },
+    qtyBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#151515',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#222',
+        paddingHorizontal: 4,
+        paddingVertical: 2,
+        gap: 8,
+    },
+    qtyActionBtn: {
+        width: 24,
+        height: 24,
+        borderRadius: 6,
+        backgroundColor: '#222',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    qtyText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: 'bold',
+        minWidth: 16,
+        textAlign: 'center',
+    },
 });
 
 export default CartItem;

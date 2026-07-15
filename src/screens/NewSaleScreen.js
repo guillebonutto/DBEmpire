@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView, Platform } from 'react-native'; // Added ScrollView
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, ActivityIndicator, StatusBar, TextInput, ScrollView, Platform, Vibration } from 'react-native'; // Added ScrollView
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
@@ -87,6 +87,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const [clientError, setClientError] = useState(false);
     const [creatingClient, setCreatingClient] = useState(false);
     const [isSandboxMode, setIsSandboxMode] = useState(false);
+    const [scanFeedback, setScanFeedback] = useState('');
 
     // Selection State
     const [selectedClient, setSelectedClient] = useState(null);
@@ -255,7 +256,7 @@ export default function NewSaleScreen({ navigation, route }) {
     };
 
     const handleBarcodeScanned = ({ data }) => {
-        if (!data) return;
+        if (!data || scanned) return;
         let barcodeData = data;
         // SMART QR HANDLE
         if (data.includes('barcode=')) {
@@ -263,8 +264,7 @@ export default function NewSaleScreen({ navigation, route }) {
             if (parts.length > 1) barcodeData = parts[1];
         }
 
-        setScanned(true);
-        setIsScanning(false); // Close immediately
+        setScanned(true); // Temporary lock to prevent continuous firing
 
         // Find product (robust clean case-insensitive match)
         const cleanScanned = String(barcodeData).trim().toUpperCase();
@@ -274,26 +274,41 @@ export default function NewSaleScreen({ navigation, route }) {
 
         if (product) {
             // Check if it has variants
+            let targetColor = null;
             if (product.variants && product.variants.length > 0) {
-                // Open selection modal instead of adding directly
-                setProductModalVisible(true);
-                initiateProductSelection(product);
-                return;
+                // Auto-select first variant with stock
+                const availableVariant = product.variants.find(v => (v.stock || 0) > 0);
+                if (availableVariant) {
+                    targetColor = availableVariant.color;
+                } else {
+                    targetColor = product.variants[0].color;
+                }
             }
 
             // Check stock
             const available = getAvailableStock(product);
             if (available > 0) {
-                // Add to cart directly (1 unit, no color)
+                // Add to cart directly
                 checkProductLocation(product);
-                addToCart(product, 1, selectedClient?.id);
-                showAlert({ type: 'success', title: 'Agregado', message: `${product.name} (+1)` });
+                addToCart(product, 1, selectedClient?.id, targetColor);
+                
+                // Feedback
+                Vibration.vibrate(100);
+                setScanFeedback(`Agregado: ${product.name} ${targetColor ? `(${targetColor})` : ''} (+1)`);
             } else {
-                showAlert({ type: 'warning', title: 'Sin Stock', message: `No hay stock disponible de ${product.name}` });
+                Vibration.vibrate([0, 100, 100, 100]); // Error vibration
+                setScanFeedback(`¡Sin stock!: ${product.name}`);
             }
         } else {
-            showAlert({ type: 'error', title: 'No encontrado', message: `No existe producto con código: ${barcodeData}` });
+            Vibration.vibrate([0, 100, 100, 100]); // Error vibration
+            setScanFeedback(`No encontrado: ${barcodeData}`);
         }
+
+        // Auto-clear feedback and release scanning lock after 1.2s cooldown
+        setTimeout(() => {
+            setScanFeedback('');
+            setScanned(false);
+        }, 1200);
     };
 
     const confirmAddToCart = (product) => {
@@ -1082,6 +1097,7 @@ export default function NewSaleScreen({ navigation, route }) {
                         onOverride={setManualOverride}
                         manualOverride={manualOverrides[item.id]}
                         regionalPrice={getRegionalPrice(item, saleLocation)}
+                        onUpdateQty={updateCartQty}
                     />
                 )}
                 ListEmptyComponent={
@@ -1262,6 +1278,8 @@ export default function NewSaleScreen({ navigation, route }) {
                                     return;
                                 }
                             }
+                            setScanned(false);
+                            setScanFeedback('');
                             setIsScanning(true);
                         }}
                     >
@@ -1288,6 +1306,7 @@ export default function NewSaleScreen({ navigation, route }) {
                 initiateProductSelection={initiateProductSelection}
                 confirmAddToCart={confirmAddToCart}
                 userRole={currentUserRole}
+                onQuickCheckout={() => handleCheckout('completed')}
             />
 
             {/* CLIENT SELECTION MODAL */}
@@ -1340,8 +1359,32 @@ export default function NewSaleScreen({ navigation, route }) {
                         >
                             <MaterialCommunityIcons name="close" size={30} color="white" />
                         </TouchableOpacity>
-                        <View style={{ position: 'absolute', bottom: 40, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 10 }}>
-                            <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>Escanea para agregar al carrito</Text>
+                        {/* Scanner Toast Notification */}
+                        {scanFeedback ? (
+                            <View style={styles.scannerToast}>
+                                <Text style={styles.scannerToastText}>{scanFeedback}</Text>
+                            </View>
+                        ) : null}
+
+                        {/* Scanner HUD Overlay on the bottom */}
+                        <View style={styles.scannerHUD}>
+                            <View style={styles.scannerHUDInfo}>
+                                <Text style={styles.scannerHUDLabel}>CARRITO DE ESCANEO</Text>
+                                <Text style={styles.scannerHUDTotal}>
+                                    {cart.length} {cart.length === 1 ? 'producto' : 'productos'} • Total: ${total.toLocaleString('es-AR', { minimumFractionDigits: 0 })}
+                                </Text>
+                            </View>
+                            <TouchableOpacity 
+                                style={[styles.scannerCheckoutBtn, cart.length === 0 && styles.scannerCheckoutBtnDisabled]}
+                                disabled={cart.length === 0}
+                                onPress={() => {
+                                    setIsScanning(false);
+                                    setTimeout(() => handleCheckout('completed'), 300);
+                                }}
+                            >
+                                <Text style={styles.scannerCheckoutBtnText}>COBRAR YA</Text>
+                                <MaterialCommunityIcons name="check-all" size={20} color="#000" />
+                            </TouchableOpacity>
                         </View>
                     </View>
                 </SafeAreaView>
@@ -1408,4 +1451,84 @@ const styles = StyleSheet.create({
     secBtnText: { color: '#666', fontSize: 10, fontWeight: '900' },
     floatingActionRow: { flexDirection: 'row', position: 'absolute', top: -70, right: 20, gap: 10 },
     fabBtn: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#d4af37', justifyContent: 'center', alignItems: 'center', elevation: 10, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10 },
+    scannerToast: {
+        position: 'absolute',
+        top: 80,
+        left: 20,
+        right: 20,
+        backgroundColor: '#d4af37',
+        borderRadius: 12,
+        padding: 15,
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#d4af37',
+        shadowOpacity: 0.4,
+        shadowRadius: 10,
+        elevation: 8,
+        zIndex: 9999,
+    },
+    scannerToastText: {
+        color: '#000',
+        fontSize: 16,
+        fontWeight: 'bold',
+        textAlign: 'center',
+    },
+    scannerHUD: {
+        position: 'absolute',
+        bottom: 30,
+        left: 15,
+        right: 15,
+        backgroundColor: 'rgba(5, 5, 5, 0.95)',
+        borderRadius: 16,
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderWidth: 1.5,
+        borderColor: '#d4af37',
+        shadowColor: '#000',
+        shadowOpacity: 0.6,
+        shadowRadius: 15,
+        elevation: 10,
+    },
+    scannerHUDInfo: {
+        flex: 1,
+        marginRight: 10,
+    },
+    scannerHUDLabel: {
+        color: '#d4af37',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1.5,
+        marginBottom: 2,
+    },
+    scannerHUDTotal: {
+        color: '#fff',
+        fontSize: 15,
+        fontWeight: 'bold',
+    },
+    scannerCheckoutBtn: {
+        backgroundColor: '#00ff88',
+        borderRadius: 10,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        shadowColor: '#00ff88',
+        shadowOpacity: 0.4,
+        shadowRadius: 8,
+        elevation: 5,
+    },
+    scannerCheckoutBtnDisabled: {
+        backgroundColor: '#222',
+        shadowOpacity: 0,
+        elevation: 0,
+    },
+    scannerCheckoutBtnText: {
+        color: '#000',
+        fontSize: 14,
+        fontWeight: '900',
+        letterSpacing: 0.5,
+    },
 });
