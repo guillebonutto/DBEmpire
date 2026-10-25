@@ -55,7 +55,9 @@ module.exports = {
                         "enableProguardInReleaseBuilds": true,
                         "enableShrinkResourcesInReleaseBuilds": true,
                         "extraProguardRules": "-keep class com.google.android.gms.** { *; }",
-                        "usesCleartextTraffic": true
+                        "usesCleartextTraffic": true,
+                        "buildArchs": ["arm64-v8a", "armeabi-v7a"],
+                        "enableBundleCompression": true
                     }
                 }
             ],

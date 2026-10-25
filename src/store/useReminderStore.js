@@ -1,6 +1,8 @@
 import { create } from 'zustand';
+import { supabase } from '../services/supabase';
 import { LocalDbService } from '../services/localDbService';
 import { NotificationService } from '../services/notificationService';
+import { SyncService } from '../services/syncService';
 
 export const useReminderStore = create((set, get) => ({
     reminders: [],
@@ -12,11 +14,13 @@ export const useReminderStore = create((set, get) => ({
         set({ loadingReminders: true });
         try {
             const cached = await LocalDbService.getAll('reminders');
-            if (cached) {
+            if (cached && cached.length > 0) {
                 // Sort by due_date ascending
                 const sorted = cached.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
                 set({ reminders: sorted, isInitialized: true });
             }
+            // Trigger fresh background fetch from Supabase
+            get().fetchReminders().catch(() => {});
         } catch (err) {
             console.error('[ReminderStore] Init error:', err);
         } finally {
@@ -27,25 +31,76 @@ export const useReminderStore = create((set, get) => ({
     fetchReminders: async () => {
         set({ loadingReminders: true });
         try {
-            const cached = await LocalDbService.getAll('reminders');
-            if (cached) {
-                const sorted = cached.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
-                set({ reminders: sorted });
+            // 1. Fetch fresh data from Supabase
+            const { data, error } = await supabase
+                .from('reminders')
+                .select('*')
+                .order('due_date', { ascending: true });
+
+            if (!error && data) {
+                // 2. Preserve any local pending syncs not yet in Supabase
+                let merged = [...data];
+                try {
+                    const pending = await LocalDbService.getPendingSyncs();
+                    const pendingReminders = (pending || []).filter(p => p.table_name === 'reminders');
+                    for (const pr of pendingReminders) {
+                        try {
+                            const pPayload = JSON.parse(pr.payload);
+                            if (pr.action === 'INSERT' && !merged.some(m => m.id === pPayload.id)) {
+                                merged.push(pPayload);
+                            } else if (pr.action === 'DELETE') {
+                                merged = merged.filter(m => m.id !== pPayload.id);
+                            } else if (pr.action === 'UPDATE') {
+                                merged = merged.map(m => m.id === pPayload.id ? { ...m, ...pPayload } : m);
+                            }
+                        } catch (_) {}
+                    }
+                } catch (_) {}
+
+                const sorted = merged.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+                set({ reminders: sorted, isInitialized: true });
+                await LocalDbService.replaceFullTable('reminders', sorted);
+            } else {
+                // Fallback to local SQLite if Supabase returns error / offline
+                const cached = await LocalDbService.getAll('reminders');
+                if (cached) {
+                    const sorted = cached.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+                    set({ reminders: sorted, isInitialized: true });
+                }
             }
         } catch (err) {
             console.error('[ReminderStore] Fetch error:', err);
+            const cached = await LocalDbService.getAll('reminders');
+            if (cached) {
+                const sorted = cached.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+                set({ reminders: sorted, isInitialized: true });
+            }
         } finally {
             set({ loadingReminders: false });
         }
     },
 
     addReminder: async (title, notes, dueDate) => {
-        const id = 'rem_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+        const generateUUID = () => {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        };
+        const id = generateUUID();
         
+        const rawNotes = typeof notes === 'object' && notes !== null
+            ? JSON.stringify(notes)
+            : (notes || '').trim();
+
+        const notifNotes = typeof notes === 'object' && notes !== null
+            ? (notes.stage || notes.text || '')
+            : rawNotes;
+
         const newReminder = {
             id,
             title: title.trim(),
-            notes: (notes || '').trim(),
+            notes: rawNotes,
             due_date: dueDate,
             completed: 0,
             notification_id: ''
@@ -61,7 +116,7 @@ export const useReminderStore = create((set, get) => ({
 
         let notificationId = null;
         try {
-            notificationId = await NotificationService.scheduleReminder(id, title, notes, dueDate);
+            notificationId = await NotificationService.scheduleReminder(id, title, notifNotes, dueDate);
         } catch (e) {
             console.warn('[ReminderStore] Notification scheduling failed:', e);
         }
@@ -71,7 +126,7 @@ export const useReminderStore = create((set, get) => ({
             : newReminder;
 
         try {
-            await LocalDbService.saveItem('reminders', reminderToSave);
+            await SyncService.queueAction('reminder', reminderToSave, {}, 'INSERT');
             
             if (notificationId) {
                 set((state) => ({
@@ -97,6 +152,62 @@ export const useReminderStore = create((set, get) => ({
         }
     },
 
+    updateReminder: async (id, title, notes, dueDate) => {
+        const item = get().reminders.find(r => r.id === id);
+        if (!item) return;
+
+        const rawNotes = typeof notes === 'object' && notes !== null
+            ? JSON.stringify(notes)
+            : (notes || '').trim();
+
+        const notifNotes = typeof notes === 'object' && notes !== null
+            ? (notes.stage || notes.text || '')
+            : rawNotes;
+
+        let notificationId = item.notification_id;
+
+        // If date changed or title/notes changed and it's active, reschedule
+        if (item.completed === 0 && new Date(dueDate).getTime() > Date.now()) {
+            if (notificationId) {
+                try {
+                    await NotificationService.cancelReminder(notificationId);
+                } catch (e) {
+                    console.warn('[ReminderStore] Error canceling old notification on update:', e);
+                }
+            }
+            try {
+                notificationId = await NotificationService.scheduleReminder(
+                    id,
+                    title.trim(),
+                    notifNotes,
+                    dueDate
+                );
+            } catch (e) {
+                console.warn('[ReminderStore] Notification rescheduling failed:', e);
+                notificationId = '';
+            }
+        }
+
+        const updatedReminder = {
+            ...item,
+            title: title.trim(),
+            notes: rawNotes,
+            due_date: dueDate,
+            notification_id: notificationId
+        };
+
+        try {
+            await SyncService.queueAction('reminder', updatedReminder, {}, 'INSERT');
+            set((state) => ({
+                reminders: state.reminders.map(r => r.id === id ? updatedReminder : r)
+            }));
+            return updatedReminder;
+        } catch (err) {
+            console.error('[ReminderStore] Error updating reminder:', err);
+            throw err;
+        }
+    },
+
     deleteReminder: async (id) => {
         const item = get().reminders.find(r => r.id === id);
         if (!item) return;
@@ -111,7 +222,7 @@ export const useReminderStore = create((set, get) => ({
         }
 
         try {
-            await LocalDbService.deleteItem('reminders', id);
+            await SyncService.queueAction('reminder', { id }, {}, 'DELETE');
             set((state) => ({
                 reminders: state.reminders.filter(r => r.id !== id)
             }));
@@ -157,7 +268,7 @@ export const useReminderStore = create((set, get) => ({
         };
 
         try {
-            await LocalDbService.saveItem('reminders', updatedReminder);
+            await SyncService.queueAction('reminder', updatedReminder, {}, 'INSERT');
             set((state) => ({
                 reminders: state.reminders.map(r => r.id === id ? updatedReminder : r)
             }));

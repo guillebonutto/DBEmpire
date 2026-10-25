@@ -1,48 +1,59 @@
-
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator, StatusBar, ScrollView, TextInput, Clipboard, Linking, Modal } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator, StatusBar, ScrollView, TextInput, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GlobalDataService } from '../services/GlobalDataService';
+import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFinanceStore } from '../store/useFinanceStore';
+import { useProductStore } from '../store/useProductStore';
+import { useClientStore } from '../store/useClientStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
 
 export default function TransfersScreen({ navigation }) {
     const [transfers, setTransfers] = useState([]);
     const [loading, setLoading] = useState(false);
     const [trackingModal, setTrackingModal] = useState({ visible: false, number: '' });
 
-    useEffect(() => {
-        fetchTransfers();
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            fetchTransfers();
+        }, [])
+    );
 
     const fetchTransfers = async () => {
         setLoading(true);
         try {
-            // Buscamos socios de Córdoba de forma flexible
-            const { data: clients } = await supabase
-                .from('clients')
-                .select('id, name')
-                .or('name.ilike.%Cordoba%,name.ilike.%CBA%,name.ilike.%Socio%,name.ilike.%Nico%');
+            const [sales, clients, saleItems, products] = await Promise.all([
+                LocalDbService.getAll('sales'),
+                LocalDbService.getAll('clients'),
+                LocalDbService.getAll('sale_items'),
+                LocalDbService.getAll('products')
+            ]);
 
-            if(!clients || clients.length === 0) { 
-                setTransfers([]);
-                return; 
-            }
+            const clientMap = (clients || []).reduce((acc, c) => ({ ...acc, [c.id]: c }), {});
+            const prodMap = (products || []).reduce((acc, p) => ({ ...acc, [p.id]: p }), {});
 
-            const clientIds = clients.map(c => c.id);
+            // Filter transfers
+            const transferSales = (sales || []).filter(s => {
+                const clientName = clientMap[s.client_id]?.name?.toLowerCase() || '';
+                const isSocio = clientName.includes('cordoba') || clientName.includes('cba') || clientName.includes('socio') || clientName.includes('nico');
+                const isTransferStatus = s.status === 'ready_to_ship' || s.status === 'in_transit' || s.status === 'transfer_completed';
+                return isSocio || isTransferStatus;
+            });
 
-            const { data, error } = await supabase
-                .from('sales')
-                .select('*, sale_items(*, products(*))')
-                .in('client_id', clientIds)
-                .order('created_at', { ascending: false });
+            const enriched = transferSales.map(s => {
+                const items = (saleItems || []).filter(it => it.sale_id === s.id).map(it => ({
+                    ...it,
+                    products: prodMap[it.product_id] || { name: 'Producto' }
+                }));
+                return { ...s, sale_items: items };
+            });
 
-            if (error) throw error;
-            setTransfers(data || []);
+            setTransfers(enriched);
         } catch (e) {
-            console.log('Error fetching transfers:', e);
+            console.log('Error fetching transfers offline:', e);
         } finally {
             setLoading(false);
         }
@@ -70,24 +81,36 @@ export default function TransfersScreen({ navigation }) {
                     onPress: async () => {
                         setLoading(true);
                         try {
-                            const { error } = await supabase.from('sales').update({ status: nextStatus }).eq('id', saleId);
-                            if (error) throw error;
+                            const currentSale = (await LocalDbService.getAll('sales'))?.find(s => s.id === saleId) || { id: saleId };
+                            const updatedSale = { ...currentSale, status: nextStatus };
 
-                            // SI SE RECIBE, SUMAMOS AL STOCK DE CÓRDOBA
+                            // 1. Optimistic Sale Update
+                            await LocalDbService.saveItem('sales', updatedSale);
+                            await SyncService.queueAction('sales', updatedSale, {}, 'UPDATE');
+
+                            // 2. If received, add to Cordoba stock
                             if (nextStatus === 'transfer_completed') {
-                                // CONSULTA DE VERDAD ABSOLUTA: Traemos los items directo de la DB por seguridad
-                                const { data: items, error: itemsErr } = await supabase.from('sale_items').select('*').eq('sale_id', saleId);
-                                if (itemsErr) throw itemsErr;
+                                const allItems = await LocalDbService.getAll('sale_items');
+                                const allProds = await LocalDbService.getAll('products');
+                                const items = (allItems || []).filter(i => i.sale_id === saleId);
 
-                                for (const item of (items || [])) {
-                                    // Traer stock actual de ese producto
-                                    const { data: p } = await supabase.from('products').select('stock_cordoba').eq('id', item.product_id).single();
+                                for (const item of items) {
+                                    const p = (allProds || []).find(prod => prod.id === item.product_id);
                                     if (p) {
-                                        const newCordobaStock = (p.stock_cordoba || 0) + item.quantity;
-                                        await supabase.from('products').update({ stock_cordoba: newCordobaStock }).eq('id', item.product_id);
+                                        const newCordobaStock = (p.stock_cordoba || 0) + (parseInt(item.quantity) || 1);
+                                        const updatedProd = {
+                                            ...p,
+                                            stock_cordoba: newCordobaStock,
+                                            current_stock: (p.stock_local || 0) + newCordobaStock
+                                        };
+                                        await LocalDbService.saveItem('products', updatedProd);
+                                        await SyncService.queueAction('products', updatedProd, {}, 'UPDATE');
                                     }
                                 }
+                                useProductStore.getState().fetchProducts();
                             }
+
+                            SyncService.syncPending().catch(e => console.log('Silent transfer sync:', e.message));
 
                             fetchTransfers();
                             Alert.alert('✅ Éxito', `El envío ahora figura como ${nextStatus.toUpperCase()}`);
@@ -104,8 +127,13 @@ export default function TransfersScreen({ navigation }) {
 
     const handleUpdateTracking = async (saleId, trackingNumber) => {
         try {
-            const { error } = await supabase.from('sales').update({ tracking_number: trackingNumber }).eq('id', saleId);
-            if (error) throw error;
+            const currentSale = (await LocalDbService.getAll('sales'))?.find(s => s.id === saleId) || { id: saleId };
+            const updatedSale = { ...currentSale, tracking_number: trackingNumber };
+
+            await LocalDbService.saveItem('sales', updatedSale);
+            await SyncService.queueAction('sales', updatedSale, {}, 'UPDATE');
+            SyncService.syncPending().catch(e => console.log('Silent tracking sync:', e.message));
+
             fetchTransfers();
             Alert.alert('✅ Éxito', 'Número de seguimiento actualizado.');
         } catch (e) {

@@ -5,6 +5,11 @@ import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
+import { useFinanceStore } from '../store/useFinanceStore';
+import { useClientStore } from '../store/useClientStore';
+import { SyncService } from '../services/syncService';
+import { LocalDbService } from '../services/localDbService';
+
 export default function ClientDetailScreen({ route, navigation }) {
     const { client } = route.params;
     const [sales, setSales] = useState([]);
@@ -26,16 +31,31 @@ export default function ClientDetailScreen({ route, navigation }) {
 
     const fetchClientSales = async () => {
         try {
-            const { data, error } = await supabase
-                .from('sales')
-                .select('*, sale_items(*, products(name))')
-                .eq('client_id', currentClient.id)
-                .order('created_at', { ascending: false });
+            // 1. Try memory store first
+            const allSales = useFinanceStore.getState().sales || [];
+            let clientSales = allSales.filter(s => s.client_id === currentClient.id);
 
-            if (error) throw error;
-            setSales(data || []);
+            if (clientSales.length === 0) {
+                const localSales = await LocalDbService.getAll('sales');
+                clientSales = (localSales || []).filter(s => s.client_id === currentClient.id);
+            }
+
+            // Get items for enriched display
+            const allItems = await LocalDbService.getAll('sale_items');
+            const allProducts = await LocalDbService.getAll('products');
+            const prodMap = (allProducts || []).reduce((acc, p) => ({ ...acc, [p.id]: p }), {});
+
+            const enrichedSales = clientSales.map(s => {
+                const items = (allItems || []).filter(it => it.sale_id === s.id).map(it => ({
+                    ...it,
+                    products: prodMap[it.product_id] || { name: 'Producto' }
+                }));
+                return { ...s, sale_items: items };
+            });
+
+            setSales(enrichedSales);
         } catch (err) {
-            console.log(err);
+            console.log('Error fetching client sales offline-first:', err);
         } finally {
             setLoading(false);
         }
@@ -49,23 +69,25 @@ export default function ClientDetailScreen({ route, navigation }) {
 
         setUpdating(true);
         try {
-            const { error } = await supabase
-                .from('clients')
-                .update({
-                    name: editData.name,
-                    phone: editData.phone,
-                    notes: editData.notes
-                })
-                .eq('id', currentClient.id);
+            const updatedClient = {
+                ...currentClient,
+                name: editData.name.trim(),
+                phone: editData.phone?.trim() || '',
+                notes: editData.notes?.trim() || ''
+            };
 
-            if (error) throw error;
+            // 1. Optimistic SQLite + Zustand update
+            await useClientStore.getState().updateClientLocally(updatedClient);
 
-            setCurrentClient({ ...currentClient, ...editData });
+            // 2. Queue for remote sync
+            await SyncService.queueAction('client', updatedClient, {}, 'UPDATE');
+
+            setCurrentClient(updatedClient);
             setEditModalVisible(false);
             Alert.alert('Éxito', 'Datos del cliente actualizados');
         } catch (err) {
             console.log('Update error:', err);
-            Alert.alert('Error', 'No se pudieron actualizar los datos');
+            Alert.alert('Error', 'No se pudieron actualizar los datos: ' + err.message);
         } finally {
             setUpdating(false);
         }

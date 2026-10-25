@@ -15,6 +15,11 @@ import { captureRef } from 'react-native-view-shot';
 import { IdentitySection, PriceSection, StockSection, OperativeSection, VariantsSection, OverheadSection } from '../components/ProductFormSections';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
+import { useProductStore } from '../store/useProductStore';
+import { useFinanceStore } from '../store/useFinanceStore';
+import { SyncService } from '../services/syncService';
+import { LocalDbService } from '../services/localDbService';
+import { ImageMapping } from '../assets/image_mapping';
 
 const calculateEan8CheckDigit = (digits) => {
     const d = digits.split('').map(Number);
@@ -34,11 +39,14 @@ export default function AddProductScreen({ navigation, route }) {
     const [loading, setLoading] = useState(false);
     const labelRef = useRef(null);
     const labelGridRef = useRef(null);
+    const labelGrid2xRef = useRef(null);
 
     useEffect(() => {
         requestPermission(); // Warm up camera
     }, []);
-    const [image, setImage] = useState(route.params?.scannedImage || null);
+    const initialProductImage = productToEdit?.image_url || (productToEdit?.id && ImageMapping[productToEdit.id]) || route.params?.scannedImage || null;
+    const [image, setImage] = useState(initialProductImage);
+    const [showImagePickerModal, setShowImagePickerModal] = useState(false);
 
     // Scanner State
     const [permission, requestPermission] = useCameraPermissions();
@@ -345,8 +353,9 @@ export default function AddProductScreen({ navigation, route }) {
                 setOverheadInternet(productToEdit.internet_cost?.toString() || '');
                 setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
                 setVariants(Array.isArray(productToEdit.variants) ? productToEdit.variants : []);
-                if (productToEdit.image_url) {
-                    setImage(productToEdit.image_url);
+                const existingImg = productToEdit.image_url || (productToEdit.id && ImageMapping[productToEdit.id]) || null;
+                if (existingImg) {
+                    setImage(existingImg);
                 }
             } catch (err) {
                 console.error('Error initializing product data:', err);
@@ -394,16 +403,52 @@ export default function AddProductScreen({ navigation, route }) {
     };
 
     const pickImage = async () => {
-        let result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.5,
-        });
+        try {
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permiso Requerido', 'Se necesita acceso a la galería para seleccionar una imagen.');
+                return;
+            }
+            let result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.7,
+            });
 
-        if (!result.canceled) {
-            setImage(result.assets[0].uri);
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                setImage(result.assets[0].uri);
+            }
+        } catch (error) {
+            console.error('Error picking image from library:', error);
+            Alert.alert('Error', 'No se pudo seleccionar la imagen de la galería.');
         }
+    };
+
+    const takePhoto = async () => {
+        try {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permiso Requerido', 'Se necesita acceso a la cámara para tomar fotos.');
+                return;
+            }
+            let result = await ImagePicker.launchCameraAsync({
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.7,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                setImage(result.assets[0].uri);
+            }
+        } catch (error) {
+            console.error('Error taking photo:', error);
+            Alert.alert('Error', 'No se pudo tomar la foto con la cámara.');
+        }
+    };
+
+    const handleSelectImageSource = () => {
+        setShowImagePickerModal(true);
     };
 
     const uploadImage = async (uri) => {
@@ -556,7 +601,7 @@ export default function AddProductScreen({ navigation, route }) {
         try {
             let finalImageUrl = image;
 
-            if (image && !image.startsWith('http')) {
+            if (image && typeof image === 'string' && !image.startsWith('http')) {
                 const uploadedUrl = await uploadImage(image);
                 if (uploadedUrl) {
                     finalImageUrl = uploadedUrl;
@@ -564,6 +609,10 @@ export default function AddProductScreen({ navigation, route }) {
                     Alert.alert('Advertencia', 'No se pudo subir la imagen. Se guardará sin foto nueva.');
                     finalImageUrl = productToEdit?.image_url || null;
                 }
+            } else if (typeof image === 'number') {
+                finalImageUrl = productToEdit?.image_url || null;
+            } else if (!image) {
+                finalImageUrl = null;
             }
 
             let finalDescription = formData.description;
@@ -589,51 +638,59 @@ export default function AddProductScreen({ navigation, route }) {
                 is_packaging: !!formData.is_packaging
             };
 
-            let productId = productToEdit?.id;
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
+            let productId = productToEdit?.id || generateUUID();
             let stockDifference = 0;
             let costPrice = overrideCost !== null ? overrideCost : (parseFloat(formData.cost_price) || 0);
 
             if (isLiquidation && productToEdit) {
                 const oldStockLocal = parseInt(productToEdit.stock_local) || 0;
                 const oldStockCordoba = parseInt(productToEdit.stock_cordoba) || 0;
-                const { error: updateError } = await supabase
-                    .from('products')
-                    .update({
-                        name: `${productToEdit.name} (LIQUIDACIÓN)`,
-                        barcode: `LIQ-${productToEdit.barcode || Date.now()}`,
-                        sale_price: productToEdit.sale_price,
-                        stock_local: oldStockLocal,
-                        stock_cordoba: oldStockCordoba,
-                        current_stock: oldStockLocal + oldStockCordoba,
-                        active: true
-                    })
-                    .eq('id', productToEdit.id);
+                const updatedOldProd = {
+                    ...productToEdit,
+                    name: `${productToEdit.name} (LIQUIDACIÓN)`,
+                    barcode: `LIQ-${productToEdit.barcode || Date.now()}`,
+                    sale_price: productToEdit.sale_price,
+                    stock_local: oldStockLocal,
+                    stock_cordoba: oldStockCordoba,
+                    current_stock: oldStockLocal + oldStockCordoba,
+                    active: true
+                };
 
-                if (updateError) throw updateError;
+                await LocalDbService.saveItem('products', updatedOldProd);
+                await SyncService.queueAction('products', updatedOldProd, {}, 'UPDATE');
 
                 const newTotalStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                 const oldTotalStock = oldStockLocal + oldStockCordoba;
                 const newStockOnly = newTotalStock - oldTotalStock;
                 stockDifference = newStockOnly;
 
-                const { data: newProd, error: insertError } = await supabase
-                    .from('products')
-                    .insert([{
-                        ...basePayload,
-                        name: formData.name,
-                        current_stock: newStockOnly,
-                        barcode: formData.barcode?.trim() || null
-                    }])
-                    .select()
-                    .single();
+                productId = generateUUID();
+                const newProdPayload = {
+                    ...basePayload,
+                    id: productId,
+                    name: formData.name,
+                    current_stock: newStockOnly,
+                    barcode: formData.barcode?.trim() || null
+                };
 
-                if (insertError) throw insertError;
-                if (newProd) productId = newProd.id;
+                await LocalDbService.saveItem('products', newProdPayload);
+                await SyncService.queueAction('products', newProdPayload, {}, 'INSERT');
+
+                // Update Zustand products
+                useProductStore.setState(state => ({
+                    products: state.products.map(p => p.id === productToEdit.id ? updatedOldProd : p).concat([newProdPayload])
+                }));
 
                 Alert.alert('Liquidación Exitosa', 'Se ha separado el stock antiguo como "Liquidación" y creado el nuevo ingreso.');
             } else {
                 const productPayload = {
                     ...basePayload,
+                    id: productId,
                     name: formData.name,
                     stock_local: parseInt(formData.stock_local) || 0,
                     stock_cordoba: parseInt(formData.stock_cordoba) || 0,
@@ -642,11 +699,11 @@ export default function AddProductScreen({ navigation, route }) {
                 };
 
                 if (productToEdit) {
-                    const { error: updateError } = await supabase
-                        .from('products')
-                        .update(productPayload)
-                        .eq('id', productToEdit.id);
-                    if (updateError) throw updateError;
+                    await LocalDbService.saveItem('products', productPayload);
+                    await SyncService.queueAction('products', productPayload, {}, 'UPDATE');
+                    useProductStore.setState(state => ({
+                        products: state.products.map(p => p.id === productId ? { ...p, ...productPayload } : p)
+                    }));
 
                     const oldStock = (parseInt(productToEdit.stock_local) || 0) + (parseInt(productToEdit.stock_cordoba) || 0);
                     const newStock = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
@@ -654,20 +711,17 @@ export default function AddProductScreen({ navigation, route }) {
                         stockDifference = newStock - oldStock;
                     }
                 } else {
-                    const { data: newProd, error: insertError } = await supabase
-                        .from('products')
-                        .insert([productPayload])
-                        .select()
-                        .single();
-                    if (insertError) throw insertError;
-                    if (newProd) productId = newProd.id;
+                    await LocalDbService.saveItem('products', productPayload);
+                    await SyncService.queueAction('products', productPayload, {}, 'INSERT');
+                    useProductStore.setState(state => ({
+                        products: [productPayload, ...state.products.filter(p => p.id !== productId)]
+                    }));
 
                     stockDifference = (parseInt(formData.stock_local) || 0) + (parseInt(formData.stock_cordoba) || 0);
                 }
             }
 
             // --- AUTO EXPENSE & ORDER GENERATION ---
-            // Only runs when manually adding stock (not in Wizard Mode), never on manual edits.
             if (stockDifference > 0 && costPrice > 0 && !isWizardMode && !isBundle) {
                 try {
                     const oldVariants = Array.isArray(productToEdit?.variants) ? productToEdit.variants : [];
@@ -688,59 +742,73 @@ export default function AddProductScreen({ navigation, route }) {
                     const totalExpenseAmount = stockDifference * costPrice;
                     const details = additions.length > 0 ? additions : [{ color: 'General', qty: stockDifference }];
                     const orderDateStr = route.params?.originalOrderDate || new Date().toISOString();
+                    const autoExpenseId = generateUUID();
+                    const autoOrderId = generateUUID();
 
-                    await supabase.from('expenses').insert({
+                    const autoExpense = {
+                        id: autoExpenseId,
                         description: `Inventario: ${formData.name}${additions.length > 0 ? ' (Color Mix)' : ''} (x${stockDifference})`,
                         amount: totalExpenseAmount,
                         category: 'Inventario',
                         product_id: productId,
                         quantity: stockDifference,
-                        details: details,
+                        details: JSON.stringify(details),
                         created_at: orderDateStr
-                    });
+                    };
+
+                    useFinanceStore.getState().addExpenseLocal(autoExpense);
+                    await LocalDbService.saveItem('expenses', autoExpense);
+                    await SyncService.queueAction('expenses', autoExpense, {}, 'INSERT');
 
                     // 2. Create Supplier Order (Auto-generated)
-                    const { data: orderData, error: orderError } = await supabase
-                        .from('supplier_orders')
-                        .insert({
-                            provider_name: formData.provider || 'Sin Proveedor',
-                            items_description: `Ingreso Manual: ${formData.name} (x${stockDifference})`,
-                            total_cost: totalExpenseAmount,
-                            status: 'received',
-                            installments_total: 1,
-                            installments_paid: 1, // Already paid if it's an auto-expense
-                            created_at: orderDateStr,
-                            received_at: orderDateStr
-                        })
-                        .select()
-                        .single();
+                    const autoOrder = {
+                        id: autoOrderId,
+                        provider_name: formData.provider || 'Sin Proveedor',
+                        items_description: `Ingreso Manual: ${formData.name} (x${stockDifference})`,
+                        total_cost: totalExpenseAmount,
+                        status: 'received',
+                        installments_total: 1,
+                        installments_paid: 1,
+                        created_at: orderDateStr,
+                        received_at: orderDateStr
+                    };
 
-                    if (!orderError && orderData && productId) {
-                        // 3. Link Item (Detailing variants if possible)
-                        if (additions.length > 0) {
-                            for (const add of additions) {
-                                await supabase.from('supplier_order_items').insert({
-                                    supplier_order_id: orderData.id,
-                                    product_id: productId,
-                                    quantity: add.qty,
-                                    cost_per_unit: costPrice,
-                                    color: add.color
-                                });
-                            }
-                        } else {
-                            await supabase.from('supplier_order_items').insert({
-                                supplier_order_id: orderData.id,
+                    useFinanceStore.getState().addSupplierOrderLocal(autoOrder);
+                    await LocalDbService.saveItem('supplier_orders', autoOrder);
+                    await SyncService.queueAction('supplier_orders', autoOrder, {}, 'INSERT');
+
+                    // 3. Link Items
+                    if (additions.length > 0) {
+                        for (const add of additions) {
+                            const orderItem = {
+                                id: generateUUID(),
+                                supplier_order_id: autoOrderId,
                                 product_id: productId,
-                                quantity: stockDifference,
-                                cost_per_unit: costPrice
-                            });
+                                quantity: add.qty,
+                                cost_per_unit: costPrice,
+                                color: add.color
+                            };
+                            await LocalDbService.saveItem('supplier_order_items', orderItem);
+                            await SyncService.queueAction('supplier_order_items', orderItem, {}, 'INSERT');
                         }
+                    } else {
+                        const orderItem = {
+                            id: generateUUID(),
+                            supplier_order_id: autoOrderId,
+                            product_id: productId,
+                            quantity: stockDifference,
+                            cost_per_unit: costPrice
+                        };
+                        await LocalDbService.saveItem('supplier_order_items', orderItem);
+                        await SyncService.queueAction('supplier_order_items', orderItem, {}, 'INSERT');
                     }
                 } catch (expErr) {
                     console.log('Auto-expense error:', expErr);
-                    Alert.alert('Nota', 'Producto guardado, pero falló el registro automático del gasto detalle.');
                 }
             }
+
+            // Silently sync background
+            SyncService.syncPending().catch(e => console.log('Silent sync product background:', e.message));
             // -------------------------------
 
             if (!isLiquidation) {
@@ -974,6 +1042,31 @@ export default function AddProductScreen({ navigation, route }) {
         }
     };
 
+    const handlePrintBarcodeGrid2x = async () => {
+        if (!formData.barcode) {
+            Alert.alert('Error', 'No hay código de barras para imprimir.');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            // Wait to ensure cached images load if recently changed
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const uri = await captureRef(labelGrid2xRef, {
+                format: 'jpg',
+                quality: 1.0,
+            });
+
+            await Sharing.shareAsync(uri);
+        } catch (error) {
+            console.error('Error printing barcode grid 2x image:', error);
+            Alert.alert('Error', 'No se pudo generar la imagen de la grilla de 2 etiquetas.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const renderWizardHeader = () => {
         if (!isWizardMode) return null;
         const current = (route.params.importIndex || 0) + 1;
@@ -996,15 +1089,37 @@ export default function AddProductScreen({ navigation, route }) {
         <View style={{ flex: 1, backgroundColor: '#000' }}>
             <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
             <StatusBar barStyle="light-content" />
-            <SafeAreaView style={styles.safe} edges={['top']}>{renderWizardHeader()}</SafeAreaView>
+            <SafeAreaView style={styles.safe} edges={['top']}>
+                {renderWizardHeader() || (
+                    <View style={styles.screenHeader}>
+                        <TouchableOpacity 
+                            style={styles.backButton} 
+                            onPress={() => navigation.goBack()}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                            <MaterialCommunityIcons name="arrow-left" size={24} color="#d4af37" />
+                        </TouchableOpacity>
+                        <View style={{ flex: 1, marginLeft: 14 }}>
+                            <Text style={styles.screenHeaderSubtitle}>
+                                {productToEdit ? 'GESTIÓN DE INVENTARIO' : 'NUEVO INGRESO'}
+                            </Text>
+                            <Text style={styles.screenHeaderTitle}>
+                                {productToEdit ? 'EDITAR PRODUCTO' : 'AÑADIR PRODUCTO'}
+                            </Text>
+                        </View>
+                    </View>
+                )}
+            </SafeAreaView>
             
             <IdentitySection 
                 formData={formData} 
                 handleChange={handleChange} 
                 image={image} 
-                onPickImage={pickImage} 
+                onPickImage={handleSelectImageSource} 
+                onRemoveImage={() => setImage(null)}
                 onGenerateBarcodeFromName={generateBarcodeFromName}
                 onPrintBarcode={handlePrintBarcode}
+                onPrintBarcode2x={handlePrintBarcodeGrid2x}
                 onPrintBarcodeGrid={handlePrintBarcodeGrid}
                 onScanBarcode={async () => {
                     if (permission && !permission.granted) {
@@ -1061,7 +1176,110 @@ export default function AddProductScreen({ navigation, route }) {
                 {loading ? <ActivityIndicator color="white" /> : <Text style={styles.saveButtonText}><Text>{productToEdit ? 'ACTUALIZAR PRODUCTO' : 'GUARDAR PRODUCTO IMPERIAL'}</Text></Text>}
             </TouchableOpacity>
 
+            {/* Modal Imperial de Foto de Producto */}
+            <Modal
+                visible={showImagePickerModal}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowImagePickerModal(false)}
+            >
+                <TouchableOpacity 
+                    style={styles.modalOverlay} 
+                    activeOpacity={1} 
+                    onPress={() => setShowImagePickerModal(false)}
+                >
+                    <TouchableOpacity 
+                        style={styles.imagePickerModalContent} 
+                        activeOpacity={1}
+                        onPress={(e) => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <View style={styles.imagePickerModalHeader}>
+                            <View style={styles.imagePickerModalIconBox}>
+                                <MaterialCommunityIcons name="image-edit" size={24} color="#d4af37" />
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 14 }}>
+                                <Text style={styles.imagePickerModalTitle}>FOTO DEL PRODUCTO</Text>
+                                <Text style={styles.imagePickerModalSubtitle}>Selecciona una opción para la imagen</Text>
+                            </View>
+                            <TouchableOpacity 
+                                style={styles.imagePickerModalCloseBtn}
+                                onPress={() => setShowImagePickerModal(false)}
+                            >
+                                <MaterialCommunityIcons name="close" size={20} color="#888" />
+                            </TouchableOpacity>
+                        </View>
 
+                        {/* Options */}
+                        <View style={styles.imagePickerModalBody}>
+                            <TouchableOpacity 
+                                style={styles.imagePickerOptionCard}
+                                onPress={() => {
+                                    setShowImagePickerModal(false);
+                                    takePhoto();
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <View style={[styles.imagePickerOptionIconBox, { backgroundColor: '#d4af3718' }]}>
+                                    <MaterialCommunityIcons name="camera" size={24} color="#d4af37" />
+                                </View>
+                                <View style={{ flex: 1, marginLeft: 14 }}>
+                                    <Text style={styles.imagePickerOptionTitle}>Tomar Foto con Cámara</Text>
+                                    <Text style={styles.imagePickerOptionSubtitle}>Capturá el producto ahora mismo</Text>
+                                </View>
+                                <MaterialCommunityIcons name="chevron-right" size={20} color="#444" />
+                            </TouchableOpacity>
+
+                            <TouchableOpacity 
+                                style={styles.imagePickerOptionCard}
+                                onPress={() => {
+                                    setShowImagePickerModal(false);
+                                    pickImage();
+                                }}
+                                activeOpacity={0.7}
+                            >
+                                <View style={[styles.imagePickerOptionIconBox, { backgroundColor: '#3498db18' }]}>
+                                    <MaterialCommunityIcons name="image-multiple" size={24} color="#3498db" />
+                                </View>
+                                <View style={{ flex: 1, marginLeft: 14 }}>
+                                    <Text style={styles.imagePickerOptionTitle}>Elegir de la Galería</Text>
+                                    <Text style={styles.imagePickerOptionSubtitle}>Seleccioná fotos guardadas</Text>
+                                </View>
+                                <MaterialCommunityIcons name="chevron-right" size={20} color="#444" />
+                            </TouchableOpacity>
+
+                            {image ? (
+                                <TouchableOpacity 
+                                    style={[styles.imagePickerOptionCard, { borderColor: '#e74c3c35' }]}
+                                    onPress={() => {
+                                        setShowImagePickerModal(false);
+                                        setImage(null);
+                                    }}
+                                    activeOpacity={0.7}
+                                >
+                                    <View style={[styles.imagePickerOptionIconBox, { backgroundColor: '#e74c3c18' }]}>
+                                        <MaterialCommunityIcons name="trash-can-outline" size={24} color="#e74c3c" />
+                                    </View>
+                                    <View style={{ flex: 1, marginLeft: 14 }}>
+                                        <Text style={[styles.imagePickerOptionTitle, { color: '#e74c3c' }]}>Eliminar Imagen</Text>
+                                        <Text style={styles.imagePickerOptionSubtitle}>Quitar la foto actual del producto</Text>
+                                    </View>
+                                    <MaterialCommunityIcons name="chevron-right" size={20} color="#e74c3c60" />
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+
+                        {/* Cancel Button */}
+                        <TouchableOpacity 
+                            style={styles.imagePickerCancelBtn}
+                            onPress={() => setShowImagePickerModal(false)}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.imagePickerCancelBtnText}>CANCELAR</Text>
+                        </TouchableOpacity>
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </Modal>
 
             {/* CRM MATCH MODAL */}
             <Modal
@@ -1833,6 +2051,56 @@ export default function AddProductScreen({ navigation, route }) {
                 </View>
             </View>
 
+            {/* Hidden view for capturing 2x1 grid of 2 barcodes (58x47mm) */}
+            <View 
+                collapsable={false}
+                ref={labelGrid2xRef} 
+                style={{ 
+                    position: 'absolute', 
+                    left: -9999, 
+                    top: -9999, 
+                    width: 580, 
+                    height: 470, 
+                    backgroundColor: '#ffffff', 
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    paddingVertical: 20,
+                    paddingHorizontal: 15,
+                }}
+            >
+                {/* Left Barcode */}
+                <View style={{ width: '46%', height: '80%', justifyContent: 'center', alignItems: 'center' }}>
+                    {formData.barcode ? (
+                        <>
+                            <Image 
+                                source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                style={{ width: '100%', height: 180 }}
+                                resizeMode="contain"
+                            />
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#000000', marginTop: 10 }}>{formData.barcode}</Text>
+                        </>
+                    ) : null}
+                </View>
+
+                {/* Scissors cutting guideline (vertical only, center) */}
+                <View style={{ position: 'absolute', left: 290, top: 15, bottom: 15, width: 1, borderWidth: 1, borderColor: '#d3d3d3', borderStyle: 'dashed' }} />
+
+                {/* Right Barcode */}
+                <View style={{ width: '46%', height: '80%', justifyContent: 'center', alignItems: 'center' }}>
+                    {formData.barcode ? (
+                        <>
+                            <Image 
+                                source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                style={{ width: '100%', height: 180 }}
+                                resizeMode="contain"
+                            />
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: '#000000', marginTop: 10 }}>{formData.barcode}</Text>
+                        </>
+                    ) : null}
+                </View>
+            </View>
+
             </ScrollView >
         </View>
     );
@@ -2136,5 +2404,135 @@ const styles = StyleSheet.create({
         color: 'rgba(0,0,0,0.6)',
         fontSize: 12,
         fontWeight: '600'
+    },
+    safe: {
+        backgroundColor: '#000',
+    },
+    screenHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        borderBottomWidth: 1,
+        borderBottomColor: '#1a1a1a',
+        backgroundColor: '#000',
+    },
+    backButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#111',
+        borderWidth: 1,
+        borderColor: '#222',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    screenHeaderSubtitle: {
+        fontSize: 10,
+        fontWeight: '800',
+        color: '#d4af37',
+        letterSpacing: 1.5,
+        textTransform: 'uppercase',
+    },
+    screenHeaderTitle: {
+        fontSize: 18,
+        fontWeight: '900',
+        color: '#fff',
+        letterSpacing: 0.5,
+    },
+    // Custom Image Picker Modal Styles
+    imagePickerModalContent: {
+        backgroundColor: '#121212',
+        borderRadius: 24,
+        padding: 22,
+        borderWidth: 1.5,
+        borderColor: '#d4af3740',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.7,
+        shadowRadius: 16,
+        elevation: 12,
+    },
+    imagePickerModalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 18,
+        paddingBottom: 14,
+        borderBottomWidth: 1,
+        borderBottomColor: '#222',
+    },
+    imagePickerModalIconBox: {
+        width: 44,
+        height: 44,
+        borderRadius: 14,
+        backgroundColor: '#d4af3718',
+        borderWidth: 1,
+        borderColor: '#d4af3740',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    imagePickerModalTitle: {
+        color: '#d4af37',
+        fontSize: 16,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    imagePickerModalSubtitle: {
+        color: '#888',
+        fontSize: 12,
+        marginTop: 2,
+        fontWeight: '500',
+    },
+    imagePickerModalCloseBtn: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#1a1a1a',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    imagePickerModalBody: {
+        gap: 12,
+        marginBottom: 16,
+    },
+    imagePickerOptionCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#0a0a0a',
+        padding: 14,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: '#222',
+    },
+    imagePickerOptionIconBox: {
+        width: 42,
+        height: 42,
+        borderRadius: 12,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    imagePickerOptionTitle: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    imagePickerOptionSubtitle: {
+        color: '#666',
+        fontSize: 11,
+        marginTop: 2,
+    },
+    imagePickerCancelBtn: {
+        paddingVertical: 13,
+        borderRadius: 12,
+        backgroundColor: '#181818',
+        borderWidth: 1,
+        borderColor: '#333',
+        alignItems: 'center',
+    },
+    imagePickerCancelBtnText: {
+        color: '#aaa',
+        fontSize: 12,
+        fontWeight: '800',
+        letterSpacing: 1,
     }
 });

@@ -1,6 +1,15 @@
 import { CRMService } from '../services/crmService';
 import { supabase } from '../services/supabase';
 
+// Mock localDbService
+jest.mock('../services/localDbService', () => ({
+    LocalDbService: {
+        getAll: jest.fn(() => Promise.resolve([])),
+        saveItem: jest.fn(() => Promise.resolve()),
+        saveItems: jest.fn(() => Promise.resolve())
+    }
+}));
+
 // Mock Supabase
 jest.mock('../services/supabase', () => ({
     supabase: {

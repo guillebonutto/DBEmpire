@@ -8,7 +8,7 @@
  * Digital Boost Empire - Alert System
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 
 /**
  * Manager global singleton para permitir llamadas imperativas
@@ -73,10 +73,16 @@ export const useAlert = () => {
         buttons: []
     });
 
+    const resetTimeoutRef = React.useRef(null);
+
     /**
      * Muestra un alert con la configuración especificada
      */
     const showAlert = useCallback((config) => {
+        if (resetTimeoutRef.current) {
+            clearTimeout(resetTimeoutRef.current);
+            resetTimeoutRef.current = null;
+        }
         setAlertConfig({
             visible: true,
             type: config.type || 'info',
@@ -90,13 +96,17 @@ export const useAlert = () => {
      * Oculta el alert actual
      */
     const hideAlert = useCallback(() => {
+        if (resetTimeoutRef.current) {
+            clearTimeout(resetTimeoutRef.current);
+            resetTimeoutRef.current = null;
+        }
         setAlertConfig(prev => ({
             ...prev,
             visible: false
         }));
 
-        // Reset completo después de la animación
-        setTimeout(() => {
+        // Reset completo después de la animación solo si no se abrió otra alerta
+        resetTimeoutRef.current = setTimeout(() => {
             setAlertConfig({
                 visible: false,
                 type: 'info',
@@ -104,6 +114,7 @@ export const useAlert = () => {
                 message: '',
                 buttons: []
             });
+            resetTimeoutRef.current = null;
         }, 300);
     }, []);
 

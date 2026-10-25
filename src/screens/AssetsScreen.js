@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { GeminiService } from '../services/geminiService';
 import { supabase } from '../services/supabase';
 import { DeviceAuthService } from '../services/deviceAuth';
+import { SyncService } from '../services/syncService';
 import { LinearGradient } from 'expo-linear-gradient';
 
 // Helper for base64 to ArrayBuffer for Supabase Storage (React Native compatible)
@@ -141,8 +142,9 @@ export default function AssetsScreen({ navigation }) {
 
             return publicUrlData.publicUrl;
         } catch (error) {
-            console.error('Storage Error:', error);
-            throw new Error('No se pudo subir el archivo a la nube. ¿Creaste el bucket "assets" en Supabase?');
+            console.warn('Storage Error (Offline?):', error);
+            // Fallback to local URI if offline
+            return uri;
         }
     };
 
@@ -161,16 +163,17 @@ export default function AssetsScreen({ navigation }) {
             }
 
             // Save to database
-            const { error } = await supabase.from('assets').insert({
+            const assetPayload = {
+                id: 'local-asset-' + Date.now(),
                 device_sig: deviceSig,
                 title,
                 description,
                 ai_copies: copies,
                 media_url: cloudUrl,
-                status: isPcMode ? 'pc_done' : 'pending'
-            });
-
-            if (error) throw error;
+                status: isPcMode ? 'pc_done' : 'pending',
+                created_at: new Date().toISOString()
+            };
+            await SyncService.queueAction('asset', assetPayload, {}, 'INSERT');
 
             // Share text
             let shareText = isPcMode ? `🖥️ *MATERIAL PARA MI PC* 🖥️\n\n` : `🚀 *NUEVO MATERIAL DE MARKETING* 🚀\n\n`;

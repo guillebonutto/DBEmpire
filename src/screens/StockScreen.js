@@ -25,7 +25,10 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
         <TouchableOpacity
             style={styles.productCard}
             onPress={async () => {
-                navigation.navigate('AddProduct', { product: item });
+                navigation.navigate('AddProduct', { 
+                    product: item,
+                    scannedImage: item.image_url ? item.image_url : (ImageMapping[item.id] || null)
+                });
             }}
             activeOpacity={0.7}
         >
@@ -33,7 +36,7 @@ const ProductCard = React.memo(({ item, userRole, navigation, handleDelete, hand
                 <View style={styles.imageWrapper}>
                     {item.image_url || ImageMapping[item.id] ? (
                         <Image 
-                            source={ImageMapping[item.id] || { uri: item.image_url }} 
+                            source={item.image_url ? { uri: item.image_url } : ImageMapping[item.id]} 
                             style={styles.productImage}
                             contentFit="cover"
                             cachePolicy="disk"
@@ -173,10 +176,8 @@ export default function StockScreen({ navigation, route }) {
         useCallback(() => {
             setScreenReady(true);
             
-            // DEFER background sync until interactions (navigation) are finished
-            // This ensures "fluidez constante" when switching tabs.
             InteractionManager.runAfterInteractions(() => {
-                doFetchProducts(false); 
+                doFetchProducts(true); 
             });
         }, [])
     );
@@ -733,6 +734,7 @@ export default function StockScreen({ navigation, route }) {
             ) : (
                 <FlatList
                     data={filteredProductsList}
+                    extraData={storeProducts}
                     keyExtractor={(item) => item.id}
                     renderItem={renderProductItem}
                     initialNumToRender={1}

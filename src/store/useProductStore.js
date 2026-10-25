@@ -125,7 +125,7 @@ export const useProductStore = create((set, get) => ({
                     };
                 });
 
-                await LocalDbService.saveItems('products', adjustedProducts);
+                await LocalDbService.replaceFullTable('products', adjustedProducts);
                 set({ products: adjustedProducts, lastFetch: Date.now() });
             }
         } catch (e) {

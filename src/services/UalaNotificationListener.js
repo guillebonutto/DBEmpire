@@ -129,7 +129,13 @@ const headlessNotificationListener = async ({ notification }) => {
 
         if (paymentData) {
             const { amount, senderName } = paymentData;
-            const saleId = `sale_uala_${Date.now()}`;
+            const generateUUID = () => {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            };
+            const saleId = generateUUID();
             const saleObj = {
                 id: saleId,
                 total_amount: amount,

@@ -1,12 +1,4 @@
-let mockPlatformOS = 'android';
-
-jest.mock('react-native', () => ({
-    Platform: {
-        get OS() {
-            return mockPlatformOS;
-        }
-    }
-}));
+import { Platform } from 'react-native';
 
 // Mock expo-notifications inside factory to prevent TDZ hoisting issues
 jest.mock('expo-notifications', () => {
@@ -33,7 +25,7 @@ import * as Notifications from 'expo-notifications';
 describe('NotificationService', () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        mockPlatformOS = 'android';
+        Object.defineProperty(Platform, 'OS', { get: () => 'android', configurable: true });
         
         // Reset default mock returns
         Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
@@ -43,7 +35,7 @@ describe('NotificationService', () => {
 
     describe('requestPermissions', () => {
         test('should request permissions and configure channel on Android if granted', async () => {
-            mockPlatformOS = 'android';
+            Object.defineProperty(Platform, 'OS', { get: () => 'android', configurable: true });
             Notifications.getPermissionsAsync.mockResolvedValueOnce({ status: 'undetermined' });
             Notifications.requestPermissionsAsync.mockResolvedValueOnce({ status: 'granted' });
 
@@ -59,7 +51,7 @@ describe('NotificationService', () => {
         });
 
         test('should skip channel configuration on iOS', async () => {
-            mockPlatformOS = 'ios';
+            Object.defineProperty(Platform, 'OS', { get: () => 'ios', configurable: true });
             Notifications.getPermissionsAsync.mockResolvedValueOnce({ status: 'granted' });
 
             const result = await NotificationService.requestPermissions();

@@ -5,12 +5,21 @@ jest.mock('react-native', () => ({
     Alert: { alert: jest.fn() },
 }));
 
+// Mock syncService
+jest.mock('../services/syncService', () => ({
+    SyncService: {
+        queueAction: jest.fn().mockResolvedValue(),
+    }
+}));
+
 // Mock localDbService
 jest.mock('../services/localDbService', () => ({
     LocalDbService: {
         getAll: jest.fn(),
         saveItem: jest.fn().mockResolvedValue(),
         deleteItem: jest.fn().mockResolvedValue(),
+        queueForSync: jest.fn().mockResolvedValue(),
+        getPendingSyncs: jest.fn().mockResolvedValue([]),
     }
 }));
 
@@ -68,6 +77,16 @@ describe('useReminderStore', () => {
             
             expect(LocalDbService.getAll).not.toHaveBeenCalled();
         });
+
+        test('should log error if LocalDbService.getAll fails on init', async () => {
+            const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+            LocalDbService.getAll.mockRejectedValueOnce(new Error('init err'));
+
+            await getState().initStore();
+
+            expect(consoleSpy).toHaveBeenCalledWith('[ReminderStore] Init error:', expect.any(Error));
+            consoleSpy.mockRestore();
+        });
     });
 
     describe('fetchReminders', () => {
@@ -83,6 +102,16 @@ describe('useReminderStore', () => {
             expect(reminders).toHaveLength(1);
             expect(reminders[0].id).toBe('rem_fresh');
         });
+
+        test('should log error if LocalDbService.getAll fails on fetch', async () => {
+            const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+            LocalDbService.getAll.mockRejectedValueOnce(new Error('fetch err'));
+
+            await getState().fetchReminders();
+
+            expect(consoleSpy).toHaveBeenCalledWith('[ReminderStore] Fetch error:', expect.any(Error));
+            consoleSpy.mockRestore();
+        });
     });
 
     describe('addReminder', () => {
@@ -97,31 +126,36 @@ describe('useReminderStore', () => {
 
             // Verify notification scheduled
             expect(NotificationService.scheduleReminder).toHaveBeenCalledWith(
-                expect.stringContaining('rem_'),
+                expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
                 'Cobrar deuda',
                 'Llamar a Juan',
                 futureDate
             );
 
-            // Verify saved to local DB
-            expect(LocalDbService.saveItem).toHaveBeenCalledWith('reminders', expect.objectContaining({
-                title: 'Cobrar deuda',
-                notes: 'Llamar a Juan',
-                due_date: futureDate,
-                completed: 0,
-                notification_id: 'notif_abc123',
-            }));
+            // Verify saved to sync queue
+            expect(require('../services/syncService').SyncService.queueAction).toHaveBeenCalledWith(
+                'reminder',
+                expect.objectContaining({
+                    title: 'Cobrar deuda',
+                    notes: 'Llamar a Juan',
+                    due_date: futureDate,
+                    completed: 0,
+                    notification_id: 'notif_abc123',
+                }),
+                {},
+                'INSERT'
+            );
 
             // Verify in memory state
             const { reminders } = getState();
             expect(reminders).toHaveLength(1);
             expect(reminders[0].title).toBe('Cobrar deuda');
-            expect(newReminder.id).toMatch(/^rem_/);
+            expect(newReminder.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
         });
 
         test('should cancel notification if local db save fails', async () => {
             const futureDate = new Date(Date.now() + 1000 * 60 * 60).toISOString();
-            LocalDbService.saveItem.mockRejectedValueOnce(new Error('DB write failed'));
+            require('../services/syncService').SyncService.queueAction.mockRejectedValueOnce(new Error('DB write failed'));
 
             await expect(
                 getState().addReminder('Tarea fallida', 'Notas', futureDate)
@@ -131,14 +165,42 @@ describe('useReminderStore', () => {
             expect(NotificationService.cancelReminder).toHaveBeenCalledWith('notif_abc123');
         });
 
+        test('should handle scheduling failure gracefully', async () => {
+            const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            NotificationService.scheduleReminder.mockRejectedValueOnce(new Error('schedule err'));
+            const futureDate = new Date(Date.now() + 1000 * 60 * 60).toISOString();
+
+            await getState().addReminder('Test schedule fail', '', futureDate);
+
+            expect(consoleSpy).toHaveBeenCalledWith('[ReminderStore] Notification scheduling failed:', expect.any(Error));
+            consoleSpy.mockRestore();
+        });
+
+        test('should handle cancellation error when save fails', async () => {
+            const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            require('../services/syncService').SyncService.queueAction.mockRejectedValueOnce(new Error('save error'));
+            NotificationService.cancelReminder.mockRejectedValueOnce(new Error('cancel err'));
+            const futureDate = new Date(Date.now() + 1000 * 60 * 60).toISOString();
+
+            await expect(getState().addReminder('Test cancel fail', '', futureDate)).rejects.toThrow('save error');
+
+            expect(consoleSpy).toHaveBeenCalledWith('[ReminderStore] Error canceling notification on failure:', expect.any(Error));
+            consoleSpy.mockRestore();
+        });
+
         test('should trim whitespace from title and notes', async () => {
             const futureDate = new Date(Date.now() + 1000 * 60 * 60).toISOString();
             await getState().addReminder('  Recordatorio  ', '  Notas extra  ', futureDate);
 
-            expect(LocalDbService.saveItem).toHaveBeenCalledWith('reminders', expect.objectContaining({
-                title: 'Recordatorio',
-                notes: 'Notas extra',
-            }));
+            expect(require('../services/syncService').SyncService.queueAction).toHaveBeenCalledWith(
+                'reminder',
+                expect.objectContaining({
+                    title: 'Recordatorio',
+                    notes: 'Notas extra',
+                }),
+                {},
+                'INSERT'
+            );
         });
     });
 
@@ -156,7 +218,7 @@ describe('useReminderStore', () => {
             await getState().deleteReminder('rem_test_del');
 
             expect(NotificationService.cancelReminder).toHaveBeenCalledWith('notif_del_999');
-            expect(LocalDbService.deleteItem).toHaveBeenCalledWith('reminders', 'rem_test_del');
+            expect(require('../services/syncService').SyncService.queueAction).toHaveBeenCalledWith('reminder', { id: 'rem_test_del' }, {}, 'DELETE');
             
             const { reminders } = getState();
             expect(reminders).toHaveLength(0);
@@ -168,7 +230,25 @@ describe('useReminderStore', () => {
             await getState().deleteReminder('rem_nonexistent');
 
             expect(NotificationService.cancelReminder).not.toHaveBeenCalled();
-            expect(LocalDbService.deleteItem).not.toHaveBeenCalled();
+            expect(require('../services/syncService').SyncService.queueAction).not.toHaveBeenCalled();
+        });
+
+        test('should warn if cancel notification fails on delete', async () => {
+            const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            useReminderStore.setState({ reminders: [{ id: 'rem_test_del', notification_id: 'notif_del_999' }] });
+            NotificationService.cancelReminder.mockRejectedValueOnce(new Error('cancel err'));
+
+            await getState().deleteReminder('rem_test_del');
+
+            expect(consoleSpy).toHaveBeenCalledWith('[ReminderStore] Error canceling notification on delete:', expect.any(Error));
+            consoleSpy.mockRestore();
+        });
+
+        test('should throw error if delete fails', async () => {
+            useReminderStore.setState({ reminders: [{ id: 'rem_test_del' }] });
+            require('../services/syncService').SyncService.queueAction.mockRejectedValueOnce(new Error('delete err'));
+
+            await expect(getState().deleteReminder('rem_test_del')).rejects.toThrow('delete err');
         });
     });
 
@@ -239,6 +319,25 @@ describe('useReminderStore', () => {
 
             const { reminders } = getState();
             expect(reminders[0].completed).toBe(0);
+        });
+
+        test('should log warning if reschedule fails', async () => {
+            const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            const futureDate = new Date(Date.now() + 1000 * 60 * 60).toISOString();
+            useReminderStore.setState({ reminders: [{ id: 'rem_undo', due_date: futureDate, completed: 1 }] });
+            NotificationService.scheduleReminder.mockRejectedValueOnce(new Error('sched err'));
+
+            await getState().toggleReminderCompleted('rem_undo');
+
+            expect(consoleSpy).toHaveBeenCalledWith('[ReminderStore] Failed to reschedule notification:', expect.any(Error));
+            consoleSpy.mockRestore();
+        });
+
+        test('should throw error if toggle sync fails', async () => {
+            useReminderStore.setState({ reminders: [{ id: 'rem_toggle', completed: 0 }] });
+            require('../services/syncService').SyncService.queueAction.mockRejectedValueOnce(new Error('sync err'));
+
+            await expect(getState().toggleReminderCompleted('rem_toggle')).rejects.toThrow('sync err');
         });
     });
 });

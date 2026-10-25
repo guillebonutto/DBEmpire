@@ -7,15 +7,18 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useProductStore } from '../store/useProductStore';
 
+import { SyncService } from '../services/syncService';
+import { LocalDbService } from '../services/localDbService';
+
 export default function SupplierOrdersScreen({ navigation }) {
-    const { supplierOrders: orders, supplierOrderItems: allItems, isLoading: loading, fetchAllData } = useFinanceStore();
+    const { supplierOrders: orders, supplierOrderItems: allItems, isLoading: loading, fetchAllData, setFinanceState } = useFinanceStore();
     const { products } = useProductStore();
     const [pendingWizardOrders, setPendingWizardOrders] = useState([]);
 
     // Always refresh from Supabase when entering this screen so both users see the latest orders
     useFocusEffect(
         useCallback(() => {
-            fetchAllData(true);
+            fetchAllData();
         }, [fetchAllData])
     );
 
@@ -38,24 +41,29 @@ export default function SupplierOrdersScreen({ navigation }) {
 
     const handleMarkReceived = async (order) => {
         try {
-            const { error } = await supabase
-                .from('supplier_orders')
-                .update({ 
-                    status: 'received',
-                    received_at: new Date().toISOString()
-                })
-                .eq('id', order.id);
+            const updatedOrder = {
+                ...order,
+                status: 'received',
+                received_at: new Date().toISOString()
+            };
 
-            if (error) throw error;
+            // 1. Optimistic Zustand update
+            setFinanceState(state => ({
+                supplierOrders: state.supplierOrders.map(o => o.id === order.id ? updatedOrder : o)
+            }));
+
+            // 2. Save to SQLite
+            await LocalDbService.saveItem('supplier_orders', updatedOrder);
+
+            // 3. Queue for remote sync
+            await SyncService.queueAction('order', updatedOrder, {}, 'UPDATE');
             
             Alert.alert('📦 Recibido', 'El pedido fue marcado como recibido. ¿Querés vincular los productos al stock ahora?', [
                 { text: 'Más tarde', style: 'cancel' },
                 { text: 'SÍ, VINCULAR', onPress: () => handleStartWizard(order) }
             ]);
-            
-            fetchAllData(true);
         } catch (err) {
-            Alert.alert('Error', 'No se pudo actualizar el estado.');
+            Alert.alert('Error', 'No se pudo actualizar el estado: ' + err.message);
         }
     };
 

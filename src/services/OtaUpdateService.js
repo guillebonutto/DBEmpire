@@ -19,6 +19,11 @@ export const OtaUpdateService = {
         }
 
         try {
+            if (!Updates.isEnabled) {
+                console.log('[-] OTA Updates not enabled on this build.');
+                return;
+            }
+
             const update = await Updates.checkForUpdateAsync();
             if (update.isAvailable) {
                 alertManager.show({
@@ -53,7 +58,7 @@ export const OtaUpdateService = {
         });
 
         // Breve retraso para asegurar que la animación del alert se muestre fluida
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 800));
 
         if (__DEV__) {
             alertManager.show({
@@ -66,12 +71,22 @@ export const OtaUpdateService = {
         }
 
         try {
+            if (!Updates.isEnabled) {
+                alertManager.show({
+                    type: 'warning',
+                    title: 'Actualizaciones Desactivadas',
+                    message: 'Esta compilación no tiene activadas las actualizaciones automáticas OTA.',
+                    buttons: [{ text: 'Entendido' }]
+                });
+                return;
+            }
+
             const update = await Updates.checkForUpdateAsync();
             if (update.isAvailable) {
                 alertManager.show({
                     type: 'info',
                     title: '¡Actualización Encontrada!',
-                    message: 'Hay una nueva versión disponible. ¿Deseas descargarla e instalarla ahora?',
+                    message: 'Hay una nueva versión disponible con mejoras y correcciones. ¿Deseas descargarla e instalarla ahora?',
                     buttons: [
                         { text: 'Cancelar', style: 'cancel' },
                         { 
@@ -93,52 +108,54 @@ export const OtaUpdateService = {
             console.error('[-] Error checking manual OTA update:', error);
             alertManager.show({
                 type: 'error',
-                title: 'Error de Chequeo',
-                message: 'No se pudo conectar con el servidor de actualizaciones. Por favor, verifica tu conexión e inténtalo de nuevo.',
+                title: 'Error de Conexión',
+                message: 'No se pudo verificar la actualización: ' + (error.message || 'Verifica tu conexión a internet.'),
                 buttons: [{ text: 'Aceptar' }]
             });
         }
     },
 
     /**
-     * Descarga la actualización de forma segura y notifica al finalizar.
+     * Descarga la actualización de forma segura y reinicia automáticamente la aplicación.
      */
     async applyUpdate() {
         alertManager.show({
             type: 'info',
-            title: 'Descargando',
-            message: 'Descargando e instalando la actualización... Por favor, no cierres la aplicación.',
+            title: 'Descargando Actualización',
+            message: 'Descargando e instalando los nuevos archivos... La aplicación se reiniciará automáticamente al terminar.',
             buttons: [] // Bloquea interacción durante la descarga
         });
 
         try {
             await Updates.fetchUpdateAsync();
             
-            // Éxito en la descarga, solicitamos el reinicio obligatorio para aplicar
+            // Éxito en la descarga, mostramos feedback y reiniciamos automáticamente
             alertManager.show({
                 type: 'success',
                 title: '¡Descarga Exitosa!',
-                message: 'La actualización se aplicó correctamente. La aplicación debe reiniciarse para activar los cambios.',
-                buttons: [
-                    {
-                        text: 'Reiniciar Ahora',
-                        style: 'confirm',
-                        onPress: async () => {
-                            try {
-                                await Updates.reloadAsync();
-                            } catch (err) {
-                                console.error('[-] Failed to reload app:', err);
-                            }
-                        }
-                    }
-                ]
+                message: 'Reiniciando Digital Boost Empire para aplicar los cambios...',
+                buttons: []
             });
+
+            setTimeout(async () => {
+                try {
+                    await Updates.reloadAsync();
+                } catch (err) {
+                    console.error('[-] Failed to reload app automatically:', err);
+                    alertManager.show({
+                        type: 'info',
+                        title: 'Descarga Completada',
+                        message: 'Por favor, cierra y vuelve a abrir la aplicación para que se apliquen los cambios.',
+                        buttons: [{ text: 'Aceptar' }]
+                    });
+                }
+            }, 1000);
         } catch (error) {
             console.error('[-] Error downloading OTA update:', error);
             alertManager.show({
                 type: 'error',
                 title: 'Fallo de Instalación',
-                message: 'Ocurrió un error al descargar la actualización. Inténtalo de nuevo más tarde.',
+                message: 'Ocurrió un error al descargar la actualización: ' + (error.message || 'Inténtalo de nuevo más tarde.'),
                 buttons: [{ text: 'Aceptar' }]
             });
         }

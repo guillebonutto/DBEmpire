@@ -6,27 +6,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
+import { useProductStore } from '../store/useProductStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
+
 export default function BulkAdjustmentScreen({ navigation }) {
+    const { products: storeProducts, fetchProducts: fetchStoreProducts } = useProductStore();
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(false);
-
-    useEffect(() => {
-        // No role check
-    }, []);
     const [percentage, setPercentage] = useState('');
     const [updating, setUpdating] = useState(false);
 
     useEffect(() => {
-        fetchProducts();
+        loadProducts();
     }, []);
 
-    const fetchProducts = async () => {
+    const loadProducts = async () => {
+        setLoading(true);
         try {
-            const { data, error } = await supabase.from('products').select('id, name, sale_price').eq('active', true).order('name');
-            if (error) throw error;
-            setProducts(data || []);
+            fetchStoreProducts();
+            const local = await LocalDbService.getAll('products');
+            if (local && local.length > 0) {
+                setProducts(local.filter(p => p.active));
+            } else {
+                setProducts(useProductStore.getState().products.filter(p => p.active));
+            }
         } catch (err) {
-            console.log(err);
+            console.log('Error loading products offline:', err);
         } finally {
             setLoading(false);
         }
@@ -46,17 +52,29 @@ export default function BulkAdjustmentScreen({ navigation }) {
                     onPress: async () => {
                         setUpdating(true);
                         try {
+                            const updatedList = [];
                             for (const product of products) {
-                                const newPrice = product.sale_price * (1 + (pct / 100));
-                                await supabase
-                                    .from('products')
-                                    .update({ sale_price: parseFloat(newPrice.toFixed(2)) })
-                                    .eq('id', product.id);
+                                const newPrice = parseFloat((product.sale_price * (1 + (pct / 100))).toFixed(2));
+                                const updatedProd = { ...product, sale_price: newPrice };
+                                updatedList.push(updatedProd);
+                                await LocalDbService.saveItem('products', updatedProd);
+                                await SyncService.queueAction('products', updatedProd, {}, 'UPDATE');
                             }
+
+                            // Update in-memory state
+                            useProductStore.setState(state => ({
+                                products: state.products.map(p => {
+                                    const match = updatedList.find(u => u.id === p.id);
+                                    return match ? match : p;
+                                })
+                            }));
+
+                            SyncService.syncPending().catch(e => console.log('Silent bulk sync:', e.message));
+
                             Alert.alert('Éxito', 'Precios actualizados masivamente');
                             navigation.goBack();
                         } catch (err) {
-                            Alert.alert('Error', 'Hubo un fallo al actualizar');
+                            Alert.alert('Error', 'Hubo un fallo al actualizar: ' + err.message);
                         } finally {
                             setUpdating(false);
                         }

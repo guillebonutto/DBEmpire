@@ -8,6 +8,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useProductStore } from '../store/useProductStore';
 import { useSupplierStore } from '../store/useSupplierStore';
+import { SyncService } from '../services/syncService';
+import { LocalDbService } from '../services/localDbService';
 
 import DateTimePicker from '@react-native-community/datetimepicker';
 
@@ -360,223 +362,80 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                 status: isConsignment ? 'consigned' : (route.params?.orderToEdit?.status || 'pending')
             };
 
-            let orderId;
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
+            let orderId = route.params?.orderToEdit ? route.params.orderToEdit.id : generateUUID();
+            const fullOrderRecord = { id: orderId, ...payload };
 
             if (route.params?.orderToEdit) {
                 // OPTIMISTIC UPDATE
-                orderId = route.params.orderToEdit.id;
-                updateSupplierOrderLocal({ id: orderId, ...payload });
-
-                const oldPaid = route.params.orderToEdit.installments_paid || 0;
-                const newPaid = payload.installments_paid;
-
-                const { error } = await supabase
-                    .from('supplier_orders')
-                    .update(payload)
-                    .eq('id', orderId);
-
-                if (error) throw error;
-
-                // --- TIMESTAMP-BASED SYNC (NO IDs) ---
-                if (selectedProducts.length > 0) {
-                    const syncKey = payload.created_at; // The unique timestamp of the order
-                    
-                    // 1. Delete previous expenses that match this specific timestamp and category
-                    const oldTimestamp = route.params.orderToEdit.created_at;
-                    const { error: deleteExpError } = await supabase
-                        .from('expenses')
-                        .delete()
-                        .eq('category', 'Inventario')
-                        .eq('created_at', oldTimestamp);
-                    
-                    if (deleteExpError) {
-                        console.error('Error deleting old expenses:', deleteExpError);
-                        throw new Error(`Error al borrar gastos anteriores: ${deleteExpError.message}`);
-                    }
-
-                    // 2. Prepare new clean expenses (Plain array, No IDs)
-                    const newExpenses = [];
-                    if (!isConsignment && (parseFloat(cost) || 0) > 0) {
-                        for (const item of selectedProducts) {
-                            const name = item.product.name || item.tempName || 'Producto Desconocido';
-                            const unitCost = parseFloat(item.cost) || 0;
-                            const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
-                            
-                            if (unitCost > 0 && totalQty > 0) {
-                                newExpenses.push({
-                                    description: `Inventario: ${name}`,
-                                    amount: unitCost * totalQty,
-                                    category: 'Inventario',
-                                    product_id: item.isNew ? null : item.product.id,
-                                    quantity: totalQty,
-                                    details: item.variants.map(v => ({ 
-                                        color: v.color || 'General', 
-                                        qty: parseInt(v.quantity)
-                                    })),
-                                    created_at: syncKey // Link by sharing the exact timestamp
-                                });
-                            }
-                        }
-                    }
-
-                    if (newExpenses.length > 0) {
-                        const { error: insertExpError } = await supabase.from('expenses').insert(newExpenses);
-                        if (insertExpError) {
-                            console.error('Error inserting new expenses:', insertExpError);
-                            throw new Error(`Error al insertar nuevos gastos: ${insertExpError.message}`);
-                        }
-                    }
-                }
+                updateSupplierOrderLocal(fullOrderRecord);
+                await LocalDbService.saveItem('supplier_orders', fullOrderRecord);
+                await SyncService.queueAction('supplier_orders', fullOrderRecord, {}, 'UPDATE');
             } else {
                 // INSERT - OPTIMISTIC
-                const optimisticId = `local-${Date.now()}`;
-                addSupplierOrderLocal({ id: optimisticId, ...payload, status: 'pending' });
+                addSupplierOrderLocal(fullOrderRecord);
+                await LocalDbService.saveItem('supplier_orders', fullOrderRecord);
+                await SyncService.queueAction('supplier_orders', fullOrderRecord, {}, 'INSERT');
+            }
 
-                const { data: newOrder, error: insertError } = await supabase
-                    .from('supplier_orders')
-                    .insert({ ...payload })
-                    .select()
-                    .single();
-
-                if (insertError) throw insertError;
-                orderId = newOrder.id;
-
-                // Replace the optimistic entry with the real server record to avoid duplicates
-                setFinanceState(state => ({
-                    supplierOrders: state.supplierOrders.filter(o => o.id !== optimisticId).concat([newOrder])
-                }));
-
-
-                // --- TIMESTAMP-BASED SYNC (NEW) ---
-                if (selectedProducts.length > 0 && !isConsignment && (parseFloat(cost) || 0) > 0) {
-                    const syncKey = payload.created_at;
-                    const newExpenses = [];
-                    for (const item of selectedProducts) {
-                        const name = item.product.name || item.tempName || 'Producto Desconocido';
-                        const unitCost = parseFloat(item.cost) || 0;
-                        const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
-                        
-                        if (unitCost > 0 && totalQty > 0) {
-                            newExpenses.push({
-                                description: `Inventario: ${name}`,
-                                amount: unitCost * totalQty,
-                                category: 'Inventario',
-                                product_id: item.isNew ? null : item.product.id,
-                                quantity: totalQty,
-                                details: item.variants.map(v => ({ 
-                                    color: v.color || 'General', 
-                                    qty: parseInt(v.quantity)
-                                })),
-                                created_at: syncKey
-                            });
-                        }
-                    }
-
-                    if (newExpenses.length > 0) {
-                        const { error: insertExpError } = await supabase.from('expenses').insert(newExpenses);
-                        if (insertExpError) {
-                            console.error('Error inserting new expenses:', insertExpError);
-                            throw new Error(`Error al insertar nuevos gastos: ${insertExpError.message}`);
-                        }
+            // --- EXPENSES (Optimistic + Local SQLite + Sync Queue) ---
+            if (selectedProducts.length > 0 && !isConsignment && (parseFloat(cost) || 0) > 0) {
+                const syncKey = payload.created_at;
+                for (const item of selectedProducts) {
+                    const name = item.product?.name || item.tempName || 'Producto Desconocido';
+                    const unitCost = parseFloat(item.cost) || 0;
+                    const totalQty = item.variants.reduce((sum, v) => sum + (parseInt(v.quantity) || 0), 0);
+                    
+                    if (unitCost > 0 && totalQty > 0) {
+                        const newExpense = {
+                            id: generateUUID(),
+                            description: `Inventario: ${name}`,
+                            amount: unitCost * totalQty,
+                            category: 'Inventario',
+                            created_at: syncKey,
+                            details: JSON.stringify({
+                                order_id: orderId,
+                                variants: item.variants.map(v => ({ color: v.color || 'General', qty: parseInt(v.quantity) }))
+                            })
+                        };
+                        useFinanceStore.getState().addExpenseLocal(newExpense);
+                        await LocalDbService.saveItem('expenses', newExpense);
+                        await SyncService.queueAction('expenses', newExpense, {}, 'INSERT');
                     }
                 }
             }
 
-            // Handle Linked Items (Delete all and re-insert for simplicity on edit)
-            if (route.params?.orderToEdit) {
-                const { error: deleteItemsError } = await supabase
-                    .from('supplier_order_items')
-                    .delete()
-                    .eq('supplier_order_id', orderId);
-                
-                if (deleteItemsError) {
-                    console.error('Error deleting old supplier order items:', deleteItemsError);
-                    throw new Error(`Error al borrar items anteriores de la orden: ${deleteItemsError.message}`);
-                }
-            }
-
+            // --- ORDER ITEMS (Optimistic + Local SQLite + Sync Queue) ---
             if (selectedProducts.length > 0 && orderId) {
                 const itemsPayload = [];
-                const productUpdatePromises = [];
-
                 for (const p of selectedProducts) {
-                    if (!p.isNew && p.product.id) {
-                        const uniqueColors = [...new Set(p.variants.map(v => v.color).filter(c => c))];
-                        productUpdatePromises.push((async () => {
-                            try {
-                                const { data: prodData, error: fetchErr } = await supabase
-                                    .from('products')
-                                    .select('variants, defect_notes')
-                                    .eq('id', p.product.id)
-                                    .single();
-                                
-                                if (fetchErr) throw fetchErr;
-
-                                let currentVariants = Array.isArray(prodData?.variants) ? prodData.variants : [];
-                                let hasNewColors = false;
-
-                                uniqueColors.forEach(color => {
-                                    if (!color) return;
-                                    const cleanColor = color.trim();
-                                    const exists = currentVariants.some(v => v.color?.toLowerCase() === cleanColor.toLowerCase());
-                                    if (!exists) {
-                                        currentVariants.push({ color: cleanColor, stock: 0 });
-                                        hasNewColors = true;
-                                    }
-                                });
-
-                                const updatePayload = {
-                                    name: p.product.name
-                                };
-
-                                if (p.quality) {
-                                    updatePayload.defect_notes = p.quality === 'flawed' ? 'Reportado en orden de compra' : null;
-                                } else {
-                                    updatePayload.defect_notes = prodData?.defect_notes || null;
-                                }
-
-                                if (hasNewColors) {
-                                    updatePayload.variants = currentVariants;
-                                }
-
-                                const { error: updateErr } = await supabase
-                                    .from('products')
-                                    .update(updatePayload)
-                                    .eq('id', p.product.id);
-
-                                if (updateErr) throw updateErr;
-
-                            } catch (itemErr) {
-                                console.error('Error updating product colors/details:', itemErr);
-                                throw itemErr;
-                            }
-                        })());
-                    }
-
                     p.variants.forEach(v => {
-                        itemsPayload.push({
+                        const itemId = generateUUID();
+                        const orderItem = {
+                            id: itemId,
                             supplier_order_id: orderId,
                             product_id: p.isNew ? null : p.product.id,
                             temp_product_name: p.isNew ? p.tempName : null,
                             quantity: parseInt(v.quantity) || 1,
                             cost_per_unit: parseFloat(p.cost) || 0,
-                            supplier: p.supplierName || payload.provider_name, // Use item supplier or fallback to order provider
                             color: v.color || null
-                        });
+                        };
+                        itemsPayload.push(orderItem);
+                        LocalDbService.saveItem('supplier_order_items', orderItem);
+                        SyncService.queueAction('supplier_order_items', orderItem, {}, 'INSERT');
                     });
                 }
-
-                await Promise.all(productUpdatePromises);
-
-                const { error: itemsError } = await supabase
-                    .from('supplier_order_items')
-                    .insert(itemsPayload);
-
-                if (itemsError) throw itemsError;
+                setFinanceState(state => ({
+                    supplierOrderItems: state.supplierOrderItems.filter(i => i.supplier_order_id !== orderId).concat(itemsPayload)
+                }));
             }
 
-            // Trigger silent fetch for deep sync
-            fetchAllData(true);
+            // Silently attempt background cloud sync
+            SyncService.syncPending().catch(e => console.log('Silent sync background:', e.message));
 
             if (Platform.OS === 'web') {
                 alert(`✅ Éxito: Orden ${route.params?.orderToEdit ? 'actualizada' : 'creada'} correctamente.`);
@@ -852,12 +711,14 @@ export default function NewSupplierOrderScreen({ navigation, route }) {
                                         style={[styles.modalItem, { borderTopWidth: 2, borderTopColor: '#d4af37' }]}
                                         onPress={async () => {
                                             try {
-                                                const { data, error } = await supabase.from('suppliers').insert({ name: supplierSearch }).select().single();
-                                                if (error) throw error;
-                                                if (data) {
-                                                    selectSupplier(data);
-                                                    fetchSuppliers();
-                                                }
+                                                const newSupplier = {
+                                                    id: 'local-sup-' + Date.now(),
+                                                    name: supplierSearch,
+                                                    created_at: new Date().toISOString()
+                                                };
+                                                await SyncService.queueAction('supplier', newSupplier, {}, 'INSERT');
+                                                selectSupplier(newSupplier);
+                                                fetchSuppliers();
                                             } catch (err) {
                                                 if (Platform.OS === 'web') alert('Error: No se pudo crear el proveedor. Verificá si ya existe.');
                                                 else Alert.alert('Error', 'No se pudo crear el proveedor. Verificá si ya existe.');

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
+import { SyncService } from '../services/syncService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
@@ -125,10 +126,10 @@ export default function AnalyticsScreen({ navigation }) {
                         try {
                             if (action === 'subir precio') {
                                 const newPrice = product.sale_price * 1.1;
-                                await supabase.from('products').update({ sale_price: newPrice }).eq('id', product.id);
+                                await SyncService.queueAction('product', { id: product.id, sale_price: newPrice }, {}, 'UPDATE');
                                 Alert.alert('✅ Éxito', 'Precio incrementado un 10%');
                             } else if (action === 'dejar de vender') {
-                                await supabase.from('products').update({ active: false }).eq('id', product.id);
+                                await SyncService.queueAction('product', { id: product.id, active: false }, {}, 'UPDATE');
                                 Alert.alert('✅ Éxito', 'Producto desactivado');
                             }
                             fetchAnalytics();

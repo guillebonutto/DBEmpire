@@ -1,40 +1,85 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, Switch } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
  * SECCIÓN: IDENTIDAD DEL PRODUCTO
- * Nombre, código, imagen (compacta)
+ * Nombre, código, imagen con previsualización nítida
  */
-export const IdentitySection = ({ formData, handleChange, image, onPickImage, onScanBarcode, onGenerateBarcodeFromName, onPrintBarcode, onPrintBarcodeGrid }) => (
-    <View style={styles.section}>
-        <Text style={styles.sectionTitle}>IDENTIDAD</Text>
+export const IdentitySection = ({ 
+    formData, 
+    handleChange, 
+    image, 
+    onPickImage, 
+    onRemoveImage, 
+    onScanBarcode, 
+    onGenerateBarcodeFromName, 
+    onPrintBarcode, 
+    onPrintBarcode2x, 
+    onPrintBarcodeGrid 
+}) => {
+    const imageSource = typeof image === 'number'
+        ? image
+        : (typeof image === 'string' && image.trim().length > 0
+            ? { uri: image.trim() }
+            : (image?.uri ? image : null));
 
-        {/* Imagen compacta - sin redundancia */}
-        <View style={{ flexDirection: 'row', gap: 15, alignItems: 'center' }}>
-            <TouchableOpacity style={styles.imagePicker} onPress={onPickImage}>
-                {image ? (
-                    <Image source={{ uri: image }} style={styles.imagePreview} />
-                ) : (
-                    <View style={styles.imagePlaceholder}>
-                        <MaterialCommunityIcons name="camera-plus" size={32} color="#666" />
-                        <Text style={styles.imagePlaceholderText}>IMAGEN</Text>
-                    </View>
-                )}
-            </TouchableOpacity>
+    return (
+        <View style={styles.section}>
+            <Text style={styles.sectionTitle}>IDENTIDAD</Text>
 
-            <View style={{ flex: 1, gap: 10 }}>
-                <Text style={styles.label}>Nombre del Producto</Text>
-                <TextInput
-                    style={styles.input}
-                    value={formData.name}
-                    onChangeText={(text) => handleChange('name', text)}
-                    placeholder="Ej. Funda Silicona iPhone 13"
-                    placeholderTextColor="#444"
-                />
+            {/* Imagen compacta con previsualización */}
+            <View style={{ flexDirection: 'row', gap: 15, alignItems: 'center' }}>
+                <View style={styles.imagePickerWrapper}>
+                    <TouchableOpacity 
+                        style={[styles.imagePicker, imageSource && styles.imagePickerWithImage]} 
+                        onPress={onPickImage}
+                        activeOpacity={0.8}
+                    >
+                        {imageSource ? (
+                            <>
+                                <ExpoImage 
+                                    source={imageSource} 
+                                    style={styles.imagePreview} 
+                                    contentFit="cover"
+                                    transition={200}
+                                    cachePolicy="disk"
+                                />
+                                <View style={styles.editImageBadge}>
+                                    <MaterialCommunityIcons name="pencil" size={10} color="#000" />
+                                </View>
+                            </>
+                        ) : (
+                            <View style={styles.imagePlaceholder}>
+                                <MaterialCommunityIcons name="camera-plus" size={28} color="#d4af37" />
+                                <Text style={styles.imagePlaceholderText}>FOTO</Text>
+                            </View>
+                        )}
+                    </TouchableOpacity>
+                    {imageSource && onRemoveImage && (
+                        <TouchableOpacity 
+                            style={styles.removeImageBadge} 
+                            onPress={onRemoveImage}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                            <MaterialCommunityIcons name="close" size={12} color="#fff" />
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                <View style={{ flex: 1, gap: 10 }}>
+                    <Text style={styles.label}>Nombre del Producto</Text>
+                    <TextInput
+                        style={styles.input}
+                        value={formData.name}
+                        onChangeText={(text) => handleChange('name', text)}
+                        placeholder="Ej. Funda Silicona iPhone 13"
+                        placeholderTextColor="#444"
+                    />
+                </View>
             </View>
-        </View>
 
         <Text style={styles.label}>Código de Barras (Opcional)</Text>
         <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -83,6 +128,12 @@ export const IdentitySection = ({ formData, handleChange, image, onPickImage, on
                             <MaterialCommunityIcons name="printer" size={14} color="#000" />
                             <Text style={[styles.printBarcodeText, { fontSize: 10 }]} numberOfLines={1}>1x Código</Text>
                         </TouchableOpacity>
+                        {onPrintBarcode2x && (
+                            <TouchableOpacity style={[styles.printBarcodeBtn, { paddingHorizontal: 4, backgroundColor: '#a67c00' }]} onPress={onPrintBarcode2x}>
+                                <MaterialCommunityIcons name="grid-large" size={14} color="#000" />
+                                <Text style={[styles.printBarcodeText, { fontSize: 10 }]} numberOfLines={1}>2x Códigos</Text>
+                            </TouchableOpacity>
+                        )}
                         {onPrintBarcodeGrid && (
                             <TouchableOpacity style={[styles.printBarcodeBtn, { paddingHorizontal: 4, backgroundColor: '#b8860b' }]} onPress={onPrintBarcodeGrid}>
                                 <MaterialCommunityIcons name="grid" size={14} color="#000" />
@@ -94,7 +145,8 @@ export const IdentitySection = ({ formData, handleChange, image, onPickImage, on
             </View>
         ) : null}
     </View>
-);
+    );
+};
 
 /**
  * SECCIÓN: PRECIO (lo más importante)
@@ -1016,6 +1068,80 @@ const styles = StyleSheet.create({
     },
 
     // === IMAGEN ===
+    imagePickerWrapper: {
+        position: 'relative',
+        width: 82,
+        height: 82,
+    },
+    imagePicker: {
+        width: 82,
+        height: 82,
+        backgroundColor: '#0c0c0c',
+        borderRadius: 12,
+        borderWidth: 1.5,
+        borderColor: '#262626',
+        borderStyle: 'dashed',
+        justifyContent: 'center',
+        alignItems: 'center',
+        overflow: 'hidden',
+    },
+    imagePickerWithImage: {
+        borderStyle: 'solid',
+        borderColor: '#d4af37',
+        backgroundColor: '#000',
+    },
+    imagePreview: {
+        width: '100%',
+        height: '100%',
+    },
+    imagePlaceholder: {
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    imagePlaceholderText: {
+        color: '#888',
+        fontSize: 10,
+        fontWeight: 'bold',
+        marginTop: 4,
+        letterSpacing: 0.5,
+    },
+    editImageBadge: {
+        position: 'absolute',
+        bottom: 4,
+        right: 4,
+        backgroundColor: '#d4af37',
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.6,
+        shadowRadius: 2,
+        elevation: 3,
+    },
+    removeImageBadge: {
+        position: 'absolute',
+        top: -6,
+        right: -6,
+        backgroundColor: '#e74c3c',
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: '#000',
+        elevation: 4,
+        zIndex: 10,
+    },
+    label: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#aaa',
+        marginBottom: 6,
+    },
     compactImagePicker: {
         width: 80,
         height: 80,

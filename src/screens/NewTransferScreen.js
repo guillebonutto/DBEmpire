@@ -1,11 +1,15 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput } from 'react-native';
-import { supabase } from '../services/supabase';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput, Platform } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useProductStore } from '../store/useProductStore';
+import { useFinanceStore } from '../store/useFinanceStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
 
 export default function NewTransferScreen({ navigation }) {
+    const { products: storeProducts, fetchProducts: fetchStoreProducts } = useProductStore();
     const [cart, setCart] = useState([]);
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -15,14 +19,24 @@ export default function NewTransferScreen({ navigation }) {
     const [selectedColor, setSelectedColor] = useState(null);
 
     useEffect(() => {
-        fetchProducts();
+        loadProducts();
     }, []);
 
-    const fetchProducts = async () => {
+    const loadProducts = async () => {
         setLoading(true);
-        const { data } = await supabase.from('products').select('*').eq('active', true).order('name');
-        setProducts(data || []);
-        setLoading(false);
+        try {
+            fetchStoreProducts();
+            const local = await LocalDbService.getAll('products');
+            if (local && local.length > 0) {
+                setProducts(local.filter(p => p.active));
+            } else {
+                setProducts(useProductStore.getState().products.filter(p => p.active));
+            }
+        } catch (err) {
+            console.log('Error loading products offline:', err);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const confirmAddToTransfer = (product) => {
@@ -49,39 +63,63 @@ export default function NewTransferScreen({ navigation }) {
         
         setLoading(true);
         try {
-            // 1. Buscamos el ID del contacto "Socio Córdoba"
-            const { data: client } = await supabase.from('clients').select('id').eq('name', 'Socio Córdoba').single();
-            if(!client) throw new Error('No se encontró el contacto logístico.');
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
 
-            // 2. Creamos el registro del Envío (usando la tabla sales por simplicidad logística)
-            const { data: saleData, error: saleError } = await supabase
-                .from('sales')
-                .insert({
-                    client_id: client.id,
-                    total_amount: cart.reduce((acc, curr) => acc + (curr.sale_price * curr.qty), 0),
-                    status: 'ready_to_ship',
-                    notes: 'Paquete armado - Pendiente de despacho físico'
-                })
-                .select()
-                .single();
+            // 1. Buscamos o creamos el contacto logístico
+            const clients = (await LocalDbService.getAll('clients')) || [];
+            let client = clients.find(c => c.name?.toLowerCase().includes('cordoba') || c.name?.toLowerCase().includes('socio'));
+            let clientId = client ? client.id : '00000000-0000-0000-0000-000000000000';
 
-            if (saleError) throw saleError;
+            const saleId = generateUUID();
+            const totalAmount = cart.reduce((acc, curr) => acc + ((curr.sale_price || 0) * curr.qty), 0);
 
-            // 3. Insertamos los items y DESCONTAMOS del stock local
+            // 2. Creamos la venta de transferencia
+            const saleData = {
+                id: saleId,
+                client_id: clientId,
+                total_amount: totalAmount,
+                status: 'ready_to_ship',
+                notes: 'Paquete armado - Pendiente de despacho físico',
+                created_at: new Date().toISOString()
+            };
+
+            await LocalDbService.saveItem('sales', saleData);
+            await SyncService.queueAction('sales', saleData, {}, 'INSERT');
+
+            // 3. Items y descuento de stock local
+            const allProds = (await LocalDbService.getAll('products')) || [];
             for (const item of cart) {
-                await supabase.from('sale_items').insert({
-                    sale_id: saleData.id,
+                const itemId = generateUUID();
+                const saleItem = {
+                    id: itemId,
+                    sale_id: saleId,
                     product_id: item.id,
                     quantity: item.qty,
                     color: item.selectedColor,
-                    unit_price_at_sale: item.sale_price
-                });
+                    unit_price_at_sale: item.sale_price || 0
+                };
+                await LocalDbService.saveItem('sale_items', saleItem);
+                await SyncService.queueAction('sale_items', saleItem, {}, 'INSERT');
 
-                // DESCUENTO DEL STOCK LOCAL
-                const { data: p } = await supabase.from('products').select('stock_local').eq('id', item.id).single();
-                const newLocalStock = (p.stock_local || 0) - item.qty;
-                await supabase.from('products').update({ stock_local: newLocalStock }).eq('id', item.id);
+                // Descuento stock local
+                const p = allProds.find(pr => pr.id === item.id);
+                if (p) {
+                    const newLocalStock = Math.max(0, (p.stock_local || 0) - item.qty);
+                    const updatedP = {
+                        ...p,
+                        stock_local: newLocalStock,
+                        current_stock: newLocalStock + (p.stock_cordoba || 0)
+                    };
+                    await LocalDbService.saveItem('products', updatedP);
+                    await SyncService.queueAction('products', updatedP, {}, 'UPDATE');
+                }
             }
+
+            useProductStore.getState().fetchProducts();
+            SyncService.syncPending().catch(e => console.log('Silent transfer sync:', e.message));
 
             Alert.alert('📦 Paquete Armado', 'El stock ya fue descontado. Recordá marcarlo como ENVIADO cuando salga el transporte.');
             navigation.goBack();

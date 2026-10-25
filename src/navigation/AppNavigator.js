@@ -45,6 +45,8 @@ import BreakEvenScreen from '../screens/BreakEvenScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import CampaignPlannerScreen from '../screens/CampaignPlannerScreen';
 import CombosScreen from '../screens/CombosScreen';
+import AgendaScreen from '../screens/AgendaScreen';
+import PowerEmpireStrategyScreen from '../screens/PowerEmpireStrategyScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -287,6 +289,16 @@ export default function AppNavigator() {
             <Stack.Screen
                 name="Combos"
                 component={CombosScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="Agenda"
+                component={AgendaScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="PowerEmpireStrategy"
+                component={PowerEmpireStrategyScreen}
                 options={{ headerShown: false }}
             />
         </Stack.Navigator>

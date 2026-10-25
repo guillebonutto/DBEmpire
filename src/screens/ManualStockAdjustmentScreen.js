@@ -6,7 +6,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
+import { useProductStore } from '../store/useProductStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
+
 export default function ManualStockAdjustmentScreen({ navigation }) {
+    const { products: storeProducts, fetchProducts: fetchStoreProducts } = useProductStore();
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -18,22 +23,21 @@ export default function ManualStockAdjustmentScreen({ navigation }) {
             if (role) setUserRole(role);
         };
         getRole();
-        fetchProducts();
+        loadLocalProducts();
     }, []);
 
-    const fetchProducts = async () => {
+    const loadLocalProducts = async () => {
         setLoading(true);
         try {
-            const { data, error } = await supabase
-                .from('products')
-                .select('id, name, stock_local, stock_cordoba, current_stock')
-                .eq('active', true)
-                .order('name');
-            if (error) throw error;
-            setProducts(data || []);
+            fetchStoreProducts();
+            const local = await LocalDbService.getAll('products');
+            if (local && local.length > 0) {
+                setProducts(local.filter(p => p.active));
+            } else {
+                setProducts(useProductStore.getState().products.filter(p => p.active));
+            }
         } catch (err) {
-            console.log(err);
-            Alert.alert('Error', 'No se pudieron cargar los productos');
+            console.log('Error loading products offline:', err);
         } finally {
             setLoading(false);
         }
@@ -56,34 +60,26 @@ export default function ManualStockAdjustmentScreen({ navigation }) {
         }
 
         const newTotal = newLocal + newCordoba;
+        const updatedProduct = {
+            ...product,
+            stock_local: newLocal,
+            stock_cordoba: newCordoba,
+            current_stock: newTotal
+        };
 
-        // Optimistic update
-        setProducts(prev => prev.map(p =>
-            p.id === productId
-                ? { ...p, stock_local: newLocal, stock_cordoba: newCordoba, current_stock: newTotal }
-                : p
-        ));
+        // 1. Optimistic state
+        setProducts(prev => prev.map(p => p.id === productId ? updatedProduct : p));
+        useProductStore.setState(state => ({
+            products: state.products.map(p => p.id === productId ? { ...p, ...updatedProduct } : p)
+        }));
 
+        // 2. Save SQLite & Sync
         try {
-            const { error } = await supabase
-                .from('products')
-                .update({
-                    stock_local: newLocal,
-                    stock_cordoba: newCordoba,
-                    current_stock: newTotal
-                })
-                .eq('id', productId);
-
-            if (error) throw error;
+            await LocalDbService.saveItem('products', updatedProduct);
+            await SyncService.queueAction('products', updatedProduct, {}, 'UPDATE');
+            SyncService.syncPending().catch(e => console.log('Silent stock sync:', e.message));
         } catch (err) {
-            console.log(err);
-            // Rollback on error
-            setProducts(prev => prev.map(p =>
-                p.id === productId
-                    ? product
-                    : p
-            ));
-            Alert.alert('Error', 'No se pudo actualizar el stock en la base de datos');
+            console.log('Error saving stock adjustment locally:', err);
         }
     };
 

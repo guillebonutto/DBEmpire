@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../services/supabase';
+import { SyncService } from '../services/syncService';
+import { useProductStore } from '../store/useProductStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -193,39 +195,34 @@ export default function NewOrderScreen({ navigation }) {
             }
 
             // Insert Sale with PENDING status
-            const { data: saleData, error: saleError } = await supabase
-                .from('sales')
-                .insert({
-                    seller_id: sellerId,
-                    client_id: client ? client.id : null,
-                    total_amount: total,
-                    profit_generated: totalProfit,
-                    commission_amount: 0, // No commission until completed? Or track it now. Let's track 0 for pending.
-                    status: 'pending',
-                    tracking_number: trackingNumber || null
-                })
-                .select()
-                .single();
+            const saleId = 'local-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            const salePayload = {
+                id: saleId,
+                seller_id: sellerId,
+                client_id: client ? client.id : null,
+                total_amount: total,
+                profit_generated: totalProfit,
+                commission_amount: 0,
+                status: 'pending',
+                tracking_number: trackingNumber || null,
+                created_at: new Date().toISOString()
+            };
 
-            if (saleError) throw saleError;
-
-            // Insert Items
-            const saleItems = cart.map(item => ({
-                sale_id: saleData.id,
-                product_id: item.id,
-                quantity: item.qty,
-                unit_price_at_sale: item.sale_price,
-                subtotal: item.sale_price * item.qty,
-                color: item.selectedColor // Agregamos el color aquí
-            }));
-
-            const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
-            if (itemsError) throw itemsError;
+            await SyncService.queueSale(salePayload, cart);
 
             // Update Stock (Reserve it)
+            const { products } = useProductStore.getState();
             for (const item of cart) {
-                const newStock = (item.current_stock || 0) - item.qty;
-                await supabase.from('products').update({ current_stock: newStock }).eq('id', item.id);
+                const prod = products.find(p => p.id === item.id);
+                if (prod) {
+                    const newStock = Math.max(0, (prod.current_stock || 0) - item.qty);
+                    const newLocStock = Math.max(0, (prod.stock_local || 0) - item.qty);
+                    await SyncService.queueAction('product', { 
+                        id: item.id, 
+                        current_stock: newStock,
+                        stock_local: newLocStock
+                    }, {}, 'UPDATE');
+                }
             }
 
             Alert.alert(

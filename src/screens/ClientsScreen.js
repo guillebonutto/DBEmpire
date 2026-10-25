@@ -1,13 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ScrollView, Linking } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Alert, Modal, StatusBar, ScrollView, Linking, Platform } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { supabase } from '../services/supabase';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useClientStore } from '../store/useClientStore';
+import { useFinanceStore } from '../store/useFinanceStore';
+import { SyncService } from '../services/syncService';
 
 export default function ClientsScreen({ navigation }) {
+    const { clients: storeClients, fetchClients: fetchStoreClients, addClientLocally, initStore } = useClientStore();
+    const { sales: storeSales, fetchAllData: fetchFinanceData } = useFinanceStore();
+
     const [clients, setClients] = useState([]);
     const [filteredClients, setFilteredClients] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -17,52 +22,64 @@ export default function ClientsScreen({ navigation }) {
     const [inactiveClients, setInactiveClients] = useState([]);
     const [generatingMsg, setGeneratingMsg] = useState(null); // ID of client being processed
 
-    const fetchClients = async () => {
+    const loadClientsData = useCallback(async () => {
         setLoading(true);
-
         try {
-            // Get Clients
-            const { data: clientsData, error: clientsError } = await supabase.from('clients').select('*').order('created_at', { ascending: false });
-            if (clientsError) throw clientsError;
+            await initStore();
+            fetchStoreClients();
+            fetchFinanceData();
 
-            // Get Completed Sales to calculate total spent
-            const { data: salesData, error: salesError } = await supabase
-                .from('sales')
-                .select('client_id, total_amount')
-                .eq('status', 'completed');
+            const currentClients = useClientStore.getState().clients || [];
+            const sales = useFinanceStore.getState().sales || [];
 
-            if (salesError) throw salesError;
+            // Group sales by client
+            const salesByClient = sales.reduce((acc, sale) => {
+                if (sale.client_id && (sale.status === 'completed' || !sale.status)) {
+                    acc[sale.client_id] = (acc[sale.client_id] || 0) + (sale.total_amount || 0);
+                }
+                return acc;
+            }, {});
 
-            if (clientsData) {
-                // Optimized Calculation: Group sales by client first (O(S + C))
-                const salesByClient = (salesData || []).reduce((acc, sale) => {
-                    if (sale.client_id) {
-                        acc[sale.client_id] = (acc[sale.client_id] || 0) + (sale.total_amount || 0);
-                    }
-                    return acc;
-                }, {});
+            const clientMap = currentClients.map(client => ({
+                ...client,
+                totalSpent: salesByClient[client.id] || 0
+            }));
 
-                const clientMap = clientsData.map(client => ({
-                    ...client,
-                    totalSpent: salesByClient[client.id] || 0
-                }));
+            // Sort by Total Spent (Ranking)
+            const sortedClients = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
+            setClients(sortedClients);
+            setFilteredClients(sortedClients);
 
-                // Sort by Total Spent (Ranking)
-                const sortedClients = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
-
-                setClients(sortedClients);
-                setFilteredClients(sortedClients);
-
-                // CRM Insights: Get Inactive
-                const inactive = await CRMService.getInactiveClients(30);
-                setInactiveClients(inactive.slice(0, 5)); // Show top 5 inactive
-            }
+            // CRM Inactive
+            CRMService.getInactiveClients(30).then(inactive => {
+                if (inactive) setInactiveClients(inactive.slice(0, 5));
+            });
         } catch (err) {
-            console.log('Error fetching clients:', err);
+            console.log('Error loading clients offline-first:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [initStore, fetchStoreClients, fetchFinanceData]);
+
+    useEffect(() => {
+        // When storeClients changes, re-rank
+        const sales = storeSales || [];
+        const salesByClient = sales.reduce((acc, sale) => {
+            if (sale.client_id && (sale.status === 'completed' || !sale.status)) {
+                acc[sale.client_id] = (acc[sale.client_id] || 0) + (sale.total_amount || 0);
+            }
+            return acc;
+        }, {});
+
+        const clientMap = (storeClients || []).map(client => ({
+            ...client,
+            totalSpent: salesByClient[client.id] || 0
+        }));
+
+        const sorted = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
+        setClients(sorted);
+        setFilteredClients(sorted);
+    }, [storeClients, storeSales]);
 
     const handleRecoverClient = async (client) => {
         setGeneratingMsg(client.id);
@@ -90,21 +107,40 @@ export default function ClientsScreen({ navigation }) {
         if (!newClient.name) return Alert.alert('Error', 'El nombre es obligatorio');
 
         try {
-            const { error } = await supabase.from('clients').insert([newClient]);
-            if (error) throw error;
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
+            const clientPayload = {
+                id: generateUUID(),
+                name: newClient.name.trim(),
+                phone: newClient.phone?.trim() || '',
+                notes: newClient.notes?.trim() || '',
+                created_at: new Date().toISOString(),
+                status: 'active'
+            };
+
+            // 1. Optimistic SQLite + Zustand update
+            await addClientLocally(clientPayload);
+
+            // 2. Queue for remote sync
+            await SyncService.queueAction('client', clientPayload, {}, 'INSERT');
+
             setModalVisible(false);
             setNewClient({ name: '', phone: '', notes: '' });
-            fetchClients();
-            Alert.alert('Éxito', 'Cliente agregado');
+
+            if (Platform.OS === 'web') alert('✅ Cliente agregado correctamente');
+            else Alert.alert('✅ Éxito', 'Cliente agregado correctamente');
         } catch (err) {
-            Alert.alert('Error', 'No se pudo guardar (Revisar conexión/claves)');
+            Alert.alert('Error', 'No se pudo guardar el cliente: ' + err.message);
         }
     };
 
     useFocusEffect(
         useCallback(() => {
-            fetchClients();
-        }, [])
+            loadClientsData();
+        }, [loadClientsData])
     );
 
     // Filter logic

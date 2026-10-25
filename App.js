@@ -14,6 +14,7 @@ import { useProductStore } from './src/store/useProductStore';
 import { useClientStore } from './src/store/useClientStore';
 import { useReminderStore } from './src/store/useReminderStore';
 import AgendaWidget from './src/components/AgendaWidget';
+import { navigationRef } from './src/navigation/navigationRef';
 
 import { checkUalaListenerPermission } from './src/services/UalaNotificationListener';
 import { OtaUpdateService } from './src/services/OtaUpdateService';
@@ -45,12 +46,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <AppNavigator />
         <StatusBar style="auto" />
         <CustomAlert {...alertProps} />
+        <AgendaWidget />
       </NavigationContainer>
-      <AgendaWidget />
     </SafeAreaProvider>
   );
 }

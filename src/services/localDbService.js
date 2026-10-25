@@ -21,6 +21,8 @@ const TABLE_COLUMNS = {
     pending_sync: ['id', 'table_name', 'action', 'payload', 'metadata', 'created_at'],
     suppliers: ['id', 'name', 'phone', 'email', 'notes', 'active', 'created_at'],
     reminders: ['id', 'title', 'notes', 'due_date', 'completed', 'notification_id'],
+    promotions: ['id', 'title', 'description', 'type', 'value', 'min_qty', 'active', 'created_at'],
+    incidents: ['id', 'type', 'description', 'amount', 'created_at', 'details']
 };
 
 function sanitizeRow(tableName, row) {
@@ -49,10 +51,33 @@ async function processQueue() {
     if (_processing || _queue.length === 0) return;
     _processing = true;
     while (_queue.length > 0) {
-        const { tableName, items, resolve, reject } = _queue.shift();
+        const { tableName, items, replace, resolve, reject } = _queue.shift();
         try {
             if (!_db) throw new Error("Database not initialized");
             await _db.withTransactionAsync(async () => {
+                if (replace) {
+                    // Check if there are any pending_sync items for this table
+                    let pendingIds = new Set();
+                    try {
+                        const pendingRows = await _db.getAllAsync(`SELECT payload FROM pending_sync WHERE table_name = ?`, [tableName]);
+                        if (pendingRows) {
+                            pendingRows.forEach(r => {
+                                try {
+                                    const p = JSON.parse(r.payload);
+                                    if (p && p.id) pendingIds.add(p.id);
+                                } catch (_) {}
+                            });
+                        }
+                    } catch (_) {}
+
+                    if (pendingIds.size === 0) {
+                        await _db.runAsync(`DELETE FROM ${tableName}`);
+                    } else {
+                        const placeholders = Array.from(pendingIds).map(() => '?').join(',');
+                        await _db.runAsync(`DELETE FROM ${tableName} WHERE id NOT IN (${placeholders})`, Array.from(pendingIds));
+                    }
+                }
+
                 for (const item of items) {
                     const clean = sanitizeRow(tableName, item);
                     const keys = Object.keys(clean);
@@ -63,7 +88,7 @@ async function processQueue() {
                     await _db.runAsync(sql, Object.values(clean));
                 }
             });
-            console.log(`[LocalDb] Saved ${items.length} items to ${tableName}`);
+            console.log(`[LocalDb] Saved ${items.length} items to ${tableName} (replace: ${!!replace})`);
             resolve();
         } catch (e) {
             console.error(`[LocalDb] Error saving to ${tableName}:`, e.message);
@@ -73,10 +98,10 @@ async function processQueue() {
     _processing = false;
 }
 
-async function rawSaveItems(db, tableName, items) {
+async function rawSaveItems(db, tableName, items, replace = false) {
     if (!items || items.length === 0) return;
     return new Promise((resolve, reject) => {
-        _queue.push({ tableName, items, resolve, reject });
+        _queue.push({ tableName, items, replace, resolve, reject });
         processQueue();
     });
 }
@@ -139,6 +164,8 @@ async function init() {
                 CREATE TABLE IF NOT EXISTS pending_sync (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, action TEXT, payload TEXT, metadata TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT, notes TEXT, active INTEGER DEFAULT 1, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS reminders (id TEXT PRIMARY KEY, title TEXT, notes TEXT, due_date TEXT, completed INTEGER DEFAULT 0, notification_id TEXT);
+                CREATE TABLE IF NOT EXISTS promotions (id TEXT PRIMARY KEY, title TEXT, description TEXT, type TEXT, value REAL, min_qty INTEGER DEFAULT 1, active INTEGER DEFAULT 1, created_at TEXT);
+                CREATE TABLE IF NOT EXISTS incidents (id TEXT PRIMARY KEY, type TEXT, description TEXT, amount REAL, created_at TEXT, details TEXT);
             `);
             _db = db;
             await runSeeding(db);
@@ -164,18 +191,25 @@ async function runSeeding(db) {
             return;
         }
 
-        console.log('[LocalDb] NEW SEED DETECTED! Processing...');
+        console.log('[LocalDb] NEW SEED DETECTED! Processing complete clean re-seed...');
         
-        await rawSaveItems(db, 'products', seed.products);
-        await rawSaveItems(db, 'clients', seed.clients);
-        await rawSaveItems(db, 'sales', seed.sales);
-        await rawSaveItems(db, 'expenses', seed.expenses);
-        await rawSaveItems(db, 'authorized_devices', seed.authorized_devices);
-        await rawSaveItems(db, 'settings', seed.settings);
-        await rawSaveItems(db, 'supplier_orders', seed.supplier_orders);
-        await rawSaveItems(db, 'supplier_order_items', seed.supplier_order_items);
-        await rawSaveItems(db, 'sale_items', seed.sale_items);
-        if (seed.suppliers) await rawSaveItems(db, 'suppliers', seed.suppliers);
+        const tablesToClean = ['products', 'clients', 'sales', 'expenses', 'authorized_devices', 'supplier_orders', 'supplier_order_items', 'sale_items', 'suppliers'];
+        for (const tbl of tablesToClean) {
+            try {
+                await db.runAsync(`DELETE FROM ${tbl}`);
+            } catch (_) {}
+        }
+        
+        await rawSaveItems(db, 'products', seed.products, true);
+        await rawSaveItems(db, 'clients', seed.clients, true);
+        await rawSaveItems(db, 'sales', seed.sales, true);
+        await rawSaveItems(db, 'expenses', seed.expenses, true);
+        await rawSaveItems(db, 'authorized_devices', seed.authorized_devices, true);
+        await rawSaveItems(db, 'settings', seed.settings, false);
+        await rawSaveItems(db, 'supplier_orders', seed.supplier_orders, true);
+        await rawSaveItems(db, 'supplier_order_items', seed.supplier_order_items, true);
+        await rawSaveItems(db, 'sale_items', seed.sale_items, true);
+        if (seed.suppliers) await rawSaveItems(db, 'suppliers', seed.suppliers, true);
 
         await db.runAsync(`INSERT OR REPLACE INTO settings (key, value) VALUES ('__seed_version', ?)`, [currentVersion]);
         console.log('[LocalDb] Seeding complete.');
@@ -193,6 +227,11 @@ export const LocalDbService = {
     saveItems: async (tableName, items) => {
         const db = await init();
         await rawSaveItems(db, tableName, items);
+    },
+    replaceFullTable: async (tableName, items) => {
+        const db = await init();
+        if (!items) return;
+        await rawSaveItems(db, tableName, items, true);
     },
     getAll: async (tableName) => {
         const db = await init();

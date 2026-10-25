@@ -40,9 +40,13 @@ export default function ShippingRatesScreen({ navigation }) {
 
             if (error) throw error;
             setRates(data || []);
+            await AsyncStorage.setItem('cached_shipping_rates_full', JSON.stringify(data || []));
         } catch (err) {
-            console.error('Error fetching rates:', err);
-            Alert.alert('Error', 'No se pudieron cargar las tarifas');
+            console.log('Error fetching rates offline, using local cache:', err.message);
+            try {
+                const cached = await AsyncStorage.getItem('cached_shipping_rates_full');
+                if (cached) setRates(JSON.parse(cached));
+            } catch (e) {}
         } finally {
             setLoading(false);
         }

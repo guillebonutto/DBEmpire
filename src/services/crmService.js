@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { LocalDbService } from './localDbService';
 
 export const CRMService = {
     /**
@@ -74,8 +75,37 @@ export const CRMService = {
 
             return Array.from(potentialClients.values());
         } catch (err) {
-            console.log('CRM Match error:', err);
-            return [];
+            console.log('CRM Match error, using local fallback:', err.message);
+            try {
+                const [clients, sales, saleItems, products] = await Promise.all([
+                    LocalDbService.getAll('clients'),
+                    LocalDbService.getAll('sales'),
+                    LocalDbService.getAll('sale_items'),
+                    LocalDbService.getAll('products')
+                ]);
+                const prodMap = (products || []).reduce((acc, p) => ({ ...acc, [p.id]: p.name }), {});
+                const clientMap = (clients || []).reduce((acc, c) => ({ ...acc, [c.id]: c }), {});
+                const saleMap = (sales || []).reduce((acc, s) => ({ ...acc, [s.id]: s }), {});
+
+                const matchedItems = (saleItems || []).filter(si => si.product_id === product.id);
+                const potentialClients = new Map();
+                matchedItems.forEach(si => {
+                    const sale = saleMap[si.sale_id];
+                    if (sale && sale.client_id) {
+                        const client = clientMap[sale.client_id];
+                        if (client && client.id !== '00000000-0000-0000-0000-000000000000' && !potentialClients.has(client.id)) {
+                            potentialClients.set(client.id, {
+                                ...client,
+                                reason: 'Ya compró este producto',
+                                lastPurchasedItem: prodMap[product.id] || product.name
+                            });
+                        }
+                    }
+                });
+                return Array.from(potentialClients.values());
+            } catch (e2) {
+                return [];
+            }
         }
     },
 
@@ -87,25 +117,35 @@ export const CRMService = {
             const dateThreshold = new Date();
             dateThreshold.setDate(dateThreshold.getDate() - days);
 
-            // 1. Get all clients
-            const { data: clients, error: clientError } = await supabase
-                .from('clients')
-                .select('id, name, phone, gender');
+            let allClients = [];
+            let recentSales = [];
 
-            if (clientError) throw clientError;
+            try {
+                // 1. Try remote
+                const { data: clients, error: clientError } = await supabase
+                    .from('clients')
+                    .select('id, name, phone, gender');
+                if (clientError) throw clientError;
+                allClients = clients || [];
 
-            // 2. Get recent sales
-            const { data: recentSales, error: salesError } = await supabase
-                .from('sales')
-                .select('client_id')
-                .gt('created_at', dateThreshold.toISOString());
-
-            if (salesError) throw salesError;
+                const { data: sales, error: salesError } = await supabase
+                    .from('sales')
+                    .select('client_id')
+                    .gt('created_at', dateThreshold.toISOString());
+                if (salesError) throw salesError;
+                recentSales = sales || [];
+            } catch (netErr) {
+                // 2. Fallback to SQLite
+                allClients = (await LocalDbService.getAll('clients')) || [];
+                const localSales = (await LocalDbService.getAll('sales')) || [];
+                const threshIso = dateThreshold.toISOString();
+                recentSales = localSales.filter(s => s.created_at && s.created_at > threshIso);
+            }
 
             const activeClientIds = new Set(recentSales.map(s => s.client_id));
 
             // 3. Filter inactive
-            const inactive = clients.filter(c =>
+            const inactive = allClients.filter(c =>
                 !activeClientIds.has(c.id) &&
                 c.id !== '00000000-0000-0000-0000-000000000000'
             );

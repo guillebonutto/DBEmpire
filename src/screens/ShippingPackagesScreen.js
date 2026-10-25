@@ -3,8 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput, M
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { supabase } from '../services/supabase';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SyncService } from '../services/syncService';
 
 export default function ShippingPackagesScreen({ navigation }) {
     const [packages, setPackages] = useState([]);
@@ -44,9 +43,13 @@ export default function ShippingPackagesScreen({ navigation }) {
 
             if (error) throw error;
             setPackages(data || []);
+            await AsyncStorage.setItem('cached_shipping_packages', JSON.stringify(data || []));
         } catch (err) {
-            console.error('Error fetching packages:', err);
-            Alert.alert('Error', 'No se pudieron cargar los paquetes');
+            console.log('Error fetching packages offline, using cache:', err.message);
+            try {
+                const cached = await AsyncStorage.getItem('cached_shipping_packages');
+                if (cached) setPackages(JSON.parse(cached));
+            } catch (e) {}
         } finally {
             setLoading(false);
         }
@@ -58,9 +61,16 @@ export default function ShippingPackagesScreen({ navigation }) {
                 .from('shipping_rates')
                 .select('courier, destination, base_rate')
                 .eq('active', true);
-            if (data && !error) setAllRates(data);
+            if (data && !error) {
+                setAllRates(data);
+                await AsyncStorage.setItem('cached_shipping_rates', JSON.stringify(data));
+            }
         } catch (err) {
-            console.log('Error caching rates:', err);
+            console.log('Error caching rates offline:', err.message);
+            try {
+                const cached = await AsyncStorage.getItem('cached_shipping_rates');
+                if (cached) setAllRates(JSON.parse(cached));
+            } catch (e) {}
         }
     };
 
@@ -86,8 +96,30 @@ export default function ShippingPackagesScreen({ navigation }) {
             if (error) throw error;
             setAvailableItems(data || []);
         } catch (err) {
-            console.error('Error fetching items:', err);
-            Alert.alert('Error', 'No se pudieron cargar los productos disponibles');
+            console.log('Error fetching items offline, using LocalDbService:', err.message);
+            try {
+                const [orders, orderItems, products] = await Promise.all([
+                    LocalDbService.getAll('supplier_orders'),
+                    LocalDbService.getAll('supplier_order_items'),
+                    LocalDbService.getAll('products')
+                ]);
+                const prodMap = (products || []).reduce((acc, p) => ({ ...acc, [p.id]: p }), {});
+                const orderMap = (orders || []).reduce((acc, o) => ({ ...acc, [o.id]: o }), {});
+
+                const receivedItems = (orderItems || []).filter(item => {
+                    const order = orderMap[item.supplier_order_id];
+                    const prod = prodMap[item.product_id];
+                    return order && order.status === 'received' && !item.shipping_package_id && prod && (prod.stock_local || 0) > 0;
+                }).map(item => ({
+                    ...item,
+                    products: prodMap[item.product_id] || { id: item.product_id, name: item.temp_product_name, cost_price: item.cost_per_unit, stock_local: 1 },
+                    supplier_orders: orderMap[item.supplier_order_id] || { id: item.supplier_order_id, provider_name: 'Proveedor', status: 'received' }
+                }));
+
+                setAvailableItems(receivedItems);
+            } catch (e2) {
+                setAvailableItems([]);
+            }
         }
     };
 
@@ -181,23 +213,21 @@ export default function ShippingPackagesScreen({ navigation }) {
         }
 
         setLoading(true);
-        try {
-            // 1. Create shipping package
-            const { data: newPackage, error: packageError } = await supabase
-                .from('shipping_packages')
-                .insert({
-                    package_name: packageName,
-                    destination,
-                    transport_cost: parseFloat(transportCost),
-                    courier,
-                    tracking_number: trackingNumber,
-                    notes,
-                    status: 'pending'
-                })
-                .select()
-                .single();
+        try {            // 1. Create shipping package
+            const newPackageId = 'local-pkg-' + Date.now();
+            const newPackage = {
+                id: newPackageId,
+                package_name: packageName,
+                destination,
+                transport_cost: parseFloat(transportCost),
+                courier,
+                tracking_number: trackingNumber,
+                notes,
+                status: 'pending',
+                created_at: new Date().toISOString()
+            };
 
-            if (packageError) throw packageError;
+            await SyncService.queueAction('shipping_package', newPackage, {}, 'INSERT');
 
             // 2. Calculate distribution
             const distribution = calculateDistribution();
@@ -210,47 +240,35 @@ export default function ShippingPackagesScreen({ navigation }) {
                     const remainingQty = item.quantity - item.qty_to_send;
 
                     // a) Update original item to have the remaining quantity (unsent)
-                    const { error: splitError } = await supabase
-                        .from('supplier_order_items')
-                        .update({ quantity: remainingQty })
-                        .eq('id', item.id);
-                    if (splitError) throw splitError;
+                    await SyncService.queueAction('supplier_order_item', { id: item.id, quantity: remainingQty }, {}, 'UPDATE');
 
                     // b) Create a NEW item record for the portion actually sent
-                    const { error: cloneError } = await supabase
-                        .from('supplier_order_items')
-                        .insert({
-                            supplier_order_id: item.supplier_orders.id,
-                            product_id: item.products.id,
-                            quantity: item.qty_to_send,
-                            cost_per_unit: item.cost_per_unit,
-                            supplier: item.supplier,
-                            color: item.color,
-                            temp_product_name: item.temp_product_name,
-                            shipping_package_id: newPackage.id,
-                            transport_cost_allocated: parseFloat(item.allocatedTransport)
-                        });
-                    if (cloneError) throw cloneError;
-
+                    const cloneId = 'local-soi-' + Date.now() + Math.floor(Math.random() * 1000);
+                    await SyncService.queueAction('supplier_order_item', {
+                        id: cloneId,
+                        supplier_order_id: item.supplier_orders.id,
+                        product_id: item.products.id,
+                        quantity: item.qty_to_send,
+                        cost_per_unit: item.cost_per_unit,
+                        supplier: item.supplier,
+                        color: item.color,
+                        temp_product_name: item.temp_product_name,
+                        shipping_package_id: newPackage.id,
+                        transport_cost_allocated: parseFloat(item.allocatedTransport)
+                    }, {}, 'INSERT');
                 } else {
                     // FULL SHIPMENT: Just link the existing item
-                    const { error: updateError } = await supabase
-                        .from('supplier_order_items')
-                        .update({
-                            shipping_package_id: newPackage.id,
-                            transport_cost_allocated: parseFloat(item.allocatedTransport)
-                        })
-                        .eq('id', item.id);
-                    if (updateError) throw updateError;
+                    await SyncService.queueAction('supplier_order_item', {
+                        id: item.id,
+                        shipping_package_id: newPackage.id,
+                        transport_cost_allocated: parseFloat(item.allocatedTransport)
+                    }, {}, 'UPDATE');
                 }
 
                 // 📦 IMMEDIATE STOCK DEDUCTION (Leaves Local)
                 if (item.products?.id) {
-                    const { data: prod } = await supabase
-                        .from('products')
-                        .select('stock_local, current_stock')
-                        .eq('id', item.products.id)
-                        .single();
+                    const { products } = useProductStore.getState();
+                    const prod = products.find(p => p.id === item.products.id);
 
                     if (prod) {
                         const newLocal = Math.max(0, (prod.stock_local || 0) - item.qty_to_send);
@@ -258,10 +276,11 @@ export default function ShippingPackagesScreen({ navigation }) {
                         // So we subtract from total current_stock too.
                         const newTotal = Math.max(0, (prod.current_stock || 0) - item.qty_to_send);
 
-                        await supabase.from('products').update({
+                        await SyncService.queueAction('product', {
+                            id: item.products.id,
                             stock_local: newLocal,
                             current_stock: newTotal
-                        }).eq('id', item.products.id);
+                        }, {}, 'UPDATE');
                     }
                 }
             }
@@ -269,14 +288,10 @@ export default function ShippingPackagesScreen({ navigation }) {
             // 4. Update product cost_price for linked products
             for (const item of distribution) {
                 if (item.products?.id) {
-                    const { error: productError } = await supabase
-                        .from('products')
-                        .update({
-                            cost_price: parseFloat(item.newCostPrice)
-                        })
-                        .eq('id', item.products.id);
-
-                    if (productError) throw productError;
+                    await SyncService.queueAction('product', {
+                        id: item.products.id,
+                        cost_price: parseFloat(item.newCostPrice)
+                    }, {}, 'UPDATE');
                 }
             }
 

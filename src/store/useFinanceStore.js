@@ -76,27 +76,27 @@ export const useFinanceStore = create((set, get) => ({
         const netInfo = await NetInfo.fetch();
         if (!netInfo.isConnected) return;
 
-        const cacheDuration = 10 * 60 * 1000;
+        const cacheDuration = 2 * 60 * 1000;
         if (!force && get().lastFetch && (Date.now() - get().lastFetch < cacheDuration)) return;
 
         if (get().sales.length === 0) set({ isLoading: true });
 
         try {
             const [salesRes, expRes, debtRes, dItemsRes, itemsRes, settingsRes] = await Promise.all([
-                supabase.from('sales').select('*, clients(name), profiles(full_name), sale_items(*, products(name))').order('created_at', { ascending: false }).limit(500),
-                supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(500),
+                supabase.from('sales').select('*, clients(name), profiles(full_name), sale_items(*, products(name))').order('created_at', { ascending: false }),
+                supabase.from('expenses').select('*').order('created_at', { ascending: false }),
                 supabase.from('supplier_orders').select('*').order('created_at', { ascending: false }),
                 supabase.from('supplier_order_items').select('*'),
-                supabase.from('sale_items').select('*').limit(1000),
+                supabase.from('sale_items').select('*'),
                 supabase.from('settings').select('*')
             ]);
 
-            if (salesRes.data) await LocalDbService.saveItems('sales', salesRes.data);
-            if (expRes.data) await LocalDbService.saveItems('expenses', expRes.data);
-            if (debtRes.data) await LocalDbService.saveItems('supplier_orders', debtRes.data);
-            if (dItemsRes.data) await LocalDbService.saveItems('supplier_order_items', dItemsRes.data);
-            if (itemsRes.data) await LocalDbService.saveItems('sale_items', itemsRes.data);
-            if (settingsRes.data) await LocalDbService.saveItems('settings', settingsRes.data);
+            if (salesRes.data) await LocalDbService.replaceFullTable('sales', salesRes.data);
+            if (expRes.data) await LocalDbService.replaceFullTable('expenses', expRes.data);
+            if (debtRes.data) await LocalDbService.replaceFullTable('supplier_orders', debtRes.data);
+            if (dItemsRes.data) await LocalDbService.replaceFullTable('supplier_order_items', dItemsRes.data);
+            if (itemsRes.data) await LocalDbService.replaceFullTable('sale_items', itemsRes.data);
+            if (settingsRes.data) await LocalDbService.replaceFullTable('settings', settingsRes.data);
 
             set({
                 sales: salesRes.data || get().sales,
@@ -109,6 +109,7 @@ export const useFinanceStore = create((set, get) => ({
                 isLoading: false
             });
         } catch (e) {
+            console.error('[FinanceStore] fetchAllData error:', e);
             set({ isLoading: false });
         }
     },

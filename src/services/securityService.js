@@ -28,8 +28,8 @@ export const SecurityService = {
             return true;
 
         } catch (err) {
-            console.log('Error logging security event:', err);
-            throw err; // Re-throw so caller knows it failed
+            console.log('Error logging security event (Offline?):', err);
+            return false; // Swallow the error to prevent crashes offline
         }
     },
 

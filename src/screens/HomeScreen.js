@@ -268,7 +268,7 @@ export default function HomeScreen({ navigation }) {
                                         </View>
                                     </View>
 
-                                    {/* Misión Cero */}
+                                    {/* Misión Cero / Método Disney */}
                                     {a.today_plan && (
                                         <View style={[
                                             styles.misionCero,
@@ -277,50 +277,38 @@ export default function HomeScreen({ navigation }) {
                                             <Text style={[
                                                 styles.misionCeroTitle,
                                                 completedTasks.includes(a.today_plan.id) && { color: '#2ecc71', borderBottomColor: '#2ecc7130' }
-                                            ]}>🔥 MISIÓN CERO: EL PLAN DE HOY</Text>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                                                <MaterialCommunityIcons name="star-shooting" size={14} color="#d4af37" />
-                                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>{a.today_plan.product}</Text>
-                                            </View>
-                                            {/* ADMIN: Offline Plan (No Video Direction) */}
-                                            {a.today_plan.schedule && (
-                                                <View style={styles.scheduleBox}>
-                                                    <Text style={styles.scheduleLabel}>⏰ HORARIO</Text>
-                                                    <Text style={styles.scheduleText}>{a.today_plan.schedule}</Text>
-                                                </View>
-                                            )}
-                                            {a.today_plan.location && (
-                                                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, alignItems: 'flex-start' }}>
-                                                    <Text style={{ color: '#e74c3c', fontSize: 14 }}>📍</Text>
-                                                    <Text style={{ color: '#ddd', fontSize: 13, flex: 1, lineHeight: 18 }}>{a.today_plan.location}</Text>
-                                                </View>
-                                            )}
-                                            {a.today_plan.target && !a.today_plan.video_direction && (
-                                                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12, alignItems: 'flex-start' }}>
-                                                    <Text style={{ color: '#e74c3c', fontSize: 14 }}>🎯</Text>
-                                                    <Text style={{ color: '#ddd', fontSize: 13, flex: 1, lineHeight: 18 }}>{a.today_plan.target}{a.today_plan.expected_sales ? ` → ${a.today_plan.expected_sales}` : ''}</Text>
-                                                </View>
-                                            )}
+                                            ]}>🔥 MISIÓN CERO: MÉTODO DISNEY DE VENTAS</Text>
 
-                                            {/* SELLER: Online Plan (Video Direction) */}
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                                                <MaterialCommunityIcons name="star-shooting" size={16} color="#d4af37" />
+                                                <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16, letterSpacing: 0.5 }}>{a.today_plan.product}</Text>
+                                            </View>
+
+                                            {/* 🌟 1. EL SOÑADOR (Contenido Viral & Creatividad) */}
                                             {a.today_plan.video_direction && (
                                                 <View style={styles.videoDirBox}>
                                                     <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8}}>
-                                                        <Text style={{ fontSize: 14 }}>🎬</Text>
-                                                        <Text style={{ color: '#3498db', fontSize: 10, fontWeight: '900', letterSpacing: 1 }}>DIRECCIÓN DE VIDEO VIRAL</Text>
+                                                        <Text style={{ fontSize: 14 }}>🌟</Text>
+                                                        <Text style={{ color: '#3498db', fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>1. EL SOÑADOR (VIDEO VIRAL & GANCHO)</Text>
                                                     </View>
                                                     
-                                                    <Text style={{ color: '#fff', fontSize: 12, marginBottom: 6, lineHeight: 18 }}>
-                                                        <Text style={{ fontSize: 14 }}>👀</Text> <Text style={{fontWeight: 'bold', color: '#c8a8f0'}}>GANCHO VISUAL (0-3s):</Text> {a.today_plan.video_direction.visual_hook}
-                                                    </Text>
+                                                    {a.today_plan.video_direction.visual_hook && (
+                                                        <Text style={{ color: '#fff', fontSize: 12, marginBottom: 6, lineHeight: 18 }}>
+                                                            <Text style={{ fontSize: 14 }}>👀</Text> <Text style={{fontWeight: 'bold', color: '#c8a8f0'}}>GANCHO VISUAL (0-3s):</Text> {a.today_plan.video_direction.visual_hook}
+                                                        </Text>
+                                                    )}
                                                     
-                                                    <Text style={{ color: '#fff', fontSize: 12, marginBottom: 8, lineHeight: 18 }}>
-                                                        <Text style={{ fontSize: 14 }}>🗣️</Text> <Text style={{fontWeight: 'bold', color: '#c8a8f0'}}>GANCHO TEXTUAL (0-3s):</Text> {a.today_plan.video_direction.verbal_hook}
-                                                    </Text>
+                                                    {a.today_plan.video_direction.verbal_hook && (
+                                                        <Text style={{ color: '#fff', fontSize: 12, marginBottom: 8, lineHeight: 18 }}>
+                                                            <Text style={{ fontSize: 14 }}>🗣️</Text> <Text style={{fontWeight: 'bold', color: '#c8a8f0'}}>GANCHO TEXTUAL (0-3s):</Text> {a.today_plan.video_direction.verbal_hook}
+                                                        </Text>
+                                                    )}
                                                     
-                                                    <Text style={{ color: '#bbb', fontSize: 11, fontStyle: 'italic', marginBottom: 12, lineHeight: 16 }}>
-                                                        📝 {a.today_plan.video_direction.structure}
-                                                    </Text>
+                                                    {a.today_plan.video_direction.structure && (
+                                                        <Text style={{ color: '#bbb', fontSize: 11, fontStyle: 'italic', marginBottom: 10, lineHeight: 16 }}>
+                                                            📝 {a.today_plan.video_direction.structure}
+                                                        </Text>
+                                                    )}
 
                                                     {a.today_plan.video_direction.spoken_script && (
                                                         <View style={{ backgroundColor: '#111', borderRadius: 8, padding: 12, marginTop: 4 }}>
@@ -340,27 +328,81 @@ export default function HomeScreen({ navigation }) {
                                                 <View style={[styles.scriptBox, { backgroundColor: '#2ecc7115', borderLeftColor: '#2ecc71', borderLeftWidth: 3 }]}>
                                                     <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6}}>
                                                         <Text style={{ fontSize: 14 }}>✍️</Text>
-                                                        <Text style={[styles.scriptLabel, { color: '#2ecc71', marginBottom: 0 }]}>COPY / CAPTION VIRAL (Listo para pegar):</Text>
+                                                        <Text style={[styles.scriptLabel, { color: '#2ecc71', marginBottom: 0 }]}>COPY / CAPTION PARA REDES (Listo para pegar):</Text>
                                                     </View>
                                                     <Text style={styles.scriptText}>{a.today_plan.best_copy}</Text>
                                                 </View>
                                             )}
 
-                                            {/* AMBOS: Guión Offline */}
+                                            {/* 🎯 2. EL REALISTA (Ejecución en Terreno, Horarios & Calle) */}
+                                            <View style={[styles.scheduleBox, { borderLeftColor: '#f39c12', backgroundColor: '#1c1505' }]}>
+                                                <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8}}>
+                                                    <Text style={{ fontSize: 14 }}>🎯</Text>
+                                                    <Text style={[styles.scheduleLabel, { color: '#f39c12', marginBottom: 0 }]}>2. EL REALISTA (OPERACIÓN EN CALLE & HORARIOS)</Text>
+                                                </View>
+
+                                                {a.today_plan.schedule && (
+                                                    <View style={{ marginBottom: 6 }}>
+                                                        <Text style={{ color: '#aaa', fontSize: 10, fontWeight: '900' }}>⏰ HORARIOS EXACTOS:</Text>
+                                                        <Text style={styles.scheduleText}>{a.today_plan.schedule}</Text>
+                                                    </View>
+                                                )}
+
+                                                {a.today_plan.location && (
+                                                    <View style={{ flexDirection: 'row', gap: 6, marginTop: 4, marginBottom: 6, alignItems: 'flex-start' }}>
+                                                        <Text style={{ color: '#f39c12', fontSize: 14 }}>📍</Text>
+                                                        <Text style={{ color: '#ddd', fontSize: 13, flex: 1, lineHeight: 18 }}>
+                                                            <Text style={{ fontWeight: 'bold', color: '#fff' }}>Ubicación: </Text>{a.today_plan.location}
+                                                        </Text>
+                                                    </View>
+                                                )}
+
+                                                {a.today_plan.target && (
+                                                    <View style={{ flexDirection: 'row', gap: 6, marginTop: 4, alignItems: 'flex-start' }}>
+                                                        <Text style={{ color: '#f39c12', fontSize: 14 }}>👥</Text>
+                                                        <Text style={{ color: '#ddd', fontSize: 13, flex: 1, lineHeight: 18 }}>
+                                                            <Text style={{ fontWeight: 'bold', color: '#fff' }}>Target: </Text>{a.today_plan.target}{a.today_plan.expected_sales ? ` (Meta: ${a.today_plan.expected_sales})` : ''}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
+
+                                            {/* Guión Cara a Cara / WhatsApp */}
                                             {a.today_plan.script && (
                                                 <View style={styles.scriptBox}>
                                                     <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6}}>
                                                         <MaterialCommunityIcons name="comment-text-outline" size={14} color="#e74c3c" />
-                                                        <Text style={[styles.scriptLabel, { marginBottom: 0 }]}>GUIÓN OFFLINE (DECILO ASÍ):</Text>
+                                                        <Text style={[styles.scriptLabel, { marginBottom: 0 }]}>GUIÓN CARA A CARA / WHATSAPP (DECILO ASÍ):</Text>
                                                     </View>
                                                     <Text style={styles.scriptText}>"{a.today_plan.script}"</Text>
                                                 </View>
                                             )}
-                                            
-                                            {a.today_plan.reason && !a.today_plan.video_direction && (
-                                                <View style={{flexDirection: 'row', gap: 6, marginTop: 10, alignItems: 'flex-start'}}>
-                                                    <Text style={{ fontSize: 14 }}>💡</Text>
-                                                    <Text style={{ color: '#777', fontSize: 11, fontStyle: 'italic', flex: 1, lineHeight: 16 }}>{a.today_plan.reason}</Text>
+
+                                            {/* 🛡️ 3. EL CRÍTICO (Matador de Objeciones & Blindaje) */}
+                                            {(a.today_plan.main_objection || a.today_plan.objection_killer || a.today_plan.reason) && (
+                                                <View style={[styles.scriptBox, { backgroundColor: '#e74c3c12', borderLeftColor: '#e74c3c', borderLeftWidth: 3 }]}>
+                                                    <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6}}>
+                                                        <Text style={{ fontSize: 14 }}>🛡️</Text>
+                                                        <Text style={[styles.scriptLabel, { color: '#e74c3c', marginBottom: 0 }]}>3. EL CRÍTICO (MATADOR DE OBJECIONES):</Text>
+                                                    </View>
+                                                    
+                                                    {a.today_plan.main_objection && (
+                                                        <Text style={{ color: '#ffb4ab', fontSize: 12, marginBottom: 4, fontWeight: '700' }}>
+                                                            ⚠️ Duda del cliente: "{a.today_plan.main_objection}"
+                                                        </Text>
+                                                    )}
+
+                                                    {a.today_plan.objection_killer && (
+                                                        <Text style={{ color: '#2ecc71', fontSize: 12, lineHeight: 18, marginBottom: 6, fontWeight: 'bold' }}>
+                                                            💥 Respuesta para cerrar: "{a.today_plan.objection_killer}"
+                                                        </Text>
+                                                    )}
+
+                                                    {a.today_plan.reason && (
+                                                        <Text style={{ color: '#888', fontSize: 11, fontStyle: 'italic', lineHeight: 16 }}>
+                                                            💡 Razón: {a.today_plan.reason}
+                                                        </Text>
+                                                    )}
                                                 </View>
                                             )}
 
@@ -382,7 +424,7 @@ export default function HomeScreen({ navigation }) {
                                                         styles.completeTaskBtnText,
                                                         completedTasks.includes(a.today_plan.id) && { color: '#2ecc71' }
                                                     ]}>
-                                                        {completedTasks.includes(a.today_plan.id) ? "PLAN COMPLETADO" : "MARCAR PLAN COMO COMPLETADO"}
+                                                        {completedTasks.includes(a.today_plan.id) ? "PLAN DISNEY COMPLETADO" : "MARCAR PLAN COMO COMPLETADO"}
                                                     </Text>
                                                 </TouchableOpacity>
                                             )}

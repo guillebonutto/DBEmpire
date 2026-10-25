@@ -9,9 +9,13 @@ import * as Sharing from 'expo-sharing';
 import { printOrSharePDF } from '../utils/pdfHelper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFinanceStore } from '../store/useFinanceStore';
+import { useProductStore } from '../store/useProductStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
 
 export default function SalesScreen({ navigation }) {
     const { sales: recentSales, isLoading: loading, fetchAllData: fetchSalesData } = useFinanceStore();
+    const [isProcessing, setIsProcessing] = useState(false);
     const [stats, setStats] = useState({ today: 0, month: 0, countToday: 0, commissions: 0 });
     const [searchQuery, setSearchQuery] = useState('');
     const [viewType, setViewType] = useState('ventas'); // 'ventas' o 'presupuestos'
@@ -198,7 +202,7 @@ export default function SalesScreen({ navigation }) {
         const title = isBudget ? 'Anular Presupuesto' : 'Anular Venta';
         const message = isBudget
             ? '¿Estás seguro de que deseas anular este presupuesto? Se eliminará de la lista activa.'
-            : '¿Deseas anular esta operación? Ten en cuenta que esto no devolverá el stock automáticamente si ya fue descontado.';
+            : '¿Deseas anular esta venta? Esto devolverá automáticamente las unidades vendidas al stock del inventario.';
 
         Alert.alert(
             title,
@@ -209,23 +213,97 @@ export default function SalesScreen({ navigation }) {
                     text: 'SÍ, ANULAR',
                     style: 'destructive',
                     onPress: async () => {
-                        setLoading(true);
-                        try {
-                            const { error } = await supabase
-                                .from('sales')
-                                .update({ status: 'cancelled' })
-                                .eq('id', sale.id);
+                        // 1. INSTANT OPTIMISTIC UI UPDATE (0ms)
+                        const itemsToRestore = sale.sale_items || [];
+                        const status = (sale.status || '').toLowerCase();
+                        const isCompletedSale = (status === 'completed' || status === 'exitosa' || !status || status === 'vended');
 
-                            if (error) throw error;
+                        setExpandedSale(null);
+                        
+                        // Immediately remove from active sales list
+                        useFinanceStore.setState((state) => ({
+                            sales: state.sales.map((s) => s.id === sale.id ? { ...s, status: 'cancelled' } : s)
+                        }));
 
-                            Alert.alert('✅ Anulado', 'La operación ha sido anulada con éxito.');
-                            fetchSalesData();
-                        } catch (err) {
-                            console.error(err);
-                            Alert.alert('Error', 'No se pudo anular la operación.');
-                        } finally {
-                            setLoading(false);
+                        // Immediately restore stock in memory
+                        if (isCompletedSale && itemsToRestore.length > 0) {
+                            const pState = useProductStore.getState();
+                            if (pState.products && pState.products.length > 0) {
+                                const loc = sale.sale_location || 'local';
+                                const stockField = loc === 'cordoba' ? 'stock_cordoba' : 'stock_local';
+
+                                const updatedProducts = pState.products.map(p => {
+                                    const matchingItems = itemsToRestore.filter(it => it.product_id === p.id);
+                                    if (matchingItems.length > 0) {
+                                        const totalQty = matchingItems.reduce((acc, it) => acc + (parseInt(it.quantity) || 1), 0);
+                                        return {
+                                            ...p,
+                                            [stockField]: (parseInt(p[stockField]) || 0) + totalQty,
+                                            current_stock: (parseInt(p.current_stock) || 0) + totalQty
+                                        };
+                                    }
+                                    return p;
+                                });
+                                useProductStore.setState({ products: updatedProducts });
+                            }
                         }
+
+                        // Immediate feedback
+                        Alert.alert('✅ Venta Anulada', isBudget ? 'El presupuesto fue anulado.' : 'La venta fue anulada y el stock fue restituido al instante.');
+
+                        // 2. BACKGROUND PERSISTENCE & SYNC (Non-blocking)
+                        (async () => {
+                            try {
+                                let finalItems = itemsToRestore;
+                                if (finalItems.length === 0) {
+                                    const { data: dbItems } = await supabase
+                                        .from('sale_items')
+                                        .select('*')
+                                        .eq('sale_id', sale.id);
+                                    if (dbItems && dbItems.length > 0) finalItems = dbItems;
+                                }
+
+                                const cancelPromise = SyncService.queueAction('sale', { id: sale.id, status: 'cancelled' }, {}, 'UPDATE');
+
+                                const stockPromises = [];
+                                if (isCompletedSale && finalItems.length > 0) {
+                                    const { products } = useProductStore.getState();
+                                    for (const item of finalItems) {
+                                        const qty = parseInt(item.quantity) || 1;
+                                        stockPromises.push((async () => {
+                                            try {
+                                                const prod = products.find(p => p.id === item.product_id);
+
+                                                if (prod) {
+                                                    const loc = sale.sale_location || 'local';
+                                                    const stockField = loc === 'cordoba' ? 'stock_cordoba' : 'stock_local';
+                                                    const currentLocStock = parseInt(prod[stockField]) || 0;
+                                                    const currentTotStock = parseInt(prod.current_stock) || 0;
+
+                                                    await SyncService.queueAction('product', {
+                                                        id: item.product_id,
+                                                        [stockField]: currentLocStock + qty,
+                                                        current_stock: currentTotStock + qty
+                                                    }, {}, 'UPDATE');
+                                                }
+                                            } catch (stockErr) {
+                                                console.warn(`Stock background restore error for item ${item.product_id}:`, stockErr);
+                                            }
+                                        })());
+                                    }
+                                }
+
+                                await Promise.all([cancelPromise, ...stockPromises]);
+
+                                try {
+                                    await LocalDbService.saveItems('sales', [{ ...sale, status: 'cancelled' }]);
+                                } catch (e) {
+                                    console.warn('LocalDb save error:', e);
+                                }
+                            } catch (bgErr) {
+                                console.error('Background cancel error:', bgErr);
+                            }
+                        })();
                     }
                 }
             ]
@@ -241,12 +319,12 @@ export default function SalesScreen({ navigation }) {
                 {
                     text: 'SÍ, CONVERTIR',
                     onPress: async () => {
-                        setLoading(true);
+                        setIsProcessing(true);
                         try {
                             // 1. Fetch items
                             const { data: items, error: itemsError } = await supabase
                                 .from('sale_items')
-                                .select('product_id, quantity, products(current_stock)')
+                                .select('*')
                                 .eq('sale_id', sale.id);
 
                             if (itemsError) throw itemsError;
@@ -263,15 +341,30 @@ export default function SalesScreen({ navigation }) {
 
                             if (updateError) throw updateError;
 
-                            // 3. Update stock (Try-catch for non-critical failure)
+                            // 3. Update stock correctly for location and variants
                             try {
+                                const { products } = useProductStore.getState();
                                 for (const item of items) {
-                                    const currentStock = item.products?.current_stock || 0;
-                                    const newStock = currentStock - item.quantity;
-                                    await supabase
-                                        .from('products')
-                                        .update({ current_stock: newStock })
-                                        .eq('id', item.product_id);
+                                    const qty = parseInt(item.quantity) || 1;
+                                    const prod = products.find(p => p.id === item.product_id);
+
+                                    if (prod) {
+                                        const loc = sale.sale_location || 'local';
+                                        const stockField = loc === 'cordoba' ? 'stock_cordoba' : 'stock_local';
+                                        const updatedLocStock = Math.max(0, (prod[stockField] || 0) - qty);
+                                        const updatedCurrentStock = Math.max(0, (prod.current_stock || 0) - qty);
+
+                                        await SyncService.queueAction('product', {
+                                            id: item.product_id,
+                                            [stockField]: updatedLocStock,
+                                            current_stock: updatedCurrentStock
+                                        }, {}, 'UPDATE');
+                                    }
+                                }
+                                
+                                const { fetchProducts } = useProductStore.getState();
+                                if (typeof fetchProducts === 'function') {
+                                    await fetchProducts();
                                 }
                             } catch (stockError) {
                                 console.error('Stock Update Error during conversion:', stockError);
@@ -279,12 +372,12 @@ export default function SalesScreen({ navigation }) {
                             }
 
                             Alert.alert('✅ Convertido', 'Venta finalizada con éxito.');
-                            fetchSalesData();
+                            fetchSalesData(true);
                         } catch (err) {
                             console.error(err);
                             Alert.alert('Error', 'No se pudo completar la operación.');
                         } finally {
-                            setLoading(false);
+                            setIsProcessing(false);
                         }
                     }
                 }
@@ -370,7 +463,7 @@ export default function SalesScreen({ navigation }) {
                                 <TouchableOpacity
                                     style={styles.convertBtn}
                                     onPress={() => handleConvertToSale(item)}
-                                    disabled={loading}
+                                    disabled={loading || isProcessing}
                                 >
                                     <MaterialCommunityIcons name="check-decagram" size={14} color="#000" />
                                     <Text style={styles.convertBtnText}>COBRAR PRESUPUESTO</Text>
@@ -399,7 +492,7 @@ export default function SalesScreen({ navigation }) {
                                                                 .eq('id', item.id);
                                                             if (updateError) throw updateError;
                                                             Alert.alert('✅ Pagado', 'Deuda saldada correctamente.');
-                                                            fetchSalesData();
+                                                            fetchSalesData(true);
                                                         } catch (err) {
                                                             Alert.alert('Error', 'No se pudo actualizar la deuda.');
                                                         }
@@ -408,7 +501,7 @@ export default function SalesScreen({ navigation }) {
                                             ]
                                         );
                                     }}
-                                    disabled={loading}
+                                    disabled={loading || isProcessing}
                                 >
                                     <MaterialCommunityIcons name="cash-check" size={14} color="#000" />
                                     <Text style={styles.convertBtnText}>COBRAR DEUDA</Text>
@@ -418,7 +511,7 @@ export default function SalesScreen({ navigation }) {
                             <TouchableOpacity
                                 style={[styles.convertBtn, { backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#d4af37' }]}
                                 onPress={() => generateReceiptPDF(item)}
-                                disabled={loading}
+                                disabled={loading || isProcessing}
                             >
                                 <MaterialCommunityIcons name="file-pdf-box" size={14} color="#d4af37" />
                                 <Text style={[styles.convertBtnText, { color: '#d4af37' }]}>DESCARGAR PDF</Text>
@@ -427,7 +520,7 @@ export default function SalesScreen({ navigation }) {
                             <TouchableOpacity
                                 style={[styles.convertBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#ff4444' }]}
                                 onPress={() => handleCancelSale(item)}
-                                disabled={loading}
+                                disabled={loading || isProcessing}
                             >
                                 <MaterialCommunityIcons name="delete-outline" size={14} color="#ff4444" />
                                 <Text style={[styles.convertBtnText, { color: '#ff4444' }]}>ANULAR</Text>

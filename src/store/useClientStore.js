@@ -35,7 +35,7 @@ export const useClientStore = create((set, get) => ({
             if (data && data.length > 0) {
                 set({ clients: data });
                 // Persist to local SQLite
-                await LocalDbService.saveItems('clients', data);
+                await LocalDbService.replaceFullTable('clients', data);
             }
         } catch (err) {
             console.log('Supabase unreachable, loading clients from SQLite...', err.message);
@@ -63,6 +63,13 @@ export const useClientStore = create((set, get) => ({
             const updated = state.clients.map(c => c.id === client.id ? { ...c, ...client } : c);
             return { clients: updated };
         });
+    },
+
+    deleteClientLocally: async (id) => {
+        await LocalDbService.deleteItem('clients', id);
+        set((state) => ({
+            clients: state.clients.filter(c => c.id !== id)
+        }));
     }
 }));
 

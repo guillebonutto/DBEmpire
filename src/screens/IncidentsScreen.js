@@ -19,6 +19,11 @@ const RETURN_REASONS = [
     { id: 'danado', label: 'Vino roto/dañado (Tirar)', icon: 'delete', restock: false }
 ];
 
+import { useFinanceStore } from '../store/useFinanceStore';
+import { useProductStore } from '../store/useProductStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
+
 export default function IncidentsScreen({ navigation }) {
     const [incidents, setIncidents] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -52,16 +57,10 @@ export default function IncidentsScreen({ navigation }) {
     const fetchIncidents = async () => {
         setLoading(true);
         try {
-            const { data, error } = await supabase
-                .from('incidents')
-                .select('*, clients(name, phone), products(name), sales(total_amount)')
-                .order('created_at', { ascending: false })
-                .limit(20);
-
-            if (error) throw error;
-            setIncidents(data || []);
+            const local = await LocalDbService.getAll('incidents');
+            setIncidents(local || []);
         } catch (error) {
-            console.log('Error fetching incidents:', error);
+            console.log('Error fetching incidents offline:', error);
         } finally {
             setLoading(false);
         }
@@ -70,22 +69,25 @@ export default function IncidentsScreen({ navigation }) {
     const fetchRecentSales = async (productId) => {
         setLoadingSales(true);
         try {
-            const { data } = await supabase
-                .from('sales')
-                .select(`
-                    id,
-                    created_at,
-                    total_amount,
-                    clients(id, name, phone),
-                    sale_items!inner(product_id, quantity, unit_price)
-                `)
-                .eq('sale_items.product_id', productId)
-                .order('created_at', { ascending: false })
-                .limit(10);
+            const [sales, saleItems, clients] = await Promise.all([
+                LocalDbService.getAll('sales'),
+                LocalDbService.getAll('sale_items'),
+                LocalDbService.getAll('clients')
+            ]);
+            const clientMap = (clients || []).reduce((acc, c) => ({ ...acc, [c.id]: c }), {});
+            const matchingSaleIds = new Set((saleItems || []).filter(si => si.product_id === productId).map(si => si.sale_id));
 
-            setRecentSales(data || []);
+            const matched = (sales || [])
+                .filter(s => matchingSaleIds.has(s.id))
+                .map(s => ({
+                    ...s,
+                    clients: clientMap[s.client_id] || { name: 'Cliente' }
+                }))
+                .slice(0, 10);
+
+            setRecentSales(matched);
         } catch (e) {
-            console.log('Error fetching sales:', e);
+            console.log('Error fetching sales offline:', e);
         } finally {
             setLoadingSales(false);
         }
@@ -100,12 +102,10 @@ export default function IncidentsScreen({ navigation }) {
 
         setSearching(true);
         try {
-            const { data } = await supabase
-                .from('products')
-                .select('*')
-                .ilike('name', `%${query}%`)
-                .limit(5);
-            setSearchResults(data || []);
+            const localProds = (await LocalDbService.getAll('products')) || [];
+            const low = query.toLowerCase();
+            const res = localProds.filter(p => p.active && p.name?.toLowerCase().includes(low)).slice(0, 5);
+            setSearchResults(res);
         } catch (e) { console.log(e) }
         finally { setSearching(false); }
     };
@@ -133,47 +133,65 @@ export default function IncidentsScreen({ navigation }) {
 
         setAdding(true);
         try {
-            const clientName = selectedSale?.clients?.name || 'Cliente desconocido';
+            const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
+            const clientName = selectedSale?.clients?.name || 'Cliente';
             const finalDesc = type === 'devolucion_producto'
                 ? `Devolución: ${selectedProduct.name} - ${returnReason === 'no_gusto' ? 'No le gustó' : 'Dañado'}. Cliente: ${clientName}. ${description}`
                 : description.trim() || (type === 'faltante_caja' ? 'Faltante de caja' : 'Incidente reportado');
 
             // 1. Create Incident Report
-            const { error } = await supabase
-                .from('incidents')
-                .insert({
-                    type,
-                    description: finalDesc,
-                    amount: parseFloat(amount) || 0,
+            const incidentRecord = {
+                id: generateUUID(),
+                type,
+                description: finalDesc,
+                amount: parseFloat(amount) || 0,
+                created_at: new Date().toISOString(),
+                details: JSON.stringify({
                     sale_id: selectedSale?.id || null,
                     client_id: selectedSale?.clients?.id || null,
-                    product_id: selectedProduct?.id || null,
-                    created_at: new Date().toISOString()
-                });
-            if (error) throw error;
+                    product_id: selectedProduct?.id || null
+                })
+            };
+
+            await LocalDbService.saveItem('incidents', incidentRecord);
+            await SyncService.queueAction('incidents', incidentRecord, {}, 'INSERT');
 
             // 2. Logic for Money Deduction (Expense)
             if (showAmount) {
-                await supabase.from('expenses').insert({
+                const newExpense = {
+                    id: generateUUID(),
                     description: `[AUTO-GENERADO] ${type === 'faltante_caja' ? 'Faltante de Caja' : 'Reembolso por Devolución'}`,
                     amount: parseFloat(amount),
                     category: 'Otro',
-                    date: new Date().toISOString()
-                });
+                    created_at: new Date().toISOString()
+                };
+                useFinanceStore.getState().addExpenseLocal(newExpense);
+                await LocalDbService.saveItem('expenses', newExpense);
+                await SyncService.queueAction('expenses', newExpense, {}, 'INSERT');
             }
 
             // 3. Logic for Stock Restock
             if (type === 'devolucion_producto' && returnReason === 'no_gusto' && selectedProduct) {
-                const { error: stockError } = await supabase.rpc('increment_stock', { p_id: selectedProduct.id, quantity: 1 });
-                if (stockError) {
-                    // Fallback if RPC doesn't exist, though typically used. Assuming direct update works too if no RPC.
-                    // But let's assume direct update for safety if RPC fails or not exists.
-                    await supabase
-                        .from('products')
-                        .update({ stock: selectedProduct.stock + 1 })
-                        .eq('id', selectedProduct.id);
+                const allProds = (await LocalDbService.getAll('products')) || [];
+                const p = allProds.find(prod => prod.id === selectedProduct.id);
+                if (p) {
+                    const newStockLocal = (p.stock_local || 0) + 1;
+                    const updatedProduct = {
+                        ...p,
+                        stock_local: newStockLocal,
+                        current_stock: newStockLocal + (p.stock_cordoba || 0)
+                    };
+                    await LocalDbService.saveItem('products', updatedProduct);
+                    await SyncService.queueAction('products', updatedProduct, {}, 'UPDATE');
+                    useProductStore.getState().fetchProducts();
                 }
             }
+
+            SyncService.syncPending().catch(e => console.log('Silent incident sync:', e.message));
 
             Alert.alert('✅ Procesado', 'Incidente guardado. Caja y stock actualizados según corresponda.');
             setDescription('');

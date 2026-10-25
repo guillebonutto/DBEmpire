@@ -204,6 +204,27 @@ export default function NewSaleScreen({ navigation, route }) {
         }
     };
 
+    const resetSaleState = useCallback(() => {
+        clearCart();
+        setSelectedClient(null);
+        setSelectedPromo(null);
+        setManualDiscount('');
+        setManualDiscountType('fixed');
+        setIsLeaderSale(false);
+        setAssignToPartner(false);
+        setIsSandboxMode(false);
+        setExpandedProductId(null);
+        setTempQty(1);
+        setSelectedColor(null);
+    }, [clearCart]);
+
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('beforeRemove', () => {
+            resetSaleState();
+        });
+        return unsubscribe;
+    }, [navigation, resetSaleState]);
+
     useFocusEffect(
         useCallback(() => {
             fetchInitialData();
@@ -481,10 +502,52 @@ export default function NewSaleScreen({ navigation, route }) {
         // Set sale type based on checkout type
         setSaleType(checkoutType);
 
-        // Final sanity check for client
-        if (!selectedClient && checkoutType !== 'completed') {
-            showAlert({ type: 'warning', title: 'Falta Cliente', message: 'Las deudas y presupuestos requieren seleccionar un cliente.' });
-            setClientModalVisible(true);
+        // Si no se seleccionó cliente:
+        if (!selectedClient) {
+            if (checkoutType !== 'completed') {
+                showAlert({ 
+                    type: 'warning', 
+                    title: 'Cliente Requerido', 
+                    message: 'Las deudas y presupuestos requieren seleccionar o registrar un cliente.',
+                    buttons: [
+                        {
+                            text: 'ELEGIR / CREAR CLIENTE',
+                            onPress: () => setClientModalVisible(true)
+                        },
+                        {
+                            text: 'CANCELAR',
+                            style: 'cancel'
+                        }
+                    ]
+                });
+                return;
+            }
+
+            // Preguntar si desea añadir un cliente o continuar como consumidor final
+            showAlert({
+                type: 'warning',
+                title: '¿Asignar Cliente?',
+                message: 'No has seleccionado ningún cliente para esta venta.\n\n¿Deseas elegir o crear un cliente, o continuar como Consumidor Final?',
+                buttons: [
+                    {
+                        text: 'ELEGIR / CREAR CLIENTE',
+                        onPress: () => {
+                            setClientModalVisible(true);
+                        }
+                    },
+                    {
+                        text: 'CONSUMIDOR FINAL',
+                        style: 'destructive',
+                        onPress: () => {
+                            triggerCheckout(null, checkoutType);
+                        }
+                    },
+                    {
+                        text: 'CANCELAR',
+                        style: 'cancel'
+                    }
+                ]
+            });
             return;
         }
 
@@ -968,7 +1031,7 @@ export default function NewSaleScreen({ navigation, route }) {
     const renderHeader = () => (
         <View style={styles.compactHeader}>
             <View style={styles.headerTopRow}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtnSmall}>
+                <TouchableOpacity onPress={() => { resetSaleState(); navigation.goBack(); }} style={styles.backBtnSmall}>
                     <MaterialCommunityIcons name="arrow-left" size={20} color="#d4af37" />
                 </TouchableOpacity>
                 <View style={styles.locationSmallToggle}>
@@ -1090,14 +1153,14 @@ export default function NewSaleScreen({ navigation, route }) {
                 contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
                 renderItem={({ item, index }) => (
                     <CartItem
-                        key={item.cartId || `${item.id}-${index}`}
+                        key={item.cartId || `${item.id}-${item.color || 'no-color'}-${index}`}
                         item={item}
-                        onRemove={removeFromCart}
-                        onSplit={splitCartItem}
-                        onOverride={setManualOverride}
+                        onRemove={(id, color) => removeFromCart(id, color)}
+                        onSplit={(id, color) => splitCartItem(id, color)}
+                        onOverride={(id) => setManualOverride(id)}
                         manualOverride={manualOverrides[item.id]}
                         regionalPrice={getRegionalPrice(item, saleLocation)}
-                        onUpdateQty={updateCartQty}
+                        onUpdateQty={(id, newQty, color) => updateCartQty(id, newQty, color)}
                     />
                 )}
                 ListEmptyComponent={
@@ -1306,7 +1369,6 @@ export default function NewSaleScreen({ navigation, route }) {
                 initiateProductSelection={initiateProductSelection}
                 confirmAddToCart={confirmAddToCart}
                 userRole={currentUserRole}
-                onQuickCheckout={() => handleCheckout('completed')}
             />
 
             {/* CLIENT SELECTION MODAL */}

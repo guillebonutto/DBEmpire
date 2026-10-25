@@ -49,14 +49,15 @@ jest.mock('expo-sqlite', () => ({
 jest.mock('../../assets/seed_data.json', () => ({
     __version: '2',
     products: [{ id: 'p1', name: 'Test Prod Seed', current_stock: 10 }],
-    clients: [],
-    sales: [],
-    expenses: [],
-    authorized_devices: [],
-    settings: [],
-    supplier_orders: [],
-    supplier_order_items: [],
-    sale_items: [],
+    clients: [{ id: 'c1', name: 'Test Client' }],
+    sales: [{ id: 's1', total: 100 }],
+    expenses: [{ id: 'e1', amount: 50 }],
+    authorized_devices: [{ id: 'd1', name: 'Device 1' }],
+    settings: [{ key: 'k1', value: 'v1' }],
+    supplier_orders: [{ id: 'so1', total: 200 }],
+    supplier_order_items: [{ id: 'soi1', qty: 2 }],
+    sale_items: [{ id: 'si1', qty: 1 }],
+    suppliers: [{ id: 'sup1', name: 'Supplier A' }],
 }), { virtual: true });
 
 describe('LocalDbService', () => {
@@ -70,6 +71,42 @@ describe('LocalDbService', () => {
         expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining('CREATE TABLE IF NOT EXISTS reminders'));
         expect(db).toBe(mockDb);
     });
+
+    test('runSeeding should execute if versions do not match', async () => {
+        jest.resetModules();
+        
+        jest.doMock('react-native', () => ({ Alert: { alert: jest.fn() }, Platform: { OS: 'android' } }));
+        jest.doMock('../../assets/seed_data.json', () => ({
+            __version: '3',
+            products: [{ id: 'p1', name: 'Test Prod Seed', current_stock: 10 }]
+        }), { virtual: true });
+        
+        const mockRunAsyncIsolated = jest.fn().mockResolvedValue();
+        const mockDbIsolated = {
+            execAsync: jest.fn().mockResolvedValue(),
+            getAllAsync: jest.fn().mockResolvedValue([]),
+            getFirstAsync: jest.fn().mockResolvedValue({ value: '1' }), // Old version
+            runAsync: mockRunAsyncIsolated,
+            withTransactionAsync: jest.fn(async (cb) => { await cb(); })
+        };
+        
+        jest.doMock('expo-sqlite', () => ({
+            openDatabaseAsync: jest.fn().mockResolvedValue(mockDbIsolated)
+        }));
+        
+        const isolatedLocalDbService = require('../services/localDbService').LocalDbService;
+        const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+        
+        await isolatedLocalDbService.init();
+        
+        expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[LocalDb] NEW SEED DETECTED'));
+        expect(mockRunAsyncIsolated).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM products'));
+        expect(mockRunAsyncIsolated).toHaveBeenCalledWith(expect.stringContaining('INSERT OR REPLACE INTO settings (key, value) VALUES (\'__seed_version\', ?)'), ['3']);
+        
+        consoleSpy.mockRestore();
+    });
+
+
 
     test('saveItem should sanitize inputs and invoke runAsync in a transaction queue', async () => {
         const testProduct = {
@@ -168,5 +205,45 @@ describe('LocalDbService', () => {
             sales: 120,
             debts: 8
         });
+    });
+
+    test('init should handle migration errors gracefully', async () => {
+        // Reset the cached promise in localDbService by resetting modules
+        jest.resetModules();
+        jest.mock('react-native', () => ({ Alert: { alert: jest.fn() }, Platform: { OS: 'android' } }));
+        jest.mock('expo-sqlite', () => ({ openDatabaseAsync: jest.fn().mockRejectedValue(new Error('Migration failed')) }));
+        jest.mock('../../assets/seed_data.json', () => ({ __version: '2' }), { virtual: true });
+        
+        const freshModule = require('../services/localDbService');
+        await expect(freshModule.LocalDbService.init()).rejects.toThrow('Migration failed');
+    });
+
+    test('saveItem should reject if item is falsy', async () => {
+        await expect(LocalDbService.saveItem('products', null)).rejects.toThrow();
+    });
+
+    test('saveItems should return early if items array is empty', async () => {
+        await LocalDbService.saveItems('products', []);
+        expect(mockRunAsync).not.toHaveBeenCalled();
+    });
+
+    test('replaceFullTable should clear table and insert items', async () => {
+        const items = [{ id: '1', name: 'Product A' }];
+        await LocalDbService.replaceFullTable('products', items);
+        
+        expect(mockWithTransactionAsync).toHaveBeenCalled();
+        expect(mockRunAsync).toHaveBeenCalledWith('DELETE FROM products');
+        expect(mockRunAsync).toHaveBeenCalledWith(expect.stringContaining('INSERT OR REPLACE INTO products'), expect.any(Array));
+    });
+
+    test('replaceFullTable should return early if items array is empty', async () => {
+        await LocalDbService.replaceFullTable('products', []);
+        // By design, replaceFullTable returns early if items is empty
+        expect(mockWithTransactionAsync).not.toHaveBeenCalled();
+    });
+
+    test('getAll should throw when error occurs', async () => {
+        mockGetAllAsync.mockRejectedValueOnce(new Error('Select failed'));
+        await expect(LocalDbService.getAll('invalid_table')).rejects.toThrow('Select failed');
     });
 });

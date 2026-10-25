@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SyncService } from '../services/syncService';
 
 export const useProductTesterStore = create((set, get) => ({
     testProducts: [],
@@ -16,8 +18,13 @@ export const useProductTesterStore = create((set, get) => ({
             
             if (error) throw error;
             set({ testProducts: data || [] });
+            await AsyncStorage.setItem('cached_test_products', JSON.stringify(data || []));
         } catch (error) {
-            console.error('Error fetching test products:', error);
+            console.log('Offline: reading test products from cache...');
+            try {
+                const cached = await AsyncStorage.getItem('cached_test_products');
+                if (cached) set({ testProducts: JSON.parse(cached) });
+            } catch (e) {}
         } finally {
             set({ isLoading: false });
         }
@@ -32,22 +39,27 @@ export const useProductTesterStore = create((set, get) => ({
             
             if (error) throw error;
             set({ streetResults: data || [] });
+            await AsyncStorage.setItem('cached_street_results', JSON.stringify(data || []));
         } catch (error) {
-            console.error('Error fetching street results:', error);
+            console.log('Offline: reading street results from cache...');
+            try {
+                const cached = await AsyncStorage.getItem('cached_street_results');
+                if (cached) set({ streetResults: JSON.parse(cached) });
+            } catch (e) {}
         }
     },
 
     addTestProduct: async (productData) => {
         try {
-            const { data, error } = await supabase
-                .from('test_products')
-                .insert([productData])
-                .select()
-                .single();
+            const newProduct = {
+                id: 'local-tp-' + Date.now(),
+                ...productData,
+                created_at: new Date().toISOString()
+            };
+            await SyncService.queueAction('test_product', newProduct, {}, 'INSERT');
             
-            if (error) throw error;
-            set(state => ({ testProducts: [data, ...state.testProducts] }));
-            return data;
+            set(state => ({ testProducts: [newProduct, ...state.testProducts] }));
+            return newProduct;
         } catch (error) {
             console.error('Error adding test product:', error);
             throw error;
@@ -56,11 +68,12 @@ export const useProductTesterStore = create((set, get) => ({
 
     submitStreetTestResult: async (testData) => {
         try {
-            const { error } = await supabase
-                .from('street_test_results')
-                .insert([testData]);
-            
-            if (error) throw error;
+            const newResult = {
+                id: 'local-str-' + Date.now(),
+                ...testData,
+                created_at: new Date().toISOString()
+            };
+            await SyncService.queueAction('street_test_result', newResult, {}, 'INSERT');
         } catch (error) {
             console.error('Error saving street test result:', error);
             throw error;
@@ -84,12 +97,10 @@ export const useProductTesterStore = create((set, get) => ({
             const currentItem = get().testProducts.find(p => p.id === id);
             if (!currentItem) return;
 
-            const { error } = await supabase
-                .from('test_products')
-                .update({ [field]: currentItem[field] })
-                .eq('id', id);
-
-            if (error) throw error;
+            await SyncService.queueAction('test_product', {
+                id,
+                [field]: currentItem[field]
+            }, {}, 'UPDATE');
         } catch (error) {
             console.error('Error updating metric:', error);
             get().fetchTestProducts(); // Revert optimistic assuming something failed
@@ -104,12 +115,7 @@ export const useProductTesterStore = create((set, get) => ({
                 )
             }));
 
-            const { error } = await supabase
-                .from('test_products')
-                .update({ status })
-                .eq('id', id);
-
-            if (error) throw error;
+            await SyncService.queueAction('test_product', { id, status }, {}, 'UPDATE');
         } catch (error) {
             console.error('Error updating status:', error);
             get().fetchTestProducts();
@@ -121,8 +127,7 @@ export const useProductTesterStore = create((set, get) => ({
             set(state => ({
                 testProducts: state.testProducts.filter(p => p.id !== id)
             }));
-            const { error } = await supabase.from('test_products').delete().eq('id', id);
-            if (error) throw error;
+            await SyncService.queueAction('test_product', { id }, {}, 'DELETE');
         } catch (error) {
             console.error('Error deleting test product:', error);
             get().fetchTestProducts();

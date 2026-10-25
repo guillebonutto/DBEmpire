@@ -6,6 +6,10 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { GeminiService } from '../services/geminiService';
+import { useProductStore } from '../store/useProductStore';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
+import { GlobalDataService } from '../services/GlobalDataService';
 
 export default function PromotionsScreen({ navigation }) {
     const [promos, setPromos] = useState([]);
@@ -22,7 +26,7 @@ export default function PromotionsScreen({ navigation }) {
     // Form State
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
-    const [type, setType] = useState('global_percent'); // global_percent, buy_x_get_y, fixed_discount
+    const [type, setType] = useState('percentage_discount');
     const [value, setValue] = useState('');
     const [selectedProducts, setSelectedProducts] = useState([]);
     const [minQty, setMinQty] = useState('1');
@@ -35,9 +39,12 @@ export default function PromotionsScreen({ navigation }) {
 
     const fetchProducts = async () => {
         try {
-            const { data, error } = await supabase.from('products').select('id, name').eq('active', true).order('name');
-            if (error) throw error;
-            if (data) setProducts(data);
+            const localProds = await LocalDbService.getAll('products');
+            if (localProds && localProds.length > 0) {
+                setProducts(localProds.filter(p => p.active));
+            } else {
+                setProducts(useProductStore.getState().products.filter(p => p.active));
+            }
         } catch (e) {
             console.error('[Promotions] Error fetching products:', e.message);
         }
@@ -46,24 +53,15 @@ export default function PromotionsScreen({ navigation }) {
     const fetchPromos = async () => {
         setLoading(true);
         try {
-            const { data, error } = await supabase
-                .from('promotions')
-                .select(`
-                    *,
-                    promotion_products (
-                        product_id,
-                        products (
-                            name
-                        )
-                    )
-                `)
-                .order('created_at', { ascending: false });
-
-            if (error) throw error;
-            if (data) setPromos(data.filter(p => p.type !== 'psychological_combo'));
+            const local = await LocalDbService.getAll('promotions');
+            if (local && local.length > 0) {
+                setPromos(local.filter(p => p.type !== 'psychological_combo'));
+            } else {
+                const cached = GlobalDataService.getPromotions();
+                setPromos(cached.filter(p => p.type !== 'psychological_combo'));
+            }
         } catch (e) {
-            console.error('[Promotions] Error fetching promos:', e.message);
-            Alert.alert('Error', 'No se pudieron cargar las promociones. Revisa tu conexión.');
+            console.error('[Promotions] Error fetching promos offline:', e.message);
         } finally {
             setLoading(false);
         }
@@ -72,7 +70,6 @@ export default function PromotionsScreen({ navigation }) {
     const handleSavePromo = async () => {
         if (!title || !type) return;
 
-        // Validation for values
         const numericValue = parseFloat(value.toString().replace(',', '.')) || 0;
         if (type !== 'buy_x_get_y' && numericValue <= 0) {
             Alert.alert('Falta Valor', 'Por favor ingresa un porcentaje o monto de descuento mayor a 0 en el campo correspondiente.');
@@ -81,68 +78,56 @@ export default function PromotionsScreen({ navigation }) {
 
         setLoading(true);
 
+        const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+
+        const promoId = editingPromoId || generateUUID();
         const promoPayload = {
+            id: promoId,
             title,
             description,
             type,
             value: numericValue,
             min_qty: parseInt(minQty) || 1,
-            active: true
+            active: 1,
+            created_at: new Date().toISOString()
         };
 
-        let promoData, promoError;
+        try {
+            await LocalDbService.saveItem('promotions', promoPayload);
+            await SyncService.queueAction('promotions', promoPayload, {}, editingPromoId ? 'UPDATE' : 'INSERT');
+            SyncService.syncPending().catch(e => console.log('Silent promo sync:', e.message));
 
-        if (editingPromoId) {
-            const result = await supabase
-                .from('promotions')
-                .update(promoPayload)
-                .eq('id', editingPromoId)
-                .select()
-                .single();
-            promoData = result.data;
-            promoError = result.error;
-        } else {
-            const result = await supabase
-                .from('promotions')
-                .insert(promoPayload)
-                .select()
-                .single();
-            promoData = result.data;
-            promoError = result.error;
-        }
-
-        if (promoError) {
-            alert('Error al guardar la promoción: ' + promoError.message);
+            resetForm();
+            setModalVisible(false);
+            fetchPromos();
+        } catch (err) {
+            Alert.alert('Error', 'No se pudo guardar la promoción: ' + err.message);
+        } finally {
             setLoading(false);
-            return;
         }
-
-        if (editingPromoId) {
-            await supabase.from('promotion_products').delete().eq('promotion_id', editingPromoId);
-        }
-
-        if (selectedProducts.length > 0) {
-            const links = selectedProducts.map(pid => ({
-                promotion_id: promoData.id,
-                product_id: pid
-            }));
-            const { error: linkError } = await supabase.from('promotion_products').insert(links);
-            if (linkError) console.error('Error linking products:', linkError);
-        }
-
-        resetForm();
-        setModalVisible(false);
-        fetchPromos();
-        setLoading(false);
     };
 
     const handleDeletePromo = async (id) => {
+        const performDelete = async () => {
+            setLoading(true);
+            try {
+                await LocalDbService.deleteItem('promotions', id);
+                await SyncService.queueAction('promotions', { id }, {}, 'DELETE');
+                SyncService.syncPending().catch(e => console.log('Silent promo delete sync:', e.message));
+                fetchPromos();
+            } catch (err) {
+                Alert.alert('Error', 'No se pudo eliminar');
+            } finally {
+                setLoading(false);
+            }
+        };
+
         if (Platform.OS === 'web') {
             if (confirm('¿Estás seguro de que deseas eliminar esta promoción?')) {
-                setLoading(true);
-                await supabase.from('promotions').delete().eq('id', id);
-                fetchPromos();
-                setLoading(false);
+                performDelete();
             }
         } else {
             Alert.alert(
@@ -153,12 +138,7 @@ export default function PromotionsScreen({ navigation }) {
                     {
                         text: 'SÍ, BORRAR',
                         style: 'destructive',
-                        onPress: async () => {
-                            setLoading(true);
-                            await supabase.from('promotions').delete().eq('id', id);
-                            fetchPromos();
-                            setLoading(false);
-                        }
+                        onPress: performDelete
                     }
                 ]
             );
@@ -196,7 +176,7 @@ export default function PromotionsScreen({ navigation }) {
     const togglePromo = async (id, currentStatus) => {
         // Optimistic update
         setPromos(prev => prev.map(p => p.id === id ? { ...p, active: !currentStatus } : p));
-        await supabase.from('promotions').update({ active: !currentStatus }).eq('id', id);
+        await SyncService.queueAction('promotions', { id, active: !currentStatus }, {}, 'UPDATE');
     };
 
     const handleGenerateMagic = async (promo) => {

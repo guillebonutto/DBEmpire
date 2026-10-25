@@ -17,7 +17,15 @@ export const SyncService = {
                 'expense': 'expenses',
                 'order': 'supplier_orders',
                 'client': 'clients',
-                'supplier': 'suppliers'
+                'supplier': 'suppliers',
+                'reminder': 'reminders',
+                'promotion': 'promotions',
+                'asset': 'assets',
+                'test_product': 'test_products',
+                'product': 'products',
+                'shipping_package': 'shipping_packages',
+                'supplier_order_item': 'supplier_order_items',
+                'street_test_result': 'street_test_results'
             };
             
             const tableName = tableMap[type] || type;
@@ -87,9 +95,10 @@ export const SyncService = {
                     const metadata = JSON.parse(item.metadata);
                     
                     // --- AUTO-FIX INVALID IDS ---
-                    // If the payload has a 'local-...' ID, Supabase will reject it as a UUID.
-                    // We replace it with a valid UUID on the fly to unblock the sync queue.
-                    if (payload && payload.id && typeof payload.id === 'string' && payload.id.startsWith('local')) {
+                    // If the payload has a non-UUID ID (e.g. legacy 'rem_...' or 'local-...'),
+                    // Supabase will reject it as a UUID. We replace it with a valid UUID v4 on the fly.
+                    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                    if (payload && payload.id && typeof payload.id === 'string' && !uuidRegex.test(payload.id)) {
                         const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
                             const r = Math.random() * 16 | 0;
                             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
@@ -110,15 +119,9 @@ export const SyncService = {
                             case 'sales':
                                 success = await SyncService._processSaleSync(payload, metadata);
                                 break;
-                            case 'expenses':
-                            case 'supplier_orders':
-                            case 'clients':
-                            case 'suppliers':
+                            default:
                                 success = await SyncService._processGenericInsert(item.table_name, payload);
                                 break;
-                            default:
-                                console.warn(`[SyncService] Unknown table for INSERT: ${item.table_name}`);
-                                success = true;
                         }
                     } else if (item.action === 'UPDATE') {
                         success = await SyncService._processGenericUpdate(item.table_name, payload);
@@ -228,6 +231,25 @@ export const SyncService = {
         if (tableName === 'supplier_orders') {
             delete dataToInsert.total_amount;
         }
+        if (tableName === 'products') {
+            delete dataToInsert.variants_json;
+            if (typeof dataToInsert.variants === 'string') {
+                try { dataToInsert.variants = JSON.parse(dataToInsert.variants); } catch (_) {}
+            }
+        }
+        if (tableName === 'reminders') {
+            const allowedCols = ['id', 'title', 'notes', 'due_date', 'completed', 'notification_id'];
+            Object.keys(dataToInsert).forEach(col => {
+                if (!allowedCols.includes(col)) delete dataToInsert[col];
+            });
+            if (dataToInsert.completed !== undefined) {
+                dataToInsert.completed = (dataToInsert.completed === 1 || dataToInsert.completed === true || dataToInsert.completed === '1') ? 1 : 0;
+            }
+            // Use upsert to handle retries cleanly
+            const { error } = await supabase.from(tableName).upsert(dataToInsert);
+            if (error) throw error;
+            return true;
+        }
         const { error } = await supabase.from(tableName).insert(dataToInsert);
         if (error) throw error;
         return true;
@@ -237,6 +259,21 @@ export const SyncService = {
         const { id, ...updateData } = payload;
         if (tableName === 'supplier_orders') {
             delete updateData.total_amount;
+        }
+        if (tableName === 'products') {
+            delete updateData.variants_json;
+            if (typeof updateData.variants === 'string') {
+                try { updateData.variants = JSON.parse(updateData.variants); } catch (_) {}
+            }
+        }
+        if (tableName === 'reminders') {
+            const allowedCols = ['title', 'notes', 'due_date', 'completed', 'notification_id'];
+            Object.keys(updateData).forEach(col => {
+                if (!allowedCols.includes(col)) delete updateData[col];
+            });
+            if (updateData.completed !== undefined) {
+                updateData.completed = (updateData.completed === 1 || updateData.completed === true || updateData.completed === '1') ? 1 : 0;
+            }
         }
         const { error } = await supabase.from(tableName).update(updateData).eq('id', id);
         if (error) throw error;

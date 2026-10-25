@@ -1007,6 +1007,13 @@ export default function AdminScreen({ navigation }) {
                                     <Text style={styles.quickAccessTitle}>Calendario</Text>
                                     <Text style={styles.quickAccessSubtitle}>CAMPAÑAS</Text>
                                 </TouchableOpacity>
+                                <TouchableOpacity style={styles.quickAccessCard} onPress={() => navigation.navigate('PowerEmpireStrategy')}>
+                                    <View style={[styles.quickAccessIconBox, { backgroundColor: '#f77f0020' }]}>
+                                        <MaterialCommunityIcons name="lightning-bolt" size={22} color="#f77f00" />
+                                    </View>
+                                    <Text style={styles.quickAccessTitle}>Estrategia</Text>
+                                    <Text style={styles.quickAccessSubtitle}>POWEREMPIRE</Text>
+                                </TouchableOpacity>
                                 <TouchableOpacity style={styles.quickAccessCard} onPress={() => Alert.alert('Empire OS', 'Backup en la nube activo.')}>
                                     <View style={[styles.quickAccessIconBox, { backgroundColor: '#3498db15' }]}>
                                         <MaterialCommunityIcons name="cloud" size={22} color="#3498db" />
