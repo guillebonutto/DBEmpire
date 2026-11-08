@@ -7,15 +7,17 @@ export const useClientStore = create((set, get) => ({
     loadingClients: false,
     isInitialized: false,
 
-    initStore: async () => {
-        if (get().isInitialized) return;
+    initStore: async (forceRefresh = false) => {
+        if (get().isInitialized && !forceRefresh) return;
         try {
             const cached = await LocalDbService.getAll('clients');
-            if (cached && cached.length > 0) {
-                set({ clients: cached.sort((a,b) => a.name.localeCompare(b.name)), isInitialized: true });
-            }
+            set({
+                clients: (cached && cached.length > 0) ? cached.sort((a,b) => a.name.localeCompare(b.name)) : [],
+                isInitialized: true
+            });
         } catch (err) {
             console.error('[ClientStore] Init error:', err);
+            set({ isInitialized: true });
         }
     },
 
@@ -33,9 +35,11 @@ export const useClientStore = create((set, get) => ({
             
             if (error) throw error;
             if (data && data.length > 0) {
-                set({ clients: data });
-                // Persist to local SQLite
+                // Persist to local SQLite (which automatically preserves pending offline changes)
                 await LocalDbService.replaceFullTable('clients', data);
+                // Load consistent data from SQLite
+                const consistentClients = await LocalDbService.getAll('clients');
+                set({ clients: (consistentClients && consistentClients.length > 0 ? consistentClients : data).sort((a,b) => a.name.localeCompare(b.name)) });
             }
         } catch (err) {
             console.log('Supabase unreachable, loading clients from SQLite...', err.message);

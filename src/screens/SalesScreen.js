@@ -16,7 +16,6 @@ import { SyncService } from '../services/syncService';
 export default function SalesScreen({ navigation }) {
     const { sales: recentSales, isLoading: loading, fetchAllData: fetchSalesData } = useFinanceStore();
     const [isProcessing, setIsProcessing] = useState(false);
-    const [stats, setStats] = useState({ today: 0, month: 0, countToday: 0, commissions: 0 });
     const [searchQuery, setSearchQuery] = useState('');
     const [viewType, setViewType] = useState('ventas'); // 'ventas' o 'presupuestos'
 
@@ -118,11 +117,50 @@ export default function SalesScreen({ navigation }) {
         }
     };
 
-    // Statistics are now calculated from the store data whenever it changes
-    React.useEffect(() => {
-        if (recentSales) {
-            processStats(recentSales);
+    // Statistics derived purely from recentSales with useMemo (O(N), single pass, zero render cascade)
+    const { stats, budgetCount } = useMemo(() => {
+        const sales = Array.isArray(recentSales) ? recentSales : [];
+        const now = new Date();
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+        let totalToday = 0;
+        let totalMonth = 0;
+        let count = 0;
+        let totalCommissions = 0;
+        let budgets = 0;
+
+        for (let i = 0; i < sales.length; i++) {
+            const sale = sales[i];
+            const status = (sale.status || '').toLowerCase();
+            if (status === 'budget' || status === 'pending') {
+                budgets++;
+                continue;
+            }
+
+            const isCompleted = status === 'completed' || status === 'exitosa' || status === '' || status === 'vended';
+            if (!isCompleted) continue;
+
+            const saleDate = new Date(sale.paid_at || sale.created_at).getTime();
+
+            if (sale.commission_amount) {
+                totalCommissions += (Number(sale.commission_amount) || 0);
+            }
+
+            const amount = Number(sale.total_amount) || 0;
+            if (saleDate >= startOfMonth) {
+                totalMonth += amount;
+            }
+            if (saleDate >= startOfDay) {
+                totalToday += amount;
+                count++;
+            }
         }
+
+        return {
+            stats: { today: totalToday, month: totalMonth, countToday: count, commissions: totalCommissions },
+            budgetCount: budgets
+        };
     }, [recentSales]);
 
     // Filtered sales based on search query and view type
@@ -151,42 +189,6 @@ export default function SalesScreen({ navigation }) {
             return clientName.includes(lowQuery) || saleIdShort.includes(lowQuery);
         });
     }, [searchQuery, recentSales, viewType]);
-
-    const processStats = (sales) => {
-        const now = new Date();
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-
-        let totalToday = 0;
-        let totalMonth = 0;
-        let count = 0;
-        let totalCommissions = 0;
-
-        sales.forEach(sale => {
-            const status = (sale.status || '').toLowerCase();
-            const isCompleted = status === 'completed' || status === 'exitosa' || status === '' || status === 'vended' || !status;
-
-            if (!isCompleted) return; // Skip budgets and other non-finalized statuses for money stats
-
-            const saleDate = new Date(sale.paid_at || sale.created_at).getTime();
-
-            // Calculate total commissions globally
-            if (sale.commission_amount) {
-                totalCommissions += sale.commission_amount;
-            }
-
-            if (saleDate >= startOfMonth) {
-                totalMonth += (sale.total_amount || 0);
-            }
-            if (saleDate >= startOfDay) {
-                totalToday += (sale.total_amount || 0);
-                count++;
-            }
-        });
-
-        // Store commission in stats
-        setStats({ today: totalToday, month: totalMonth, countToday: count, commissions: totalCommissions });
-    };
 
     // Initial fetch from store is silent if we already have data
     useFocusEffect(
@@ -486,11 +488,25 @@ export default function SalesScreen({ navigation }) {
                                                             const paymentDateStr = `[PAGADO: ${new Date().toISOString()}]`;
                                                             const newNotes = item.notes ? `${item.notes}\n${paymentDateStr}` : paymentDateStr;
 
-                                                            const { error: updateError } = await supabase
-                                                                .from('sales')
-                                                                .update({ status: 'completed', notes: newNotes, paid_at: new Date().toISOString() })
-                                                                .eq('id', item.id);
-                                                            if (updateError) throw updateError;
+                                                            const paidAt = new Date().toISOString();
+                                                            // 1. ATOMIC: update SQLite sale and queue UPDATE in pending_sync inside a single transaction
+                                                            await LocalDbService.payDebtAtomic({
+                                                                saleId: item.id,
+                                                                status: 'completed',
+                                                                paidAt,
+                                                                notes: newNotes
+                                                            });
+
+                                                            // 2. Synchronize Zustand in memory after SQLite transaction succeeds
+                                                            useFinanceStore.getState().updateSaleLocal({
+                                                                ...item,
+                                                                status: 'completed',
+                                                                paid_at: paidAt,
+                                                                notes: newNotes
+                                                            });
+
+                                                            // 3. Trigger silent background sync
+                                                            SyncService.syncPending().catch(() => {});
                                                             Alert.alert('✅ Pagado', 'Deuda saldada correctamente.');
                                                             fetchSalesData(true);
                                                         } catch (err) {
@@ -602,9 +618,9 @@ export default function SalesScreen({ navigation }) {
                     onPress={() => setViewType('presupuestos')}
                 >
                     <Text style={[styles.tabText, viewType === 'presupuestos' && styles.tabTextActive]}>📝 PRESUPUESTOS</Text>
-                    {recentSales.filter(s => s.status === 'budget' || s.status === 'pending').length > 0 && (
+                    {budgetCount > 0 && (
                         <View style={styles.badgeCount}>
-                            <Text style={styles.badgeText}>{recentSales.filter(s => s.status === 'budget' || s.status === 'pending').length}</Text>
+                            <Text style={styles.badgeText}>{budgetCount}</Text>
                         </View>
                     )}
                 </TouchableOpacity>

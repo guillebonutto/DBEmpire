@@ -43,23 +43,21 @@ export default function AIDashboardScreen({ navigation }) {
     // ── Data Fetching ─────────────────────────────────────────────────────────
     const loadData = useCallback(async () => {
         try {
-            // 1. Performance view (aggregated per action_type)
-            const { data: perfData } = await supabase
-                .from('ai_action_performance')
-                .select('*');
+            // Run all 3 queries concurrently in parallel with allSettled to ensure fault isolation
+            const [perfResult, logsResult, pendingResult] = await Promise.allSettled([
+                supabase.from('ai_action_performance').select('*'),
+                supabase.from('ai_action_logs')
+                    .select('id, title, action_type, impact_predicted, executed, executed_at, evaluation_status, profit_delta, confidence_score, created_at')
+                    .order('created_at', { ascending: false })
+                    .limit(30),
+                supabase.from('ai_action_logs')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('evaluation_status', 'pending')
+            ]);
 
-            // 2. Recent action logs (timeline)
-            const { data: logsData } = await supabase
-                .from('ai_action_logs')
-                .select('id, title, action_type, impact_predicted, executed, executed_at, evaluation_status, profit_delta, confidence_score, created_at')
-                .order('created_at', { ascending: false })
-                .limit(30);
-
-            // 3. Pending actions count
-            const { count: pendingCount } = await supabase
-                .from('ai_action_logs')
-                .select('id', { count: 'exact', head: true })
-                .eq('evaluation_status', 'pending');
+            const perfData = perfResult.status === 'fulfilled' && !perfResult.value?.error ? perfResult.value.data : null;
+            const logsData = logsResult.status === 'fulfilled' && !logsResult.value?.error ? logsResult.value.data : null;
+            const pendingCount = pendingResult.status === 'fulfilled' && !pendingResult.value?.error ? pendingResult.value.count : 0;
 
             // Compute summary
             if (perfData && perfData.length > 0) {
@@ -104,13 +102,16 @@ export default function AIDashboardScreen({ navigation }) {
         }
     }, []);
 
-    useFocusEffect(useCallback(() => { loadData(); }, []));
+    useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
     const onRefresh = () => { setRefreshing(true); loadData(); };
 
     // ── Win Rate ──────────────────────────────────────────────────────────────
-    const total = summary.successful + summary.failed;
-    const winRate = total > 0 ? Math.round((summary.successful / total) * 100) : null;
-    const winColor = winRate >= 60 ? '#2ecc71' : winRate >= 40 ? '#f39c12' : '#e74c3c';
+    const { winRate, winColor } = React.useMemo(() => {
+        const total = summary.successful + summary.failed;
+        const rate = total > 0 ? Math.round((summary.successful / total) * 100) : null;
+        const color = rate >= 60 ? '#2ecc71' : rate >= 40 ? '#f39c12' : '#e74c3c';
+        return { winRate: rate, winColor: color };
+    }, [summary.successful, summary.failed]);
 
     // ── Render ────────────────────────────────────────────────────────────────
     return (

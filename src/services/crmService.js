@@ -112,10 +112,22 @@ export const CRMService = {
     /**
      * Finds clients who haven't made a purchase in the last 30 days.
      */
-    getInactiveClients: async (days = 30) => {
+    getInactiveClients: async (days = 30, preloadedClients = null, preloadedSales = null) => {
         try {
             const dateThreshold = new Date();
             dateThreshold.setDate(dateThreshold.getDate() - days);
+
+            // Fast path: In-memory datasets provided by caller (0ms, 0 I/O)
+            if (Array.isArray(preloadedClients) && Array.isArray(preloadedSales) && preloadedClients.length > 0) {
+                const threshIso = dateThreshold.toISOString();
+                const activeClientIds = new Set(
+                    preloadedSales.filter(s => s.created_at && s.created_at > threshIso).map(s => s.client_id)
+                );
+                return preloadedClients.filter(c =>
+                    !activeClientIds.has(c.id) &&
+                    c.id !== '00000000-0000-0000-0000-000000000000'
+                );
+            }
 
             let allClients = [];
             let recentSales = [];

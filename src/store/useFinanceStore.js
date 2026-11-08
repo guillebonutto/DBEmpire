@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../services/supabase';
 import { LocalDbService } from '../services/localDbService';
 import NetInfo from '@react-native-community/netinfo';
+import { GlobalDataService } from '../services/GlobalDataService';
 
 export const useFinanceStore = create((set, get) => ({
     sales: [],
@@ -16,24 +17,23 @@ export const useFinanceStore = create((set, get) => ({
     isInitialized: false,
     lastFetch: null,
 
-    initStore: async () => {
-        if (get().isInitialized) return;
+    initStore: async (forceRefresh = false) => {
+        if (get().isInitialized && !forceRefresh) return;
         try {
-            const [sales, expenses, orders, sItems, items, settings] = await Promise.all([
+            const [sales, expenses, orders, sItems, items, settings, clientsList, productsList] = await Promise.all([
                 LocalDbService.getAll('sales'),
                 LocalDbService.getAll('expenses'),
                 LocalDbService.getAll('supplier_orders'),
                 LocalDbService.getAll('supplier_order_items'),
                 LocalDbService.getAll('sale_items'),
                 LocalDbService.getAll('settings'),
+                LocalDbService.getAll('clients'),
+                LocalDbService.getAll('products')
             ]);
 
             // Reconstruct relationships from local DB
-            const clientsList = await LocalDbService.getAll('clients') || [];
-            const productsList = await LocalDbService.getAll('products') || [];
-
             const clientMap = {};
-            clientsList.forEach(c => { clientMap[c.id] = c; });
+            (clientsList || []).forEach(c => { clientMap[c.id] = c; });
 
             const productMap = {};
             productsList.forEach(p => { productMap[p.id] = p; });
@@ -72,6 +72,9 @@ export const useFinanceStore = create((set, get) => ({
 
     fetchAllData: async (force = false) => {
         if (!get().isInitialized) await get().initStore();
+        // The global startup sync owns the first network pass. Returning here
+        // prevents every screen from downloading the same tables on first focus.
+        if (GlobalDataService.isPreloading()) return;
 
         const netInfo = await NetInfo.fetch();
         if (!netInfo.isConnected) return;
@@ -98,8 +101,25 @@ export const useFinanceStore = create((set, get) => ({
             if (itemsRes.data) await LocalDbService.replaceFullTable('sale_items', itemsRes.data);
             if (settingsRes.data) await LocalDbService.replaceFullTable('settings', settingsRes.data);
 
+            // Preserve any pending local sales not yet in salesRes.data
+            let finalSales = salesRes.data || get().sales;
+            try {
+                const pending = await LocalDbService.getPendingSyncs();
+                const pendingSaleIds = new Set(
+                    (pending || []).filter(p => p.table_name === 'sales').map(p => {
+                        try { return JSON.parse(p.payload)?.id; } catch (_) { return null; }
+                    }).filter(Boolean)
+                );
+                if (pendingSaleIds.size > 0 && salesRes.data) {
+                    const localPendingSales = (get().sales || []).filter(s => pendingSaleIds.has(s.id));
+                    const remoteSaleIds = new Set(salesRes.data.map(s => s.id));
+                    const missingPendingSales = localPendingSales.filter(s => !remoteSaleIds.has(s.id));
+                    finalSales = [...missingPendingSales, ...salesRes.data];
+                }
+            } catch (_) {}
+
             set({
-                sales: salesRes.data || get().sales,
+                sales: finalSales,
                 expenses: expRes.data || get().expenses,
                 supplierOrders: debtRes.data || get().supplierOrders,
                 supplierOrderItems: dItemsRes.data || get().supplierOrderItems,
@@ -169,8 +189,23 @@ export const useFinanceStore = create((set, get) => ({
 
     setFinanceState: (newState) => set(newState),
 
-    addSaleLocal: (newSale) => set((state) => ({ 
-        sales: [newSale, ...state.sales] 
+    addSaleLocal: (newSale, items = []) => set((state) => {
+        const enrichedSale = {
+            ...newSale,
+            sale_items: Array.isArray(newSale.sale_items) && newSale.sale_items.length > 0
+                ? newSale.sale_items
+                : (Array.isArray(items) ? items : [])
+        };
+        return {
+            sales: [enrichedSale, ...state.sales],
+            saleItems: Array.isArray(items) && items.length > 0
+                ? [...items, ...(state.saleItems || [])]
+                : (state.saleItems || [])
+        };
+    }),
+
+    updateSaleLocal: (updatedSale) => set((state) => ({
+        sales: state.sales.map(s => s.id === updatedSale.id ? { ...s, ...updatedSale } : s)
     })),
 
     addExpenseLocal: (newExpense) => set((state) => ({ 

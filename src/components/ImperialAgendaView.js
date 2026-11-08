@@ -73,7 +73,6 @@ export default function ImperialAgendaView({ onClose, isScreen = false }) {
 
     useEffect(() => {
         initStore();
-        fetchReminders();
     }, []);
 
     // Active bottom sub-tab: 'calendario' | 'videos' | 'boveda' | 'stats'

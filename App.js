@@ -18,29 +18,57 @@ import { navigationRef } from './src/navigation/navigationRef';
 
 import { checkUalaListenerPermission } from './src/services/UalaNotificationListener';
 import { OtaUpdateService } from './src/services/OtaUpdateService';
+import { SyncService } from './src/services/syncService';
 
 export default function App() {
   React.useEffect(() => {
+    let timer = null;
+    let isMounted = true;
+    const refreshStoresFromLocalCache = async () => {
+      await Promise.all([
+        useFinanceStore.getState().initStore(true),
+        useProductStore.getState().initStore(true),
+        useClientStore.getState().initStore(true),
+        useReminderStore.getState().initStore(true)
+      ]);
+      const refreshedAt = Date.now();
+      useFinanceStore.setState({ lastFetch: refreshedAt });
+      useProductStore.setState({ lastFetch: refreshedAt });
+    };
     const initApp = async () => {
       try {
-        await DatabaseInitService.init();
-        await GlobalDataService.preloadAll(); // Download and cache all DB
+        // 1. Instant UI Hydration: initialize from the local SQLite cache first.
+        // Remote schema work must never hold the first usable screen hostage.
+        await Promise.all([
+          useFinanceStore.getState().initStore(),
+          useProductStore.getState().initStore(),
+          useClientStore.getState().initStore(),
+          useReminderStore.getState().initStore()
+        ]);
+        if (!isMounted) return;
+        console.log('🚀 Empire App Initialized Successfully from Local Cache');
+        GlobalDataService.schedulePreload();
 
-        // Initialize Stores sequentially from local cache
-        await useFinanceStore.getState().initStore();
-        await useProductStore.getState().initStore();
-        await useClientStore.getState().initStore();
-        await useReminderStore.getState().initStore();
-        console.log('🚀 Empire App Initialized Successfully');
-        await checkUalaListenerPermission();
-        
-        // Check for updates Over-the-Air
-        await OtaUpdateService.runAutoCheck();
+        // 2. Background sync & secondary tasks deferred without blocking UI
+        timer = setTimeout(() => {
+          if (!isMounted) return;
+          DatabaseInitService.init().catch(e => console.log('Background schema init:', e?.message));
+          SyncService.syncPending().catch(e => console.log('Background syncPending:', e?.message));
+          GlobalDataService.preloadAll()
+            .then(didSync => didSync && isMounted ? refreshStoresFromLocalCache() : null)
+            .catch(e => console.log('Background preload:', e?.message));
+          checkUalaListenerPermission().catch(() => {});
+          OtaUpdateService.runAutoCheck().catch(() => {});
+        }, 400);
       } catch (err) {
         console.error('Initialization failed:', err);
       }
     };
     initApp();
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
   }, []);
   const { alertProps } = useAlert();
 

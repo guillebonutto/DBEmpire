@@ -63,9 +63,15 @@ export default function CatalogScreen({ navigation }) {
 
     // ... (Mantengo el resto de funciones como handleBatchProcess, etc.)
 
+    const { heroes, rest } = React.useMemo(() => {
+        const list = products || [];
+        return {
+            heroes: list.slice(0, 3),
+            rest: list.slice(3)
+        };
+    }, [products]);
+
     const renderCatalogTab = () => {
-        const heroes = products.slice(0, 3);
-        const rest = products.slice(3);
         return (
             <ScrollView contentContainerStyle={styles.catalogScroll} showsVerticalScrollIndicator={false}>
                 <Text style={styles.sectionLabel}>⭐ DESTACADOS</Text>

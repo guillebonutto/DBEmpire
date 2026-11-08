@@ -39,16 +39,23 @@ export default function PromotionsScreen({ navigation }) {
 
     const fetchProducts = async () => {
         try {
-            const localProds = await LocalDbService.getAll('products');
-            if (localProds && localProds.length > 0) {
-                setProducts(localProds.filter(p => p.active));
-            } else {
-                setProducts(useProductStore.getState().products.filter(p => p.active));
+            const prodState = useProductStore.getState();
+            if (prodState.isInitialized) {
+                setProducts((prodState.products || []).filter(p => p.active));
+                return;
             }
+            const localProds = await LocalDbService.getAll('products');
+            setProducts((localProds || []).filter(p => p.active));
         } catch (e) {
             console.error('[Promotions] Error fetching products:', e.message);
         }
     };
+
+    const filteredModalProducts = React.useMemo(() => {
+        if (!productSearchQuery) return products;
+        const query = productSearchQuery.toLowerCase();
+        return products.filter(p => p.name?.toLowerCase().includes(query));
+    }, [products, productSearchQuery]);
 
     const fetchPromos = async () => {
         setLoading(true);
@@ -224,6 +231,10 @@ export default function PromotionsScreen({ navigation }) {
                 data={promos}
                 keyExtractor={item => item.id}
                 contentContainerStyle={styles.list}
+                initialNumToRender={8}
+                maxToRenderPerBatch={8}
+                windowSize={5}
+                removeClippedSubviews={Platform.OS === 'android'}
                 refreshing={loading}
                 onRefresh={fetchPromos}
                 renderItem={({ item }) => (
@@ -381,9 +392,7 @@ export default function PromotionsScreen({ navigation }) {
 
                         <View style={styles.productSelectionList}>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
-                                {products
-                                    .filter(p => !productSearchQuery || p.name.toLowerCase().includes(productSearchQuery.toLowerCase()))
-                                    .map(product => (
+                                {filteredModalProducts.map(product => (
                                         <TouchableOpacity
                                             key={product.id}
                                             style={[

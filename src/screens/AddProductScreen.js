@@ -12,7 +12,7 @@ import { Linking } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
-import { IdentitySection, PriceSection, StockSection, OperativeSection, VariantsSection, OverheadSection } from '../components/ProductFormSections';
+import { IdentitySection, PriceSection, StockSection, OperativeSection, VariantsSection } from '../components/ProductFormSections';
 import { CRMService } from '../services/crmService';
 import { GeminiService } from '../services/geminiService';
 import { useProductStore } from '../store/useProductStore';
@@ -101,7 +101,10 @@ export default function AddProductScreen({ navigation, route }) {
         defect_notes: '',
         barcode: route.params?.scannedBarcode || '',
         is_individual: false,
-        is_packaging: false
+        is_packaging: false,
+        packaging_type: 'general',
+        packaging_cost: '65',
+        packaging_sticker_cost: '0'
     });
 
 
@@ -307,7 +310,7 @@ export default function AddProductScreen({ navigation, route }) {
         setFormData(prev => ({
             ...prev,
             cost_price: ppp.toFixed(2),
-            // Update stock too if we are receiving them all? 
+            // Update stock too if we are receiving them all?
             // Better only update cost as requested, and let user adjust quantity if needed
         }));
         setShowPPPModal(false);
@@ -335,9 +338,21 @@ export default function AddProductScreen({ navigation, route }) {
     useEffect(() => {
         if (productToEdit) {
             try {
+                const rawDesc = productToEdit.description || '';
+                const pkgMatch = rawDesc.match(/\[\[PKG:(general|rfid|none)\]\]/i);
+                const costMatch = rawDesc.match(/\[\[PKG_COST:([0-9.]+)\]\]/i);
+                const stickerCostMatch = rawDesc.match(/\[\[STICKER_COST:([0-9.]+)\]\]/i);
+                const cleanDesc = rawDesc
+                    .replace(/\[\[PKG:(general|rfid|none)\]\]\s*/gi, '')
+                    .replace(/\[\[PKG_COST:[0-9.]+\s*\]\]\s*/gi, '')
+                    .replace(/\[\[STICKER_COST:[0-9.]+\s*\]\]\s*/gi, '')
+                    .trim();
+                const detectedPackagingType = productToEdit.packaging_type || (pkgMatch ? pkgMatch[1].toLowerCase() : ((productToEdit.name && /rfid|nfc|tarjeta/i.test(productToEdit.name)) ? 'rfid' : 'general'));
+                const detectedPackagingCost = productToEdit.packaging_cost?.toString() || (costMatch ? costMatch[1] : (detectedPackagingType === 'rfid' ? '60' : detectedPackagingType === 'none' ? '0' : '65'));
+
                 setFormData({
                     name: productToEdit.name || '',
-                    description: productToEdit.description || '',
+                    description: cleanDesc,
                     provider: productToEdit.provider || '',
                     cost_price: productToEdit.cost_price?.toString() || '',
                     profit_margin_percent: productToEdit.profit_margin_percent?.toString() || '',
@@ -348,7 +363,10 @@ export default function AddProductScreen({ navigation, route }) {
                     defect_notes: productToEdit.defect_notes || '',
                     barcode: productToEdit.barcode || '',
                     is_individual: !!productToEdit.is_individual,
-                    is_packaging: !!productToEdit.is_packaging
+                    is_packaging: false,
+                    packaging_type: detectedPackagingType,
+                    packaging_cost: detectedPackagingCost,
+                    packaging_sticker_cost: productToEdit.packaging_sticker_cost?.toString() || stickerCostMatch?.[1] || '0'
                 });
                 setOverheadInternet(productToEdit.internet_cost?.toString() || '');
                 setOverheadElectricity(productToEdit.electricity_cost?.toString() || '');
@@ -387,17 +405,16 @@ export default function AddProductScreen({ navigation, route }) {
     const handleChange = (name, value) => {
         setFormData(prev => {
             const nextData = { ...prev, [name]: value };
-            
-            // Auto calculate sale_price if cost_price or profit_margin_percent is changed by user
-            if (name === 'cost_price' || name === 'profit_margin_percent') {
-                const cost = parseFloat(name === 'cost_price' ? value : nextData.cost_price);
-                const margin = parseFloat(name === 'profit_margin_percent' ? value : nextData.profit_margin_percent);
-                
+
+            // Only suggest a baseline sale_price if it's completely empty and cost_price is entered
+            if (name === 'cost_price' && !prev.sale_price) {
+                const cost = parseFloat(value);
+                const margin = parseFloat(nextData.profit_margin_percent || '50');
                 if (!isNaN(cost) && !isNaN(margin)) {
                     nextData.sale_price = (cost * (1 + (margin / 100))).toFixed(2);
                 }
             }
-            
+
             return nextData;
         });
     };
@@ -615,9 +632,15 @@ export default function AddProductScreen({ navigation, route }) {
                 finalImageUrl = null;
             }
 
-            let finalDescription = formData.description;
+            let finalDescription = formData.description || '';
+            finalDescription = finalDescription
+                .replace(/\[\[PKG:(general|rfid|none)\]\]\s*/gi, '')
+                .replace(/\[\[PKG_COST:[0-9.]+\s*\]\]\s*/gi, '')
+                .replace(/\[\[STICKER_COST:[0-9.]+\s*\]\]\s*/gi, '')
+                .trim();
+            finalDescription = `[[PKG:${formData.packaging_type || 'general'}]] [[PKG_COST:${formData.packaging_cost || '0'}]] [[STICKER_COST:${formData.packaging_sticker_cost || '0'}]] ${finalDescription}`.trim();
             if (isBundle && bundleItems.length > 0) {
-                const cleanDesc = formData.description.replace(/^\[\[BUNDLE:.*?\]\]/s, '').trim();
+                const cleanDesc = finalDescription.replace(/^\[\[BUNDLE:.*?\]\]/s, '').trim();
                 finalDescription = `[[BUNDLE:${JSON.stringify({ items: bundleItems })}]] ${cleanDesc}`;
             }
 
@@ -635,7 +658,10 @@ export default function AddProductScreen({ navigation, route }) {
                 active: true,
                 image_url: finalImageUrl,
                 is_individual: !!formData.is_individual,
-                is_packaging: !!formData.is_packaging
+                is_packaging: false,
+                packaging_type: formData.packaging_type || 'general',
+                packaging_cost: parseFloat(formData.packaging_cost) || 0,
+                packaging_sticker_cost: parseFloat(formData.packaging_sticker_cost) || 0
             };
 
             const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -812,25 +838,6 @@ export default function AddProductScreen({ navigation, route }) {
             // -------------------------------
 
             if (!isLiquidation) {
-                // Recalculate global packaging cost whenever a product is saved
-                try {
-                    const { data: packagingProducts } = await supabase
-                        .from('products')
-                        .select('cost_price, name')
-                        .eq('is_packaging', true)
-                        .eq('active', true);
-                    if (packagingProducts && packagingProducts.length > 0) {
-                        const totalPackagingCost = packagingProducts.reduce((sum, p) => sum + (parseFloat(p.cost_price) || 0), 0);
-                        await AsyncStorage.setItem('packaging_total_cost', totalPackagingCost.toString());
-                        await AsyncStorage.setItem('packaging_products_list', JSON.stringify(packagingProducts.map(p => p.name)));
-                    } else if (!formData.is_packaging) {
-                        // If no packaging products exist, reset to 0
-                        await AsyncStorage.setItem('packaging_total_cost', '0');
-                    }
-                } catch (pkgErr) {
-                    console.warn('Packaging cost recalculation error:', pkgErr);
-                }
-
                 // NOTE: Do NOT show 'guardado' Alert here if CRM modal will open.
                 // The modal itself serves as confirmation. We show it only if no clients found.
 
@@ -970,12 +977,12 @@ export default function AddProductScreen({ navigation, route }) {
     const generateBarcodeFromName = () => {
         let uniqueCode = '';
         let attempts = 0;
-        
+
         while (attempts < 1000) {
             const base = '100' + Math.floor(1000 + Math.random() * 9000);
             const check = calculateEan8CheckDigit(base);
             const candidate = `${base}${check}`;
-            
+
             const exists = allProducts.some(p => p.barcode === candidate);
             if (!exists) {
                 uniqueCode = candidate;
@@ -1087,13 +1094,13 @@ export default function AddProductScreen({ navigation, route }) {
 
     return (
         <View style={{ flex: 1, backgroundColor: '#000' }}>
-            <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 50 }}>
+            <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 150 }}>
             <StatusBar barStyle="light-content" />
             <SafeAreaView style={styles.safe} edges={['top']}>
                 {renderWizardHeader() || (
                     <View style={styles.screenHeader}>
-                        <TouchableOpacity 
-                            style={styles.backButton} 
+                        <TouchableOpacity
+                            style={styles.backButton}
                             onPress={() => navigation.goBack()}
                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         >
@@ -1110,12 +1117,12 @@ export default function AddProductScreen({ navigation, route }) {
                     </View>
                 )}
             </SafeAreaView>
-            
-            <IdentitySection 
-                formData={formData} 
-                handleChange={handleChange} 
-                image={image} 
-                onPickImage={handleSelectImageSource} 
+
+            <IdentitySection
+                formData={formData}
+                handleChange={handleChange}
+                image={image}
+                onPickImage={handleSelectImageSource}
                 onRemoveImage={() => setImage(null)}
                 onGenerateBarcodeFromName={generateBarcodeFromName}
                 onPrintBarcode={handlePrintBarcode}
@@ -1132,48 +1139,57 @@ export default function AddProductScreen({ navigation, route }) {
                     setScanningMode('main');
                     setScanned(false);
                     setIsScanning(true);
-                }} 
+                }}
             />
 
-            <PriceSection formData={formData} handleChange={handleChange} pendingPurchases={pendingPurchases} queueItem={queueItem} onShowPPPModal={() => setShowPPPModal(true)} />
-            
+            <PriceSection
+                productId={productToEdit?.id}
+                formData={formData}
+                handleChange={handleChange}
+                pendingPurchases={pendingPurchases}
+                queueItem={queueItem}
+                onShowPPPModal={() => setShowPPPModal(true)}
+            />
+
             <StockSection formData={formData} handleChange={handleChange} />
 
-            <OperativeSection formData={formData} handleChange={handleChange} suppliersList={suppliersList} isBundle={isBundle} onToggleBundle={() => setIsBundle(!isBundle)} isIndividual={!!formData.is_individual} onToggleIndividual={() => handleChange('is_individual', !formData.is_individual)} isPackaging={!!formData.is_packaging} onTogglePackaging={() => handleChange('is_packaging', !formData.is_packaging)} bundleItems={bundleItems} onShowBundlePicker={() => setShowBundlePicker(true)} onShowSupplierModal={() => setShowSupplierModal(true)} />
+            <OperativeSection
+                formData={formData}
+                handleChange={handleChange}
+                suppliersList={suppliersList}
+                isBundle={isBundle}
+                onToggleBundle={() => setIsBundle(!isBundle)}
+                isIndividual={!!formData.is_individual}
+                onToggleIndividual={() => handleChange('is_individual', !formData.is_individual)}
+                bundleItems={bundleItems}
+                onShowBundlePicker={() => setShowBundlePicker(true)}
+                onShowSupplierModal={() => setShowSupplierModal(true)}
+            />
 
             <VariantsSection variants={variants} addVariant={addVariant} removeVariant={removeVariant} updateVariant={updateVariant} />
 
-            <View style={styles.overheadWrapper}>
-                <Text style={styles.sectionTitle}><Text>COSTOS (Opcional)</Text></Text>
-                <OverheadSection value={overheadInternet} onChangeText={setOverheadInternet} label="Internet" icon="wifi" />
-                <OverheadSection value={overheadElectricity} onChangeText={setOverheadElectricity} label="Electricidad" icon="flash" />
-                {(parseFloat(overheadInternet) > 0 || parseFloat(overheadElectricity) > 0) && (
-                    <View style={styles.resultBox}>
-                        {(() => {
-                            const price = parseFloat(formData.sale_price) || 0;
-                            const cost = parseFloat(formData.cost_price) || 0;
-                            const margin = price - cost;
-                            const totalFixed = (parseFloat(overheadInternet) || 0) + (parseFloat(overheadElectricity) || 0);
-                            if (margin <= 0) return <Text style={{ color: '#e74c3c' }}><Text>El precio debe ser mayor al costo para calcular.</Text></Text>;
-                            const breakEven = Math.ceil(totalFixed / margin);
-                            return (
-                                <View style={styles.breakEvenBox}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                                        <MaterialCommunityIcons name="check-circle" size={20} color="#2ecc71" />
-                                        <Text style={{ fontSize: 12, color: '#aaa', fontWeight: 'bold', marginLeft: 8, letterSpacing: 0.5 }}><Text>PUNTO DE EQUILIBRIO</Text></Text>
-                                    </View>
-                                    <View style={{ marginBottom: 12 }}><Text style={{ fontSize: 14, color: '#fff', lineHeight: 20 }}>
-                                        <Text>Necesitas vender </Text><Text style={{ fontSize: 16, color: '#2ecc71', fontWeight: '900' }}>{breakEven} unidades</Text><Text> para cubrir gastos.</Text>
-                                    </Text></View>
-                                </View>
-                            );
-                        })()}
-                    </View>
-                )}
-            </View>
+            </ScrollView>
 
-            <TouchableOpacity style={styles.saveButton} onPress={saveProduct} disabled={loading}>
-                {loading ? <ActivityIndicator color="white" /> : <Text style={styles.saveButtonText}><Text>{productToEdit ? 'ACTUALIZAR PRODUCTO' : 'GUARDAR PRODUCTO IMPERIAL'}</Text></Text>}
+            {/* BOTÓN FLOTANTE DE GUARDAR/ACTUALIZAR */}
+            <TouchableOpacity
+                style={styles.saveButtonFloating}
+                onPress={saveProduct}
+                disabled={loading}
+            >
+                {loading ? (
+                    <ActivityIndicator color="#000" />
+                ) : (
+                    <>
+                        <MaterialCommunityIcons
+                            name={productToEdit ? 'content-save-edit' : 'plus-circle'}
+                            size={20}
+                            color="#000"
+                        />
+                        <Text style={styles.saveButtonText}>
+                            {productToEdit ? 'ACTUALIZAR PRODUCTO' : 'GUARDAR PRODUCTO IMPERIAL'}
+                        </Text>
+                    </>
+                )}
             </TouchableOpacity>
 
             {/* Modal Imperial de Foto de Producto */}
@@ -1183,13 +1199,13 @@ export default function AddProductScreen({ navigation, route }) {
                 animationType="fade"
                 onRequestClose={() => setShowImagePickerModal(false)}
             >
-                <TouchableOpacity 
-                    style={styles.modalOverlay} 
-                    activeOpacity={1} 
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
                     onPress={() => setShowImagePickerModal(false)}
                 >
-                    <TouchableOpacity 
-                        style={styles.imagePickerModalContent} 
+                    <TouchableOpacity
+                        style={styles.imagePickerModalContent}
                         activeOpacity={1}
                         onPress={(e) => e.stopPropagation()}
                     >
@@ -1202,7 +1218,7 @@ export default function AddProductScreen({ navigation, route }) {
                                 <Text style={styles.imagePickerModalTitle}>FOTO DEL PRODUCTO</Text>
                                 <Text style={styles.imagePickerModalSubtitle}>Selecciona una opción para la imagen</Text>
                             </View>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={styles.imagePickerModalCloseBtn}
                                 onPress={() => setShowImagePickerModal(false)}
                             >
@@ -1212,7 +1228,7 @@ export default function AddProductScreen({ navigation, route }) {
 
                         {/* Options */}
                         <View style={styles.imagePickerModalBody}>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={styles.imagePickerOptionCard}
                                 onPress={() => {
                                     setShowImagePickerModal(false);
@@ -1230,7 +1246,7 @@ export default function AddProductScreen({ navigation, route }) {
                                 <MaterialCommunityIcons name="chevron-right" size={20} color="#444" />
                             </TouchableOpacity>
 
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={styles.imagePickerOptionCard}
                                 onPress={() => {
                                     setShowImagePickerModal(false);
@@ -1249,7 +1265,7 @@ export default function AddProductScreen({ navigation, route }) {
                             </TouchableOpacity>
 
                             {image ? (
-                                <TouchableOpacity 
+                                <TouchableOpacity
                                     style={[styles.imagePickerOptionCard, { borderColor: '#e74c3c35' }]}
                                     onPress={() => {
                                         setShowImagePickerModal(false);
@@ -1270,7 +1286,7 @@ export default function AddProductScreen({ navigation, route }) {
                         </View>
 
                         {/* Cancel Button */}
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             style={styles.imagePickerCancelBtn}
                             onPress={() => setShowImagePickerModal(false)}
                             activeOpacity={0.8}
@@ -1351,247 +1367,6 @@ export default function AddProductScreen({ navigation, route }) {
                 </View>
             </Modal>
 
-            {/* Break-even Analysis Section */}
-            <View style={styles.analysisContainer}>
-                <Text style={[styles.sectionTitle, { color: '#d4af37' }]}>ANÁLISIS DE RENTABILIDAD</Text>
-
-                <Text style={styles.helperText}>Calcula cuántas ventas necesitas para pagar el Internet y la Luz de este periodo.</Text>
-
-                <View style={styles.row}>
-                    <View style={{ flex: 1, marginRight: 10 }}>
-                        <Text style={styles.label}>Factura Internet ($)</Text>
-                        <TextInput
-                            style={styles.input}
-                            value={overheadInternet}
-                            onChangeText={setOverheadInternet}
-                            keyboardType="numeric"
-                            placeholder="Total a cubrir"
-                            placeholderTextColor="#444"
-                        />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.label}>Factura Luz ($)</Text>
-                        <TextInput
-                            style={styles.input}
-                            value={overheadElectricity}
-                            onChangeText={setOverheadElectricity}
-                            keyboardType="numeric"
-                            placeholder="Total a cubrir"
-                            placeholderTextColor="#444"
-                        />
-                    </View>
-                </View>
-
-                {/* Analysis Result */}
-                {(parseFloat(overheadInternet) > 0 || parseFloat(overheadElectricity) > 0) && (
-                    <View style={styles.resultBox}>
-                        {(() => {
-                            const price = parseFloat(formData.sale_price) || 0;
-                            const cost = parseFloat(formData.cost_price) || 0;
-                            const margin = price - cost;
-                            const totalFixed = (parseFloat(overheadInternet) || 0) + (parseFloat(overheadElectricity) || 0);
-
-                            if (margin <= 0) return <Text style={{ color: '#e74c3c' }}>El precio de venta debe ser mayor al costo para calcular.</Text>;
-
-                            const breakEven = Math.ceil(totalFixed / margin);
-
-                            return (
-                                <View>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 15 }}>
-                                        <MaterialCommunityIcons name="check-circle" size={26} color="#2ecc71" />
-                                        <View style={{ marginLeft: 10, flex: 1 }}>
-                                            <Text style={{ fontSize: 13, color: '#aaa', fontWeight: 'bold', letterSpacing: 0.5 }}>PUNTO DE EQUILIBRIO</Text>
-                                            <Text style={{ fontSize: 16, color: '#fff', lineHeight: 22 }}>
-                                                Con los precios actuales, el negocio cubre los gastos fijos a partir de la venta <Text style={{ fontSize: 22, color: '#2ecc71', fontWeight: '900' }}>#{breakEven}</Text> del mes.
-                                            </Text>
-                                        </View>
-                                    </View>
-
-                                    <View style={{ padding: 12, backgroundColor: 'rgba(241, 196, 15, 0.15)', borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#f1c40f' }}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
-                                            <MaterialCommunityIcons name="lightbulb-on" size={18} color="#f1c40f" />
-                                            <Text style={{ marginLeft: 6, color: '#f1c40f', fontWeight: 'bold', fontSize: 14 }}>Indicador (Por Producto)</Text>
-                                        </View>
-                                        <Text style={{ fontSize: 14, color: '#ecf0f1', fontStyle: 'italic' }}>
-                                            "Si solo vendieras este producto, cubrirías tus gastos en <Text style={{ fontWeight: 'bold', color: '#fff' }}>{breakEven} unidades</Text>."
-                                        </Text>
-                                    </View>
-                                </View>
-                            );
-                        })()}
-                    </View>
-                )}
-            </View>
-
-            <Text style={styles.label}>Precio de Venta (Calculado)</Text>
-            <TextInput
-                style={[styles.input, styles.readOnly]}
-                value={formData.sale_price}
-                editable={false}
-                placeholder="0.00"
-            />
-
-            <View style={styles.row}>
-                <View style={styles.halfInput}>
-                    <Text style={styles.label}>Stock Jujuy</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={formData.stock_local}
-                        onChangeText={(text) => handleChange('stock_local', text)}
-                        keyboardType="numeric"
-                        placeholder="0"
-                    />
-                </View>
-                <View style={styles.halfInput}>
-                    <Text style={styles.label}>Stock Córdoba</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={formData.stock_cordoba}
-                        onChangeText={(text) => handleChange('stock_cordoba', text)}
-                        keyboardType="numeric"
-                        placeholder="0"
-                    />
-                </View>
-            </View>
-
-            {/* VARIANTS SECTION */}
-            <View style={{ marginTop: 20, padding: 15, backgroundColor: '#0a0a0a', borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
-                    <View>
-                        <Text style={{ color: '#3498db', fontSize: 13, fontWeight: '900' }}>COLORES / VARIANTES</Text>
-                        <Text style={{ color: '#555', fontSize: 10 }}>Control de stock por color</Text>
-                    </View>
-                    <TouchableOpacity onPress={addVariant} style={{ backgroundColor: '#3498db20', padding: 8, borderRadius: 8 }}>
-                        <MaterialCommunityIcons name="plus" size={20} color="#3498db" />
-                    </TouchableOpacity>
-                </View>
-
-                {variants.map((v, idx) => (
-                    <View key={idx} style={{ flexDirection: 'row', gap: 10, marginBottom: 10, alignItems: 'center' }}>
-                        <TextInput
-                            style={[styles.input, { flex: 2, marginBottom: 0 }]}
-                            placeholder="Color"
-                            placeholderTextColor="#666"
-                            value={v.color}
-                            onChangeText={(val) => updateVariant(idx, 'color', val)}
-                        />
-                        <TextInput
-                            style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                            placeholder="Cant."
-                            placeholderTextColor="#666"
-                            keyboardType="numeric"
-                            value={v.stock !== undefined && v.stock !== null ? v.stock.toString() : ''}
-                            onChangeText={(val) => updateVariant(idx, 'stock', val)}
-                        />
-                        <TouchableOpacity onPress={() => removeVariant(idx)}>
-                            <MaterialCommunityIcons name="close-circle" size={24} color="#e74c3c" />
-                        </TouchableOpacity>
-                    </View>
-                ))}
-                {variants.length > 0 && (
-                    <Text style={{ color: '#555', fontSize: 10, marginTop: 5, fontStyle: 'italic' }}>
-                        * El stock total se actualizará automáticamente basado en las variantes.
-                    </Text>
-                )}
-            </View>
-
-            <Text style={styles.label}>Proveedor</Text>
-            <View style={[styles.input, { flexDirection: 'row', alignItems: 'center', padding: 0 }]}>
-                <TextInput
-                    style={{ flex: 1, color: '#fff', padding: 15 }}
-                    value={formData.provider}
-                    onChangeText={(text) => handleChange('provider', text)}
-                    placeholder="Ej. Distribuidora X"
-                    placeholderTextColor="#444"
-                />
-                <TouchableOpacity
-                    style={{ padding: 15 }}
-                    onPress={() => {
-                        fetchSuppliers();
-                        setShowSupplierModal(true);
-                    }}
-                >
-                    <MaterialCommunityIcons name="database-search" size={24} color="#d4af37" />
-                </TouchableOpacity>
-            </View>
-
-            {/* COMBO / BUNDLE SECTION */}
-            <View style={{ marginTop: 20, padding: 15, backgroundColor: '#0a0a0a', borderRadius: 15, borderWidth: 1, borderColor: '#1a1a1a' }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <View>
-                        <Text style={{ color: '#d4af37', fontSize: 13, fontWeight: '900' }}>¿ES UN COMBO / KIT?</Text>
-                        <Text style={{ color: '#555', fontSize: 10 }}>Descuenta stock de varios productos</Text>
-                    </View>
-                    <Switch
-                        value={isBundle}
-                        onValueChange={setIsBundle}
-                        trackColor={{ false: '#333', true: '#d4af37' }}
-                        thumbColor={isBundle ? '#fff' : '#666'}
-                    />
-                </View>
-
-                {isBundle && (
-                    <View style={{ marginTop: 15 }}>
-                        {bundleItems.map(item => (
-                            <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', padding: 10, borderRadius: 8, marginBottom: 5 }}>
-                                <Text style={{ color: '#fff', flex: 1, fontSize: 12 }}>{item.name}</Text>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                    <TouchableOpacity onPress={() => updateBundleItemQty(item.id, -1)}>
-                                        <MaterialCommunityIcons name="minus-circle-outline" size={20} color="#666" />
-                                    </TouchableOpacity>
-                                    <Text style={{ color: '#d4af37', fontWeight: 'bold', width: 20, textAlign: 'center' }}>{item.qty}</Text>
-                                    <TouchableOpacity onPress={() => updateBundleItemQty(item.id, 1)}>
-                                        <MaterialCommunityIcons name="plus-circle-outline" size={20} color="#666" />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity onPress={() => toggleBundleItem(item)} style={{ marginLeft: 5 }}>
-                                        <MaterialCommunityIcons name="delete" size={20} color="#e74c3c" />
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                        ))}
-                        <TouchableOpacity
-                            style={{ backgroundColor: '#1a1a1a', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 10, borderWidth: 1, borderStyle: 'dashed', borderColor: '#d4af37' }}
-                            onPress={() => setShowBundlePicker(true)}
-                        >
-                            <Text style={{ color: '#d4af37', fontWeight: 'bold' }}>+ AGREGAR PRODUCTO AL KIT</Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
-
-            <Text style={styles.label}>Descripción / Notas</Text>
-            <TextInput
-                style={[styles.input, styles.textArea]}
-                value={formData.description}
-                onChangeText={(text) => handleChange('description', text)}
-                multiline
-                numberOfLines={3}
-                placeholder="Detalles del producto..."
-            />
-
-            <Text style={styles.label}>Comentarios de Fallas (Opcional)</Text>
-            <TextInput
-                style={[styles.input, styles.textArea, styles.defectInput]}
-                value={formData.defect_notes}
-                onChangeText={(text) => handleChange('defect_notes', text)}
-                multiline
-                numberOfLines={2}
-                placeholder="Si vino fallado, explicar aquí..."
-            />
-
-            <TouchableOpacity
-                style={styles.saveButton}
-                onPress={saveProduct}
-                disabled={loading}
-            >
-                {loading ? (
-                    <ActivityIndicator color="white" />
-                ) : (
-                    <Text style={styles.saveButtonText}>{productToEdit ? 'Actualizar Producto' : 'Guardar Producto'}</Text>
-                )}
-            </TouchableOpacity>
-
-
             <Modal visible={isScanning} animationType="slide">
                 <View style={{ flex: 1, backgroundColor: 'black' }}>
                     <CameraView
@@ -1610,7 +1385,7 @@ export default function AddProductScreen({ navigation, route }) {
                                     p.barcode && p.barcode.toString().trim().toUpperCase() === cleanScanned
                                 );
 
-                                // 1.5 Fallback: If not found in memory, try a quick DB search 
+                                // 1.5 Fallback: If not found in memory, try a quick DB search
                                 // (just in case the local list is stale or was limited)
                                 if (!found) {
                                     const { data: dbProd } = await supabase
@@ -1938,18 +1713,18 @@ export default function AddProductScreen({ navigation, route }) {
             </Modal>
 
             {/* Hidden view for capturing 1 single large barcode (58x47mm) */}
-            <View 
+            <View
                 collapsable={false}
-                ref={labelRef} 
-                style={{ 
-                    position: 'absolute', 
-                    left: -9999, 
-                    top: -9999, 
-                    width: 580, 
-                    height: 470, 
-                    backgroundColor: '#ffffff', 
+                ref={labelRef}
+                style={{
+                    position: 'absolute',
+                    left: -9999,
+                    top: -9999,
+                    width: 580,
+                    height: 470,
+                    backgroundColor: '#ffffff',
                     flexDirection: 'column',
-                    justifyContent: 'center', 
+                    justifyContent: 'center',
                     alignItems: 'center',
                     paddingVertical: 30,
                     paddingHorizontal: 40,
@@ -1957,8 +1732,8 @@ export default function AddProductScreen({ navigation, route }) {
             >
                 {formData.barcode ? (
                     <>
-                        <Image 
-                            source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=4&height=15` }} 
+                        <Image
+                            source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=4&height=15` }}
                             style={{ width: '100%', height: 260 }}
                             resizeMode="contain"
                         />
@@ -1970,16 +1745,16 @@ export default function AddProductScreen({ navigation, route }) {
             </View>
 
             {/* Hidden view for capturing 2x2 grid of 4 barcodes (58x47mm) */}
-            <View 
+            <View
                 collapsable={false}
-                ref={labelGridRef} 
-                style={{ 
-                    position: 'absolute', 
-                    left: -9999, 
-                    top: -9999, 
-                    width: 580, 
-                    height: 470, 
-                    backgroundColor: '#ffffff', 
+                ref={labelGridRef}
+                style={{
+                    position: 'absolute',
+                    left: -9999,
+                    top: -9999,
+                    width: 580,
+                    height: 470,
+                    backgroundColor: '#ffffff',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
                     paddingVertical: 20,
@@ -1992,8 +1767,8 @@ export default function AddProductScreen({ navigation, route }) {
                     <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
                         {formData.barcode ? (
                             <>
-                                <Image 
-                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                <Image
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }}
                                     style={{ width: '100%', height: 130 }}
                                     resizeMode="contain"
                                 />
@@ -2005,8 +1780,8 @@ export default function AddProductScreen({ navigation, route }) {
                     <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
                         {formData.barcode ? (
                             <>
-                                <Image 
-                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                <Image
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }}
                                     style={{ width: '100%', height: 130 }}
                                     resizeMode="contain"
                                 />
@@ -2026,8 +1801,8 @@ export default function AddProductScreen({ navigation, route }) {
                     <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
                         {formData.barcode ? (
                             <>
-                                <Image 
-                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                <Image
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }}
                                     style={{ width: '100%', height: 130 }}
                                     resizeMode="contain"
                                 />
@@ -2039,8 +1814,8 @@ export default function AddProductScreen({ navigation, route }) {
                     <View style={{ width: '46%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
                         {formData.barcode ? (
                             <>
-                                <Image 
-                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                                <Image
+                                    source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }}
                                     style={{ width: '100%', height: 130 }}
                                     resizeMode="contain"
                                 />
@@ -2052,16 +1827,16 @@ export default function AddProductScreen({ navigation, route }) {
             </View>
 
             {/* Hidden view for capturing 2x1 grid of 2 barcodes (58x47mm) */}
-            <View 
+            <View
                 collapsable={false}
-                ref={labelGrid2xRef} 
-                style={{ 
-                    position: 'absolute', 
-                    left: -9999, 
-                    top: -9999, 
-                    width: 580, 
-                    height: 470, 
-                    backgroundColor: '#ffffff', 
+                ref={labelGrid2xRef}
+                style={{
+                    position: 'absolute',
+                    left: -9999,
+                    top: -9999,
+                    width: 580,
+                    height: 470,
+                    backgroundColor: '#ffffff',
                     flexDirection: 'row',
                     justifyContent: 'space-between',
                     alignItems: 'center',
@@ -2073,8 +1848,8 @@ export default function AddProductScreen({ navigation, route }) {
                 <View style={{ width: '46%', height: '80%', justifyContent: 'center', alignItems: 'center' }}>
                     {formData.barcode ? (
                         <>
-                            <Image 
-                                source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                            <Image
+                                source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }}
                                 style={{ width: '100%', height: 180 }}
                                 resizeMode="contain"
                             />
@@ -2090,8 +1865,8 @@ export default function AddProductScreen({ navigation, route }) {
                 <View style={{ width: '46%', height: '80%', justifyContent: 'center', alignItems: 'center' }}>
                     {formData.barcode ? (
                         <>
-                            <Image 
-                                source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }} 
+                            <Image
+                                source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode)}&scale=3&height=12` }}
                                 style={{ width: '100%', height: 180 }}
                                 resizeMode="contain"
                             />
@@ -2101,7 +1876,6 @@ export default function AddProductScreen({ navigation, route }) {
                 </View>
             </View>
 
-            </ScrollView >
         </View>
     );
 }
@@ -2139,6 +1913,25 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3,
         shadowOffset: { width: 0, height: 4 },
         elevation: 10,
+    },
+    saveButtonFloating: {
+        position: 'absolute',
+        bottom: 20,
+        left: 16,
+        right: 16,
+        borderRadius: 16,
+        backgroundColor: '#d4af37',
+        paddingVertical: 15,
+        paddingHorizontal: 24,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        shadowColor: '#d4af37',
+        shadowOpacity: 0.5,
+        shadowOffset: { width: 0, height: -4 },
+        elevation: 20,
+        zIndex: 100,
     },
     saveButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
 

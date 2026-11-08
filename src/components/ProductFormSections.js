@@ -3,22 +3,23 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, Switch } fr
 import { Image as ExpoImage } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuthStore } from '../store/useAuthStore';
 
 /**
  * SECCIÓN: IDENTIDAD DEL PRODUCTO
  * Nombre, código, imagen con previsualización nítida
  */
-export const IdentitySection = ({ 
-    formData, 
-    handleChange, 
-    image, 
-    onPickImage, 
-    onRemoveImage, 
-    onScanBarcode, 
-    onGenerateBarcodeFromName, 
-    onPrintBarcode, 
-    onPrintBarcode2x, 
-    onPrintBarcodeGrid 
+export const IdentitySection = ({
+    formData,
+    handleChange,
+    image,
+    onPickImage,
+    onRemoveImage,
+    onScanBarcode,
+    onGenerateBarcodeFromName,
+    onPrintBarcode,
+    onPrintBarcode2x,
+    onPrintBarcodeGrid
 }) => {
     const imageSource = typeof image === 'number'
         ? image
@@ -33,16 +34,16 @@ export const IdentitySection = ({
             {/* Imagen compacta con previsualización */}
             <View style={{ flexDirection: 'row', gap: 15, alignItems: 'center' }}>
                 <View style={styles.imagePickerWrapper}>
-                    <TouchableOpacity 
-                        style={[styles.imagePicker, imageSource && styles.imagePickerWithImage]} 
+                    <TouchableOpacity
+                        style={[styles.imagePicker, imageSource && styles.imagePickerWithImage]}
                         onPress={onPickImage}
                         activeOpacity={0.8}
                     >
                         {imageSource ? (
                             <>
-                                <ExpoImage 
-                                    source={imageSource} 
-                                    style={styles.imagePreview} 
+                                <ExpoImage
+                                    source={imageSource}
+                                    style={styles.imagePreview}
                                     contentFit="cover"
                                     transition={200}
                                     cachePolicy="disk"
@@ -59,8 +60,8 @@ export const IdentitySection = ({
                         )}
                     </TouchableOpacity>
                     {imageSource && onRemoveImage && (
-                        <TouchableOpacity 
-                            style={styles.removeImageBadge} 
+                        <TouchableOpacity
+                            style={styles.removeImageBadge}
                             onPress={onRemoveImage}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         >
@@ -109,11 +110,11 @@ export const IdentitySection = ({
         {formData.barcode ? (
             <View style={styles.barcodePreviewContainer}>
                 {/^\d{7,8}$/.test(formData.barcode.trim()) ? (
-                    <Image 
+                    <Image
                         key={formData.barcode.trim()}
-                        source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode.trim())}&scale=2&height=12&includetext=true&textsize=10` }} 
-                        style={styles.barcodeImage} 
-                        resizeMode="contain" 
+                        source={{ uri: `https://bwipjs-api.metafloor.com/?bcid=ean8&text=${encodeURIComponent(formData.barcode.trim())}&scale=2&height=12&includetext=true&textsize=10` }}
+                        style={styles.barcodeImage}
+                        resizeMode="contain"
                     />
                 ) : (
                     <View style={{ height: 40, justifyContent: 'center', alignItems: 'center' }}>
@@ -165,6 +166,22 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
     const cordobaProfit = cordobaPrice - costPrice;
     const cordobaPercent = costPrice > 0 ? ((cordobaProfit / costPrice) * 100).toFixed(0) : 0;
 
+    // Auth & Role View (Admin vs Socio)
+    const { userRole } = useAuthStore();
+    const isCurrentAdmin = userRole === 'admin' || userRole === 'leader';
+    const isCurrentSocio = userRole === 'seller' || userRole === 'socio';
+
+    const [selectedRoleView, setSelectedRoleView] = useState(isCurrentSocio ? 'socio' : 'admin');
+    const [showDetailedBreakdown, setShowDetailedBreakdown] = useState(false);
+
+    useEffect(() => {
+        if (isCurrentSocio) {
+            setSelectedRoleView('socio');
+        } else {
+            setSelectedRoleView('admin');
+        }
+    }, [userRole]);
+
     // Calculator States
     const [showCalculator, setShowCalculator] = useState(false);
     const [activeConfigTab, setActiveConfigTab] = useState('labor'); // 'labor' | 'jujuy' | 'cordoba' | 'transport' | 'packaging'
@@ -178,7 +195,8 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
     const [monthlyHours, setMonthlyHours] = useState('160');
     const [customLaborCost, setCustomLaborCost] = useState('0');
     const [suggestedMargin, setSuggestedMargin] = useState('50');
-    const [originalCost, setOriginalCost] = useState('0');
+    const [adminCommissionPercent, setAdminCommissionPercent] = useState('60');
+    const [partnerCommissionPercent, setPartnerCommissionPercent] = useState('40');
     // Servicios por provincia
     const [electricityJujuy, setElectricityJujuy] = useState('5000');
     const [internetJujuy, setInternetJujuy] = useState('3000');
@@ -188,8 +206,8 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
     const [unitsMonthlyCordoba, setUnitsMonthlyCordoba] = useState('50');
     // Transporte y packaging
     const [transportCordoba, setTransportCordoba] = useState('0');
-    const [packagingCost, setPackagingCost] = useState('0');
-    const [packagingList, setPackagingList] = useState([]);
+    const [packagingCostGeneral, setPackagingCostGeneral] = useState('65');
+    const [packagingCostRfid, setPackagingCostRfid] = useState('60');
 
     useEffect(() => {
         const loadConfig = async () => {
@@ -213,6 +231,8 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                     if (config.monthlyHours) setMonthlyHours(config.monthlyHours);
                     if (config.customLaborCost) setCustomLaborCost(config.customLaborCost);
                     if (config.suggestedMargin) setSuggestedMargin(config.suggestedMargin);
+                    if (config.adminCommissionPercent !== undefined) setAdminCommissionPercent(String(config.adminCommissionPercent));
+                    if (config.partnerCommissionPercent !== undefined) setPartnerCommissionPercent(String(config.partnerCommissionPercent));
                     if (config.electricityJujuy) setElectricityJujuy(config.electricityJujuy);
                     if (config.internetJujuy) setInternetJujuy(config.internetJujuy);
                     if (config.unitsMonthlyJujuy) setUnitsMonthlyJujuy(config.unitsMonthlyJujuy);
@@ -221,20 +241,12 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                     if (config.unitsMonthlyCordoba) setUnitsMonthlyCordoba(config.unitsMonthlyCordoba);
                     if (config.transportCordoba) setTransportCordoba(config.transportCordoba);
                 }
-                
-                // Load or initialize original physical purchase cost
-                const savedOriginal = await AsyncStorage.getItem(`original_cost_${productId || 'new'}`);
-                if (savedOriginal) {
-                    setOriginalCost(savedOriginal);
-                } else {
-                    setOriginalCost(formData.cost_price || '0');
-                }
 
-                // Packaging: always read from global key
-                const pkgCost = await AsyncStorage.getItem('packaging_total_cost');
-                const pkgList = await AsyncStorage.getItem('packaging_products_list');
-                if (pkgCost) setPackagingCost(pkgCost);
-                if (pkgList) setPackagingList(JSON.parse(pkgList));
+                // Packaging unit costs: general vs rfid
+                const pkgGeneral = await AsyncStorage.getItem('packaging_cost_general');
+                const pkgRfid = await AsyncStorage.getItem('packaging_cost_rfid');
+                if (pkgGeneral) setPackagingCostGeneral(pkgGeneral);
+                if (pkgRfid) setPackagingCostRfid(pkgRfid);
             } catch (e) {
                 console.warn('Error loading calculator config:', e);
             }
@@ -256,6 +268,8 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                 monthlyHours,
                 customLaborCost,
                 suggestedMargin,
+                adminCommissionPercent,
+                partnerCommissionPercent,
                 electricityJujuy,
                 internetJujuy,
                 unitsMonthlyJujuy,
@@ -277,16 +291,21 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
         saveConfig({ [field]: value });
     };
 
-    const handleUpdateOriginalCost = async (val) => {
-        const clean = val.replace(/[^0-9.]/g, '');
-        setOriginalCost(clean);
-        await AsyncStorage.setItem(`original_cost_${productId || 'new'}`, clean);
-    };
-
     const calculateSuggestedPrice = () => {
-        // Cost is the physical purchase cost (originalCost)
-        const cost = parseFloat(originalCost) || parseFloat(formData.cost_price) || 0;
-        const pkg = parseFloat(packagingCost) || 0;
+        const cost = parseFloat(formData.cost_price) || 0;
+
+        // Determine packaging cost: direct input from user takes precedence, otherwise preset
+        const packagingType = formData.packaging_type || ((formData.name && /rfid|nfc|tarjeta/i.test(formData.name)) ? 'rfid' : 'general');
+        let bagCost = 0;
+        if (formData.packaging_cost !== undefined && formData.packaging_cost !== '') {
+            bagCost = parseFloat(formData.packaging_cost) || 0;
+        } else if (packagingType === 'rfid') {
+            bagCost = parseFloat(packagingCostRfid) || 60;
+        } else if (packagingType === 'general') {
+            bagCost = parseFloat(packagingCostGeneral) || 65;
+        }
+        const stickerCost = packagingType === 'none' ? 0 : (parseFloat(formData.packaging_sticker_cost) || 0);
+        const pkg = bagCost + stickerCost;
 
         let labor = 0;
         const hrs = parseFloat(monthlyHours) || 160;
@@ -320,20 +339,24 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
         const margin = parseFloat(suggestedMargin) || 50;
 
         // Costo base fijo (igual para ambas ubicaciones)
+        // Costo base fijo (igual para ambas ubicaciones)
         const baseFija = cost + labor + pkg;
 
-        // Gastos operativos por ubicación
+        // Gastos operativos necesarios por ubicación
         const gastosOpJujuy = serviciosJujuy;
         const gastosOpCordoba = serviciosCordoba + transport;
 
-        // Comisión se aplica SOBRE los gastos operativos
-        // Dueño cobra 60% sobre sus gastos operativos de Jujuy
-        // Socio cobra 40% sobre sus gastos operativos de Córdoba
-        const comisionDueno = gastosOpJujuy * 0.60;
-        const comisionSocio = gastosOpCordoba * 0.40;
+        const costoTodoNecesarioJujuy = baseFija + gastosOpJujuy;
+        const costoTodoNecesarioCordoba = baseFija + gastosOpCordoba;
 
-        const subtotalJujuy = baseFija + gastosOpJujuy + comisionDueno;
-        const subtotalCordoba = baseFija + gastosOpCordoba + comisionSocio;
+        // 1. Precio con todo sumado (con margen de ganancia incluido):
+        const precioTodoSumadoJujuy = Math.round(costoTodoNecesarioJujuy * (1 + margin / 100));
+        const precioTodoSumadoCordoba = Math.round(costoTodoNecesarioCordoba * (1 + margin / 100));
+
+        const gananciaJujuy = Math.max(0, precioTodoSumadoJujuy - costoTodoNecesarioJujuy);
+        const gananciaCordoba = Math.max(0, precioTodoSumadoCordoba - costoTodoNecesarioCordoba);
+        const comisionDueno = Math.round(gananciaJujuy * ((parseFloat(adminCommissionPercent) || 0) / 100));
+        const comisionSocio = Math.round(gananciaCordoba * ((parseFloat(partnerCommissionPercent) || 0) / 100));
 
         return {
             laborCost: labor,
@@ -342,22 +365,87 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
             comisionDueno,
             comisionSocio,
             packagingCost: pkg,
+            packagingBagCost: bagCost,
+            packagingStickerCost: stickerCost,
+            packagingType,
             transportCost: transport,
-            subtotalJujuy,
-            subtotalCordoba,
-            suggestedPriceJujuy: Math.round(subtotalJujuy * (1 + margin / 100)),
-            suggestedPriceCordoba: Math.round(subtotalCordoba * (1 + margin / 100)),
+            costoTodoNecesarioJujuy,
+            costoTodoNecesarioCordoba,
+            precioTodoSumadoJujuy,
+            precioTodoSumadoCordoba,
+            suggestedPriceJujuy: precioTodoSumadoJujuy + comisionDueno,
+            suggestedPriceCordoba: precioTodoSumadoCordoba + comisionSocio,
         };
     };
 
     const calculated = calculateSuggestedPrice();
 
+    // Margen de ganancia escrito por el usuario para el producto (formData.profit_margin_percent)
+    const currentMarginPercent = formData.profit_margin_percent !== undefined && formData.profit_margin_percent !== ''
+        ? formData.profit_margin_percent
+        : suggestedMargin;
+    const marginNum = parseFloat(currentMarginPercent) || 0;
+
+    const handleMarginChange = (val) => {
+        const clean = val.replace(/[^0-9.]/g, '');
+        handleChange('profit_margin_percent', clean);
+        setSuggestedMargin(clean);
+        saveConfig({ suggestedMargin: clean });
+    };
+
+    // === CÁLCULOS DEL PRODUCTO (COSTOS -> MARGEN -> PORCENTAJE DE CADA PERSONA) ===
+    // 1. PRECIO BASE (costo físico de adquisición/compra)
+    const precioBase = costPrice;
+    const baseFija = precioBase + calculated.laborCost + calculated.packagingCost;
+
+    // 2. GASTOS NECESARIOS (Luz, Internet, Transporte, Mano de Obra, Packaging)
+    const gastosOpJujuy = calculated.serviciosJujuy;
+    const gastosOpCordoba = calculated.serviciosCordoba + calculated.transportCost;
+
+    const costoNecesarioJujuy = baseFija + gastosOpJujuy;
+    const costoNecesarioCordoba = baseFija + gastosOpCordoba;
+
+    const costoNecesarioActivo = selectedRoleView === 'admin' ? costoNecesarioJujuy : costoNecesarioCordoba;
+    const gastosOpActivo = selectedRoleView === 'admin' ? gastosOpJujuy : gastosOpCordoba;
+
+    // 3. PRECIO C/ TODO SUMADO (con margen de ganancia incluido):
+    // "el precio de todo sumado es con margen de ganancia incluido"
+    const precioTodoSumadoJujuy = Math.round(costoNecesarioJujuy * (1 + marginNum / 100));
+    const precioTodoSumadoCordoba = Math.round(costoNecesarioCordoba * (1 + marginNum / 100));
+    const precioTodoSumadoActivo = selectedRoleView === 'admin' ? precioTodoSumadoJujuy : precioTodoSumadoCordoba;
+
+    // Each person's commission is calculated from the margin amount and added after it.
+    const pctAdmin = parseFloat(adminCommissionPercent) || 0;
+    const pctSocio = parseFloat(partnerCommissionPercent) || 0;
+    const pctActivo = selectedRoleView === 'admin' ? pctAdmin : pctSocio;
+
+    const gananciaJujuy = Math.max(0, precioTodoSumadoJujuy - costoNecesarioJujuy);
+    const gananciaCordoba = Math.max(0, precioTodoSumadoCordoba - costoNecesarioCordoba);
+    const comisionMontoJujuy = Math.round(gananciaJujuy * (pctAdmin / 100));
+    const comisionMontoCordoba = Math.round(gananciaCordoba * (pctSocio / 100));
+    const comisionMontoActiva = selectedRoleView === 'admin' ? comisionMontoJujuy : comisionMontoCordoba;
+
+    const precioFinalJujuy = precioTodoSumadoJujuy + comisionMontoJujuy;
+    const precioFinalCordoba = precioTodoSumadoCordoba + comisionMontoCordoba;
+    const precioFinalActivo = selectedRoleView === 'admin' ? precioFinalJujuy : precioFinalCordoba;
+
+    // 5. MARGEN BRUTO:
+    // If a city has a manually entered sale price, use it for the gross-profit display.
+    const activeCustomSalePrice = selectedRoleView === 'admin' ? jujuyPrice : cordobaPrice;
+    const hasActiveSalePrice = activeCustomSalePrice > 0;
+    const effectiveSalePrice = hasActiveSalePrice ? activeCustomSalePrice : precioFinalActivo;
+
+    // Margen Bruto: Precio de Venta Efectivo - Costo Necesario de Producción/Adquisición
+    const margenBrutoPesos = effectiveSalePrice - costoNecesarioActivo;
+    const margenPorcentaje = effectiveSalePrice > 0 ? ((margenBrutoPesos / effectiveSalePrice) * 100).toFixed(1) : '0';
+
     const handleApplyPrice = (target) => {
         if (target === 'jujuy') {
-            handleChange('sale_price', calculated.suggestedPriceJujuy.toString());
-            handleChange('profit_margin_percent', suggestedMargin);
+            handleChange('sale_price', precioFinalJujuy.toString());
+            handleChange('profit_margin_percent', marginNum.toString());
         } else if (target === 'cordoba') {
-            handleChange('sale_price_cordoba', calculated.suggestedPriceCordoba.toString());
+            handleChange('sale_price_cordoba', precioFinalCordoba.toString());
+            handleChange('profit_margin_percent', marginNum.toString());
         }
     };
 
@@ -390,15 +478,15 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
 
     // Función para obtener color de rentabilidad
     const getRentabilidadColor = (percent) => {
-        if (percent >= 100) return '#2ecc71'; // ALTA
-        if (percent >= 50) return '#f39c12';  // MEDIA
+        if (percent >= 50) return '#2ecc71'; // ALTA
+        if (percent >= 33.3) return '#f39c12'; // MEDIA
         if (percent > 0) return '#e67e22';    // BAJA
         return '#e74c3c';                      // CRÍTICA
     };
 
     const getLabel = (percent) => {
-        if (percent >= 100) return 'ALTA';
-        if (percent >= 50) return 'MEDIA';
+        if (percent >= 50) return 'ALTA';
+        if (percent >= 33.3) return 'MEDIA';
         if (percent > 0) return 'BAJA';
         return 'CRÍTICA';
     };
@@ -471,96 +559,286 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                 </View>
             </View>
 
-            {/* SECTOR PRECIO SUGERIDO */}
-            <View style={styles.suggestedCard}>
-                <View style={styles.suggestedHeader}>
+            {/* CÁLCULOS DEL PRODUCTO (UNIFICADO) */}
+            <View style={styles.calcHeroCard}>
+                {/* Encabezado con selector de perspectiva y botón de configuración */}
+                <View style={styles.calcRoleHeader}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <MaterialCommunityIcons name="lightbulb-on" size={18} color="#d4af37" />
-                        <Text style={styles.suggestedHeaderTitle}>Precio Sugerido</Text>
+                        <MaterialCommunityIcons name="calculator-variant" size={16} color="#d4af37" />
+                        <Text style={styles.calcRoleTitle}>CÁLCULOS DEL PRODUCTO</Text>
                     </View>
-                    <TouchableOpacity
-                        style={[styles.suggestedConfigBtn, showCalculator && styles.suggestedConfigBtnActive]}
-                        onPress={() => setShowCalculator(!showCalculator)}
-                    >
-                        <MaterialCommunityIcons name="cog" size={14} color={showCalculator ? '#d4af37' : '#888'} />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Dual city price display */}
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
-                    <View style={{ flex: 1, backgroundColor: '#0a1628', borderRadius: 10, padding: 10, borderWidth: 1, borderColor: '#1e3a5f' }}>
-                        <Text style={{ fontSize: 10, color: '#7fb3d3', fontWeight: '600', marginBottom: 2 }}>🟦 JUJUY</Text>
-                        <Text style={{ fontSize: 20, color: '#fff', fontWeight: '800' }}>
-                            ${calculated.suggestedPriceJujuy.toLocaleString('es-AR')}
-                        </Text>
-                        <Text style={{ fontSize: 10, color: '#555', marginTop: 2 }}>Base: ${calculated.subtotalJujuy.toFixed(0)}</Text>
-                    </View>
-                    <View style={{ flex: 1, backgroundColor: '#1a0f00', borderRadius: 10, padding: 10, borderWidth: 1, borderColor: '#5a3010' }}>
-                        <Text style={{ fontSize: 10, color: '#e8924f', fontWeight: '600', marginBottom: 2 }}>🟠 CÓRDOBA</Text>
-                        <Text style={{ fontSize: 20, color: '#fff', fontWeight: '800' }}>
-                            ${calculated.suggestedPriceCordoba.toLocaleString('es-AR')}
-                        </Text>
-                        <Text style={{ fontSize: 10, color: '#555', marginTop: 2 }}>Base: ${calculated.subtotalCordoba.toFixed(0)}</Text>
-                    </View>
-                </View>
-                <Text style={{ fontSize: 10, color: '#666', textAlign: 'center', marginBottom: 10 }}>
-                    Margen: {suggestedMargin}% sobre costo base
-                </Text>
-
-                {/* Desglose de costos */}
-                <View style={styles.suggestedBreakdown}>
-                    {/* Base fija (igual para ambos) */}
-                    <View style={styles.breakdownRow}>
-                        <Text style={styles.breakdownLabel}>Costo Producto:</Text>
-                        <Text style={styles.breakdownValue}>${(parseFloat(originalCost) || costPrice || 0).toFixed(2)}</Text>
-                    </View>
-                    <View style={styles.breakdownRow}>
-                        <Text style={styles.breakdownLabel}>Mano de Obra:</Text>
-                        <Text style={styles.breakdownValue}>${calculated.laborCost.toFixed(2)}</Text>
-                    </View>
-                    {calculated.packagingCost > 0 && (
-                        <View style={styles.breakdownRow}>
-                            <Text style={[styles.breakdownLabel, { color: '#2ecc71' }]}>📦 Packaging:</Text>
-                            <Text style={[styles.breakdownValue, { color: '#2ecc71' }]}>${calculated.packagingCost.toFixed(2)}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <View style={styles.roleToggleGroup}>
+                            <TouchableOpacity
+                                style={[styles.rolePill, selectedRoleView === 'admin' && styles.rolePillActiveAdmin]}
+                                onPress={() => setSelectedRoleView('admin')}
+                                activeOpacity={0.7}
+                            >
+                                <MaterialCommunityIcons name="crown" size={12} color={selectedRoleView === 'admin' ? '#7fb3d3' : '#666'} />
+                                <Text style={[styles.rolePillText, selectedRoleView === 'admin' && styles.rolePillTextActiveAdmin]}>
+                                    Admin (Jujuy)
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.rolePill, selectedRoleView === 'socio' && styles.rolePillActiveSocio]}
+                                onPress={() => setSelectedRoleView('socio')}
+                                activeOpacity={0.7}
+                            >
+                                <MaterialCommunityIcons name="handshake" size={12} color={selectedRoleView === 'socio' ? '#e8924f' : '#666'} />
+                                <Text style={[styles.rolePillText, selectedRoleView === 'socio' && styles.rolePillTextActiveSocio]}>
+                                    Socio (Córdoba)
+                                </Text>
+                            </TouchableOpacity>
                         </View>
-                    )}
-
-                    {/* Gastos operativos y comisión JUJUY */}
-                    <View style={[styles.breakdownRow, { marginTop: 6, borderTopWidth: 1, borderTopColor: '#1e3a5f22', paddingTop: 6 }]}>
-                        <Text style={[styles.breakdownLabel, { color: '#7fb3d3' }]}>🟦 Servicios Jujuy:</Text>
-                        <Text style={[styles.breakdownValue, { color: '#7fb3d3' }]}>${calculated.serviciosJujuy.toFixed(2)}</Text>
-                    </View>
-                    <View style={styles.breakdownRow}>
-                        <Text style={[styles.breakdownLabel, { color: '#7fb3d3', fontStyle: 'italic' }]}>   ↳ Tu comisión (60%):</Text>
-                        <Text style={[styles.breakdownValue, { color: '#7fb3d3' }]}>${calculated.comisionDueno.toFixed(2)}</Text>
-                    </View>
-
-                    {/* Gastos operativos y comisión CÓRDOBA */}
-                    <View style={[styles.breakdownRow, { marginTop: 6, borderTopWidth: 1, borderTopColor: '#5a301022', paddingTop: 6 }]}>
-                        <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>🟠 Servicios Córdoba:</Text>
-                        <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>${calculated.serviciosCordoba.toFixed(2)}</Text>
-                    </View>
-                    {calculated.transportCost > 0 && (
-                        <View style={styles.breakdownRow}>
-                            <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>🚚 Transporte CBA:</Text>
-                            <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>${calculated.transportCost.toFixed(2)}</Text>
-                        </View>
-                    )}
-                    <View style={styles.breakdownRow}>
-                        <Text style={[styles.breakdownLabel, { color: '#e8924f', fontStyle: 'italic' }]}>   ↳ Comisión socio (40%):</Text>
-                        <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>${calculated.comisionSocio.toFixed(2)}</Text>
+                        <TouchableOpacity
+                            style={[styles.suggestedConfigBtn, showCalculator && styles.suggestedConfigBtnActive]}
+                            onPress={() => setShowCalculator(!showCalculator)}
+                            accessibilityLabel="Configurar cálculos del producto"
+                        >
+                            <MaterialCommunityIcons name="cog" size={14} color={showCalculator ? '#d4af37' : '#888'} />
+                        </TouchableOpacity>
                     </View>
                 </View>
 
-                {/* Acciones */}
-                <View style={styles.suggestedActions}>
+                {/* Fila con Columna izquierda de cálculos y Columna derecha Margen Bruto */}
+                <View style={styles.calcColumnsRow}>
+                    {/* COLUMNA IZQUIERDA: Cálculos acomodados en columna */}
+                    <View style={styles.calcLeftCol}>
+                        {/* 1. Precio Base */}
+                        <View style={styles.calcColItem}>
+                            <Text style={styles.calcColItemLabel}>PRECIO BASE</Text>
+                            <Text style={styles.calcColItemValue}>
+                                ${precioBase.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                            <Text style={styles.calcColItemSub}>Costo físico de adquisición</Text>
+                        </View>
+
+                        {/* 2. Gastos Necesarios (Luz, Transporte, etc.) */}
+                        <View style={styles.calcColItem}>
+                            <Text style={styles.calcColItemLabel}>MANO DE OBRA</Text>
+                            <Text style={[styles.calcColItemValue, { color: '#e8924f' }]}>
+                                ${calculated.laborCost.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                            <Text style={styles.calcColItemSub}>
+                                {laborType === 'fijo' ? 'Costo fijo por unidad' : `${timeSpentMinutes || 0} min por unidad`}
+                            </Text>
+                        </View>
+
+                        <View style={styles.calcColItem}>
+                            <Text style={styles.calcColItemLabel}>GASTOS NECESARIOS</Text>
+                            <Text style={[styles.calcColItemValue, { color: selectedRoleView === 'admin' ? '#7fb3d3' : '#e8924f' }]}>
+                                ${(calculated.laborCost + calculated.packagingCost + gastosOpActivo).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                            <Text style={styles.calcColItemSub} numberOfLines={1}>
+                                {selectedRoleView === 'admin'
+                                    ? 'Luz, Net, M.O., Bolsita+Stickers'
+                                    : 'Luz, Net, Transp., M.O., Bolsita+Stk'}
+                            </Text>
+                            <Text style={[styles.calcColItemSub, { marginTop: 4 }]} numberOfLines={2}>
+                                Bolsita ${calculated.packagingBagCost.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                {' + Stickers $'}{calculated.packagingStickerCost.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                {' + Servicios $'}{gastosOpActivo.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                        </View>
+
+                        {/* 3. Margen de Ganancia (%) que escribe el usuario */}
+                        <View style={styles.calcColItem}>
+                            <Text style={styles.calcColItemLabel}>MARGEN DE GANANCIA (%)</Text>
+                            <View style={styles.marginInputRow}>
+                                <TextInput
+                                    style={styles.marginInput}
+                                    value={currentMarginPercent?.toString() || ''}
+                                    onChangeText={handleMarginChange}
+                                    keyboardType="numeric"
+                                    placeholder="50"
+                                    placeholderTextColor="#666"
+                                />
+                                <Text style={styles.marginInputUnit}>%</Text>
+                            </View>
+                            <Text style={styles.calcColItemSub}>% de ganancia para este producto</Text>
+                        </View>
+
+                        {/* 4. Precio c/ todo sumado (con margen de ganancia incluido) */}
+                        <View style={[styles.calcColItem, { borderLeftColor: '#f39c12' }]}>
+                            <Text style={styles.calcColItemLabel}>PRECIO C/ TODO SUMADO</Text>
+                            <Text style={[styles.calcColItemValue, { color: '#f39c12', fontSize: 15 }]}>
+                                ${precioTodoSumadoActivo.toLocaleString('es-AR')}
+                            </Text>
+                            <Text style={styles.calcColItemSub} numberOfLines={1}>
+                                Base + Gastos + Margen ({marginNum}%)
+                            </Text>
+                        </View>
+
+                        {/* 5. Precio con comisión, added after costs and product margin */}
+                        <View style={[styles.calcColItem, { borderLeftColor: '#d4af37', backgroundColor: '#18150a' }]}>
+                            <Text style={[styles.calcColItemLabel, { color: '#d4af37' }]}>
+                                PRECIO CON COMISIÓN
+                            </Text>
+                            <Text style={[styles.calcColItemValue, { color: '#d4af37', fontSize: 16 }]}>
+                                ${precioFinalActivo.toLocaleString('es-AR')}
+                            </Text>
+                            <Text style={styles.calcColItemSub} numberOfLines={2}>
+                                {selectedRoleView === 'admin' ? 'Jujuy' : 'Córdoba'}: Precio c/Todo Sumado + comisión {selectedRoleView === 'admin' ? `Admin ${pctAdmin}%` : `Socio ${pctSocio}%`} sobre el margen (+${comisionMontoActiva.toLocaleString('es-AR')})
+                            </Text>
+                            <TouchableOpacity
+                                style={styles.applyInlineBtn}
+                                onPress={() => handleApplyPrice(selectedRoleView === 'admin' ? 'jujuy' : 'cordoba')}
+                                activeOpacity={0.7}
+                            >
+                                <MaterialCommunityIcons name="lightning-bolt" size={12} color="#000" />
+                                <Text style={styles.applyInlineBtnText}>
+                                    Aplicar a {selectedRoleView === 'admin' ? 'Jujuy' : 'Córdoba'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
+                    {/* Divisor vertical */}
+                    <View style={styles.calcVerticalDivider} />
+
+                    {/* COLUMNA DERECHA: Más en grande y más en el medio el cálculo de margen bruto */}
+                    <View style={styles.calcRightCol}>
+                        <View style={styles.margenHeaderRow}>
+                            <MaterialCommunityIcons name="chart-line-variant" size={14} color="#2ecc71" />
+                            <Text style={styles.margenTitle}>MARGEN BRUTO</Text>
+                        </View>
+
+                        {/* Monto destacado en grande y centrado */}
+                        <Text style={[styles.margenAmountBig, { color: margenBrutoPesos >= 0 ? '#2ecc71' : '#e74c3c' }]}>
+                            {margenBrutoPesos >= 0 ? `+$${Math.round(margenBrutoPesos).toLocaleString('es-AR')}` : `-$${Math.round(Math.abs(margenBrutoPesos)).toLocaleString('es-AR')}`}
+                        </Text>
+
+                        {/* Porcentaje de margen */}
+                        <View style={[styles.margenPercentBadge, { backgroundColor: margenBrutoPesos >= 0 ? '#2ecc7120' : '#e74c3c20' }]}>
+                            <MaterialCommunityIcons
+                                name={margenBrutoPesos >= 0 ? "trending-up" : "trending-down"}
+                                size={14}
+                                color={margenBrutoPesos >= 0 ? '#2ecc71' : '#e74c3c'}
+                            />
+                            <Text style={[styles.margenPercentText, { color: margenBrutoPesos >= 0 ? '#2ecc71' : '#e74c3c' }]}>
+                                {margenPorcentaje >= 0 ? `+${margenPorcentaje}%` : `${margenPorcentaje}%`}
+                            </Text>
+                        </View>
+
+                        {/* Fórmula clara del cálculo del Margen Bruto */}
+                        <Text style={styles.margenFormulaText} numberOfLines={1}>
+                            ${Math.round(effectiveSalePrice).toLocaleString('es-AR')} - ${Math.round(costoNecesarioActivo).toLocaleString('es-AR')}
+                        </Text>
+                        <Text style={styles.margenFormulaSub}>
+                            (Precio Venta - Costos Necesarios)
+                        </Text>
+                        <Text style={[styles.margenFormulaSub, { marginTop: 2 }]}>
+                            Porcentaje calculado sobre el precio de venta
+                        </Text>
+
+                        {/* Referencia de precio de venta */}
+                        <Text style={styles.margenRefText} numberOfLines={1}>
+                            {hasActiveSalePrice
+                                ? `s/ Venta actual ($${Math.round(activeCustomSalePrice).toLocaleString('es-AR')})`
+                                : `s/ Precio c/ comisión ($${Math.round(precioFinalActivo).toLocaleString('es-AR')})`}
+                        </Text>
+
+                        {/* Badge de rentabilidad */}
+                        <View style={[styles.rentabilidadPill, {
+                            backgroundColor: getRentabilidadColor(margenPorcentaje) + '22',
+                            borderColor: getRentabilidadColor(margenPorcentaje) + '77'
+                        }]}>
+                            <Text style={[styles.rentabilidadPillText, { color: getRentabilidadColor(margenPorcentaje) }]}>
+                                RENTABILIDAD {getLabel(margenPorcentaje)}
+                            </Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* Acciones para aplicar a precios por ciudad */}
+                <View style={[styles.suggestedActions, { marginTop: 12 }]}>
                     <TouchableOpacity style={[styles.suggestedBtn, styles.suggestedBtnPrimary]} onPress={() => handleApplyPrice('jujuy')}>
-                        <Text style={styles.suggestedBtnPrimaryText}>Aplicar Jujuy</Text>
+                        <Text style={styles.suggestedBtnPrimaryText}>Aplicar Jujuy (${precioFinalJujuy.toLocaleString('es-AR')})</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.suggestedBtn, styles.suggestedBtnSecondary]} onPress={() => handleApplyPrice('cordoba')}>
-                        <Text style={styles.suggestedBtnSecondaryText}>Aplicar Córdoba</Text>
+                        <Text style={styles.suggestedBtnSecondaryText}>Aplicar Córdoba (${precioFinalCordoba.toLocaleString('es-AR')})</Text>
                     </TouchableOpacity>
                 </View>
+
+                {/* Botón para ver/ocultar desglose detallado */}
+                <TouchableOpacity
+                    style={styles.toggleBreakdownBtn}
+                    onPress={() => setShowDetailedBreakdown(!showDetailedBreakdown)}
+                    activeOpacity={0.7}
+                >
+                    <MaterialCommunityIcons
+                        name={showDetailedBreakdown ? "chevron-up" : "chevron-down"}
+                        size={14}
+                        color="#888"
+                    />
+                    <Text style={styles.toggleBreakdownText}>
+                        {showDetailedBreakdown ? 'Ocultar desglose detallado de gastos' : 'Ver desglose detallado de gastos'}
+                    </Text>
+                </TouchableOpacity>
+
+                {/* Desglose detallado expandible */}
+                {showDetailedBreakdown && (
+                    <View style={[styles.suggestedBreakdown, { marginTop: 8 }]}>
+                        <View style={styles.breakdownRow}>
+                            <Text style={styles.breakdownLabel}>Costo Producto:</Text>
+                            <Text style={styles.breakdownValue}>${costPrice.toFixed(2)}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={styles.breakdownLabel}>Mano de Obra:</Text>
+                            <Text style={styles.breakdownValue}>${calculated.laborCost.toFixed(2)}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#2ecc71' }]}>
+                                📦 Bolsita ({calculated.packagingType === 'rfid' ? 'Tarjetas RFID/NFC' : 'General'}):
+                            </Text>
+                            <Text style={[styles.breakdownValue, { color: '#2ecc71' }]}>${calculated.packagingBagCost.toFixed(2)}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#2ecc71' }]}>🏷️ Stickers:</Text>
+                            <Text style={[styles.breakdownValue, { color: '#2ecc71' }]}>${calculated.packagingStickerCost.toFixed(2)}</Text>
+                        </View>
+
+                        <View style={[styles.breakdownRow, { marginTop: 6, borderTopWidth: 1, borderTopColor: '#1e3a5f22', paddingTop: 6 }]}>
+                            <Text style={[styles.breakdownLabel, { color: '#7fb3d3' }]}>🟦 Servicios Jujuy (Luz + Net):</Text>
+                            <Text style={[styles.breakdownValue, { color: '#7fb3d3' }]}>${calculated.serviciosJujuy.toFixed(2)}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#f39c12' }]}>   ↳ Precio c/ Todo Sumado Jujuy:</Text>
+                            <Text style={[styles.breakdownValue, { color: '#f39c12' }]}>${precioTodoSumadoJujuy.toLocaleString('es-AR')}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#7fb3d3' }]}>   ↳ Comisión Admin (60% del margen):</Text>
+                            <Text style={[styles.breakdownValue, { color: '#7fb3d3' }]}>+${comisionMontoJujuy.toLocaleString('es-AR')}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#d4af37', fontWeight: '800' }]}>   ⭐ Precio Final Jujuy:</Text>
+                            <Text style={[styles.breakdownValue, { color: '#d4af37', fontWeight: '800' }]}>${precioFinalJujuy.toLocaleString('es-AR')}</Text>
+                        </View>
+
+                        <View style={[styles.breakdownRow, { marginTop: 6, borderTopWidth: 1, borderTopColor: '#5a301022', paddingTop: 6 }]}>
+                            <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>🟠 Servicios Córdoba (Luz + Net):</Text>
+                            <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>${calculated.serviciosCordoba.toFixed(2)}</Text>
+                        </View>
+                        {calculated.transportCost > 0 && (
+                            <View style={styles.breakdownRow}>
+                                <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>🚚 Transporte CBA:</Text>
+                                <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>${calculated.transportCost.toFixed(2)}</Text>
+                            </View>
+                        )}
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#f39c12' }]}>   ↳ Precio c/ Todo Sumado Córdoba:</Text>
+                            <Text style={[styles.breakdownValue, { color: '#f39c12' }]}>${precioTodoSumadoCordoba.toLocaleString('es-AR')}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>   ↳ Comisión Socio (40% del margen):</Text>
+                            <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>+${comisionMontoCordoba.toLocaleString('es-AR')}</Text>
+                        </View>
+                        <View style={styles.breakdownRow}>
+                            <Text style={[styles.breakdownLabel, { color: '#d4af37', fontWeight: '800' }]}>   ⭐ Precio Final Córdoba:</Text>
+                            <Text style={[styles.breakdownValue, { color: '#d4af37', fontWeight: '800' }]}>${precioFinalCordoba.toLocaleString('es-AR')}</Text>
+                        </View>
+                    </View>
+                )}
 
                 {/* Panel de Configuración Colapsable */}
                 {showCalculator && (
@@ -604,6 +882,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                                 { key: 'cordoba', label: '🟠 Córdoba' },
                                 { key: 'transport', label: '🚚 Transporte' },
                                 { key: 'packaging', label: '📦 Packaging' },
+                                { key: 'commission', label: '💸 Comisiones' },
                             ].map(tab => (
                                 <TouchableOpacity
                                     key={tab.key}
@@ -626,7 +905,12 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                             <View style={{ gap: 10 }}>
                                 <View style={[styles.configFieldRow, { backgroundColor: '#111', borderRadius: 8, padding: 8, borderWidth: 1, borderColor: '#333', marginBottom: 4 }]}>
                                     <Text style={[styles.configLabel, { color: '#fff', fontWeight: 'bold' }]}>💰 Costo de Compra (Físico):</Text>
-                                    <TextInput style={[styles.configInput, { borderColor: '#d4af3733' }]} value={originalCost} onChangeText={handleUpdateOriginalCost} keyboardType="numeric" />
+                                    <TextInput
+                                        style={[styles.configInput, { borderColor: '#d4af3733' }]}
+                                        value={formData.cost_price?.toString() || ''}
+                                        onChangeText={(value) => handleChange('cost_price', value.replace(/[^0-9.]/g, ''))}
+                                        keyboardType="numeric"
+                                    />
                                 </View>
 
                                 <Text style={styles.configLabel}>Base de Mano de Obra:</Text>
@@ -761,23 +1045,68 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         {/* 📦 PACKAGING */}
                         {activeConfigTab === 'packaging' && (
                             <View style={{ gap: 10 }}>
-                                <Text style={{ fontSize: 11, color: '#999' }}>
-                                    El packaging se calcula automáticamente desde los productos marcados como "Insumo de Packaging".
+                                <Text style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>
+                                    Configurá el costo unitario de cada tipo de bolsita (packaging):
                                 </Text>
-                                <View style={{ backgroundColor: '#0f2010', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#2ecc71' }}>
-                                    <Text style={{ fontSize: 13, color: '#2ecc71', fontWeight: '700', marginBottom: 6 }}>
-                                        📦 Total packaging: ${(parseFloat(packagingCost) || 0).toFixed(2)} / unidad
+                                <View style={styles.configFieldRow}>
+                                    <Text style={styles.configLabel}>🛍️ Bolsita General ($/unidad):</Text>
+                                    <TextInput
+                                        style={styles.configInput}
+                                        value={packagingCostGeneral}
+                                        onChangeText={(val) => {
+                                            const clean = val.replace(/[^0-9.]/g, '');
+                                            setPackagingCostGeneral(clean);
+                                            AsyncStorage.setItem('packaging_cost_general', clean).catch(e => console.warn(e));
+                                        }}
+                                        keyboardType="numeric"
+                                    />
+                                </View>
+                                <View style={styles.configFieldRow}>
+                                    <Text style={styles.configLabel}>💳 Bolsita Tarjetas RFID/NFC ($/unidad):</Text>
+                                    <TextInput
+                                        style={styles.configInput}
+                                        value={packagingCostRfid}
+                                        onChangeText={(val) => {
+                                            const clean = val.replace(/[^0-9.]/g, '');
+                                            setPackagingCostRfid(clean);
+                                            AsyncStorage.setItem('packaging_cost_rfid', clean).catch(e => console.warn(e));
+                                        }}
+                                        keyboardType="numeric"
+                                    />
+                                </View>
+                                <View style={{ backgroundColor: '#0f2010', borderRadius: 8, padding: 10, borderWidth: 1, borderColor: '#2ecc7133' }}>
+                                    <Text style={{ fontSize: 11, color: '#2ecc71', lineHeight: 16 }}>
+                                        💡 Los costos por producto de bolsita y sticker se cargan en la sección Packaging.
                                     </Text>
-                                    {packagingList.length > 0 ? (
-                                        packagingList.map((name, i) => (
-                                            <Text key={i} style={{ fontSize: 11, color: '#7bc99a', marginTop: 2 }}>• {name}</Text>
-                                        ))
-                                    ) : (
-                                        <Text style={{ fontSize: 11, color: '#555', fontStyle: 'italic' }}>
-                                            Ningún producto marcado como packaging aún.{'\n'}
-                                            Andá a un producto de stickers/bolsas y activá el toggle en la sección Operativo.
-                                        </Text>
-                                    )}
+                                </View>
+                            </View>
+                        )}
+
+                        {/* 💸 COMISIONES */}
+                        {activeConfigTab === 'commission' && (
+                            <View style={{ gap: 10 }}>
+                                <Text style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>
+                                    Se calculan por separado sobre el importe del margen de ganancia del producto.
+                                </Text>
+                                <View style={styles.configFieldRow}>
+                                    <Text style={styles.configLabel}>👑 Comisión Admin / Jujuy (% del margen):</Text>
+                                    <TextInput
+                                        style={styles.configInput}
+                                        value={adminCommissionPercent}
+                                        onChangeText={(val) => handleUpdateField('adminCommissionPercent', val.replace(/[^0-9.]/g, ''), setAdminCommissionPercent)}
+                                        keyboardType="numeric"
+                                        accessibilityLabel="Comisión Admin sobre margen (%)"
+                                    />
+                                </View>
+                                <View style={styles.configFieldRow}>
+                                    <Text style={styles.configLabel}>🤝 Comisión Socio / Córdoba (% del margen):</Text>
+                                    <TextInput
+                                        style={styles.configInput}
+                                        value={partnerCommissionPercent}
+                                        onChangeText={(val) => handleUpdateField('partnerCommissionPercent', val.replace(/[^0-9.]/g, ''), setPartnerCommissionPercent)}
+                                        keyboardType="numeric"
+                                        accessibilityLabel="Comisión Socio sobre margen (%)"
+                                    />
                                 </View>
                             </View>
                         )}
@@ -833,8 +1162,8 @@ export const StockSection = ({ formData, handleChange }) => (
                     Crea un Gasto y Pedido de compra. Desactivar si ya cargaste esta compra en el panel de Compras.
                 </Text>
             </View>
-            <TouchableOpacity 
-                style={[styles.toggleSwitch, formData.register_expense && styles.toggleSwitchActive]} 
+            <TouchableOpacity
+                style={[styles.toggleSwitch, formData.register_expense && styles.toggleSwitchActive]}
                 onPress={() => handleChange('register_expense', !formData.register_expense)}
             >
                 <View style={[styles.toggleCircle, formData.register_expense && styles.toggleCircleActive]} />
@@ -857,13 +1186,21 @@ export const OperativeSection = ({
     onToggleBundle,
     isIndividual,
     onToggleIndividual,
-    isPackaging,
-    onTogglePackaging,
     bundleItems,
     onShowBundlePicker,
     onShowSupplierModal
 }) => {
     const currentSupplier = suppliersList?.find(s => s.name === formData.provider);
+    const activePackaging = formData.packaging_type || ((formData.name && /rfid|nfc|tarjeta/i.test(formData.name)) ? 'rfid' : 'general');
+    const defaultCost = activePackaging === 'rfid'
+        ? '60'
+        : activePackaging === 'none'
+            ? '0'
+            : '65';
+    const currentPackagingCost = formData.packaging_cost !== undefined && formData.packaging_cost !== ''
+        ? formData.packaging_cost.toString()
+        : defaultCost;
+
     return (
         <View style={styles.section}>
             <Text style={styles.sectionTitle}>OPERATIVO</Text>
@@ -894,26 +1231,168 @@ export const OperativeSection = ({
                     <View style={[styles.toggleCircle, isBundle && styles.toggleCircleActive]} />
                 </TouchableOpacity>
             </View>
-            {/* NUEVO: Toggle Packaging */}
-            <View style={{ marginTop: 10, marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: isPackaging ? '#1a2f1a' : 'transparent', borderRadius: 10, padding: isPackaging ? 10 : 0, borderWidth: isPackaging ? 1 : 0, borderColor: '#2ecc71' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
-                    <MaterialCommunityIcons name="sticker-outline" size={18} color={isPackaging ? '#2ecc71' : '#d4af37'} style={{ marginRight: 8 }} />
-                    <View>
-                        <Text style={[styles.inputLabel, isPackaging && { color: '#2ecc71' }]}>¿Es Insumo de Packaging?</Text>
-                        <Text style={{ fontSize: 9, color: '#666', marginTop: -4 }}>Stickers, bolsas, cajas, etc.</Text>
+
+            {/* SELECCIÓN DE PACKAGING (BOLSITA + STICKERS) */}
+            <View style={styles.packagingCard}>
+                <View style={styles.packagingHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <MaterialCommunityIcons name="package-variant" size={18} color="#d4af37" />
+                        <Text style={styles.packagingTitle}>PACKAGING (BOLSITA + STICKERS)</Text>
+                    </View>
+                    <View style={styles.packagingBadgeActive}>
+                        <Text style={styles.packagingBadgeActiveText}>
+                            {activePackaging === 'rfid'
+                                ? '💳 Tarjetas RFID/NFC'
+                                : activePackaging === 'none'
+                                    ? '🚫 Sin bolsita'
+                                    : '🛍️ General'}
+                        </Text>
                     </View>
                 </View>
-                <TouchableOpacity style={[styles.toggleSwitch, isPackaging && { backgroundColor: '#2ecc71' }]} onPress={onTogglePackaging}>
-                    <View style={[styles.toggleCircle, isPackaging && styles.toggleCircleActive]} />
-                </TouchableOpacity>
-            </View>
-            {isPackaging && (
-                <View style={{ backgroundColor: '#0f2010', borderRadius: 8, padding: 10, marginBottom: 10, borderLeftWidth: 3, borderLeftColor: '#2ecc71' }}>
-                    <Text style={{ fontSize: 11, color: '#2ecc71', lineHeight: 16 }}>
-                        📦 Al guardar, el costo de este producto se sumará automáticamente al calculador de precio de todos los demás productos.
+
+                <Text style={styles.packagingSubtitle}>
+                    Elegí el tipo de bolsita y cargá por separado el costo de la bolsita y los stickers:
+                </Text>
+
+                <View style={styles.packagingPillsRow}>
+                    <TouchableOpacity
+                        style={[
+                            styles.packagingPill,
+                            activePackaging === 'general' && styles.packagingPillActiveGeneral
+                        ]}
+                        onPress={() => {
+                            handleChange('packaging_type', 'general');
+                            handleChange('packaging_cost', '65');
+                        }}
+                        activeOpacity={0.7}
+                    >
+                        <MaterialCommunityIcons
+                            name="shopping"
+                            size={16}
+                            color={activePackaging === 'general' ? '#2ecc71' : '#777'}
+                        />
+                        <Text
+                            style={[
+                                styles.packagingPillText,
+                                activePackaging === 'general' && styles.packagingPillTextActiveGeneral
+                            ]}
+                        >
+                            General (Todos)
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.packagingPill,
+                            activePackaging === 'rfid' && styles.packagingPillActiveRfid
+                        ]}
+                        onPress={() => {
+                            handleChange('packaging_type', 'rfid');
+                            handleChange('packaging_cost', '60');
+                        }}
+                        activeOpacity={0.7}
+                    >
+                        <MaterialCommunityIcons
+                            name="credit-card-chip-outline"
+                            size={16}
+                            color={activePackaging === 'rfid' ? '#7fb3d3' : '#777'}
+                        />
+                        <Text
+                            style={[
+                                styles.packagingPillText,
+                                activePackaging === 'rfid' && styles.packagingPillTextActiveRfid
+                            ]}
+                        >
+                            Tarjetas RFID/NFC
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.packagingPill,
+                            activePackaging === 'none' && styles.packagingPillActiveNone
+                        ]}
+                        onPress={() => {
+                            handleChange('packaging_type', 'none');
+                            handleChange('packaging_cost', '0');
+                        }}
+                        activeOpacity={0.7}
+                    >
+                        <MaterialCommunityIcons
+                            name="close-circle-outline"
+                            size={16}
+                            color={activePackaging === 'none' ? '#e74c3c' : '#777'}
+                        />
+                        <Text
+                            style={[
+                                styles.packagingPillText,
+                                activePackaging === 'none' && styles.packagingPillTextActiveNone
+                            ]}
+                        >
+                            Sin Bolsita
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* INPUT DIRECTO PARA EL PRECIO DEL PACKAGING */}
+                <View style={styles.packagingPriceRow}>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                        <Text style={styles.packagingPriceLabel}>PRECIO / COSTO DE BOLSITA ($)</Text>
+                        <Text style={styles.packagingPriceHelper}>
+                            {activePackaging === 'rfid'
+                                ? 'Bolsita para tarjetas RFID/NFC'
+                                : activePackaging === 'none'
+                                    ? 'Sin costo de empaque'
+                                    : 'Bolsita general para este producto'}
+                        </Text>
+                    </View>
+                    <View style={styles.packagingInputContainer}>
+                        <Text style={styles.packagingInputPrefix}>$</Text>
+                        <TextInput
+                            style={styles.packagingPriceInput}
+                            value={currentPackagingCost}
+                            onChangeText={(val) => {
+                                const clean = val.replace(/[^0-9.]/g, '');
+                                handleChange('packaging_cost', clean);
+                            }}
+                            keyboardType="numeric"
+                            placeholder="0"
+                            placeholderTextColor="#666"
+                        />
+                    </View>
+                </View>
+
+                <View style={[styles.packagingPriceRow, { marginTop: 10 }]}>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                        <Text style={styles.packagingPriceLabel}>PRECIO / COSTO DE STICKERS ($)</Text>
+                        <Text style={styles.packagingPriceHelper}>
+                            {activePackaging === 'none' ? 'No se suma si elegís Sin Bolsita' : 'Costo total de stickers por unidad'}
+                        </Text>
+                    </View>
+                    <View style={styles.packagingInputContainer}>
+                        <Text style={styles.packagingInputPrefix}>$</Text>
+                        <TextInput
+                            style={styles.packagingPriceInput}
+                            value={formData.packaging_sticker_cost?.toString() || '0'}
+                            onChangeText={(val) => handleChange('packaging_sticker_cost', val.replace(/[^0-9.]/g, ''))}
+                            keyboardType="numeric"
+                            placeholder="0"
+                            placeholderTextColor="#666"
+                        />
+                    </View>
+                </View>
+
+                <View style={styles.packagingInfoBox}>
+                    <MaterialCommunityIcons name="information-outline" size={13} color="#888" />
+                    <Text style={styles.packagingInfoText}>
+                        {activePackaging === 'rfid'
+                            ? 'El costo de la bolsita y el de los stickers se suman por separado.'
+                            : activePackaging === 'none'
+                                ? 'Sin costo de empaque para este producto ($0).'
+                                : 'El costo de los stickers se suma al de la bolsita.'}
                     </Text>
                 </View>
-            )}
+            </View>
             {isBundle && (
                 <View style={styles.bundleBox}>
                     <Text style={[styles.inputLabel, { marginBottom: 10 }]}>Productos incluidos</Text>
@@ -1665,5 +2144,385 @@ const styles = StyleSheet.create({
         paddingHorizontal: 6,
         paddingVertical: 2,
         borderRadius: 4,
+    },
+    // === CÁLCULOS ADICIONALES (COLUMNA + MARGEN BRUTO) ===
+    calcHeroCard: {
+        backgroundColor: '#0c0c0c',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#d4af3733',
+        padding: 12,
+        marginTop: 12,
+        marginBottom: 12,
+    },
+    calcRoleHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingBottom: 10,
+        marginBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#1e1e1e',
+    },
+    calcRoleTitle: {
+        color: '#d4af37',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    roleToggleGroup: {
+        flexDirection: 'row',
+        gap: 6,
+    },
+    rolePill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 14,
+        backgroundColor: '#181818',
+        borderWidth: 1,
+        borderColor: '#2e2e2e',
+    },
+    rolePillActiveAdmin: {
+        backgroundColor: '#7fb3d325',
+        borderColor: '#7fb3d3',
+    },
+    rolePillActiveSocio: {
+        backgroundColor: '#e8924f25',
+        borderColor: '#e8924f',
+    },
+    rolePillText: {
+        fontSize: 10,
+        color: '#888',
+        fontWeight: '600',
+    },
+    rolePillTextActiveAdmin: {
+        color: '#7fb3d3',
+        fontWeight: '800',
+    },
+    rolePillTextActiveSocio: {
+        color: '#e8924f',
+        fontWeight: '800',
+    },
+    calcColumnsRow: {
+        flexDirection: 'row',
+        gap: 10,
+        alignItems: 'stretch',
+    },
+    calcLeftCol: {
+        flex: 1.15,
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    calcColItem: {
+        backgroundColor: '#141414',
+        borderRadius: 8,
+        padding: 8,
+        borderLeftWidth: 3,
+        borderLeftColor: '#d4af37',
+    },
+    calcColItemLabel: {
+        color: '#888',
+        fontSize: 9,
+        fontWeight: '800',
+        letterSpacing: 0.5,
+        marginBottom: 2,
+    },
+    calcColItemValue: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '900',
+    },
+    calcColItemSub: {
+        color: '#666',
+        fontSize: 9,
+        marginTop: 2,
+    },
+    marginInputRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#0a0a0a',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#333',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        marginTop: 2,
+        marginBottom: 2,
+    },
+    marginInput: {
+        color: '#d4af37',
+        fontSize: 14,
+        fontWeight: '900',
+        padding: 0,
+        minWidth: 40,
+        flex: 1,
+    },
+    marginInputUnit: {
+        color: '#d4af37',
+        fontSize: 12,
+        fontWeight: '800',
+        marginLeft: 2,
+    },
+    applyInlineBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#f39c12',
+        paddingVertical: 3,
+        paddingHorizontal: 6,
+        borderRadius: 4,
+        gap: 3,
+        marginTop: 4,
+    },
+    applyInlineBtnText: {
+        color: '#000',
+        fontSize: 9,
+        fontWeight: '800',
+    },
+    calcVerticalDivider: {
+        width: 1,
+        backgroundColor: '#1e1e1e',
+        marginVertical: 2,
+    },
+    calcRightCol: {
+        flex: 1,
+        backgroundColor: '#121212',
+        borderRadius: 10,
+        padding: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#222',
+    },
+    margenHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        marginBottom: 6,
+    },
+    margenTitle: {
+        color: '#aaa',
+        fontSize: 10,
+        fontWeight: '900',
+        letterSpacing: 0.8,
+    },
+    margenAmountBig: {
+        fontSize: 22,
+        fontWeight: '900',
+        textAlign: 'center',
+    },
+    margenPercentBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 12,
+        marginTop: 6,
+        marginBottom: 6,
+    },
+    margenPercentText: {
+        fontSize: 12,
+        fontWeight: '800',
+    },
+    margenFormulaText: {
+        color: '#aaa',
+        fontSize: 10,
+        fontWeight: '700',
+        textAlign: 'center',
+        marginTop: 2,
+    },
+    margenFormulaSub: {
+        color: '#666',
+        fontSize: 8,
+        textAlign: 'center',
+        marginBottom: 4,
+    },
+    margenRefText: {
+        color: '#666',
+        fontSize: 9,
+        textAlign: 'center',
+        marginBottom: 6,
+    },
+    rentabilidadPill: {
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 4,
+        borderWidth: 1,
+    },
+    rentabilidadPillText: {
+        fontSize: 9,
+        fontWeight: '900',
+        letterSpacing: 0.5,
+    },
+    toggleBreakdownBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 4,
+        paddingVertical: 8,
+        marginTop: 8,
+        marginBottom: 4,
+        borderRadius: 6,
+        backgroundColor: '#141414',
+    },
+    toggleBreakdownText: {
+        color: '#888',
+        fontSize: 10,
+        fontWeight: '700',
+    },
+    packagingCard: {
+        backgroundColor: '#121212',
+        borderRadius: 10,
+        padding: 12,
+        marginTop: 12,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#222',
+    },
+    packagingHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 6,
+    },
+    packagingTitle: {
+        color: '#d4af37',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 0.5,
+    },
+    packagingBadgeActive: {
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 4,
+        backgroundColor: '#1a1a1a',
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    packagingBadgeActiveText: {
+        color: '#fff',
+        fontSize: 10,
+        fontWeight: '700',
+    },
+    packagingSubtitle: {
+        color: '#888',
+        fontSize: 10,
+        marginBottom: 10,
+    },
+    packagingPillsRow: {
+        flexDirection: 'row',
+        gap: 6,
+        marginBottom: 8,
+    },
+    packagingPill: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 4,
+        paddingVertical: 8,
+        paddingHorizontal: 4,
+        borderRadius: 8,
+        backgroundColor: '#0c0c0c',
+        borderWidth: 1,
+        borderColor: '#262626',
+    },
+    packagingPillActiveGeneral: {
+        backgroundColor: '#2ecc7118',
+        borderColor: '#2ecc71',
+    },
+    packagingPillActiveRfid: {
+        backgroundColor: '#7fb3d318',
+        borderColor: '#7fb3d3',
+    },
+    packagingPillActiveNone: {
+        backgroundColor: '#e74c3c18',
+        borderColor: '#e74c3c',
+    },
+    packagingPillText: {
+        color: '#777',
+        fontSize: 9,
+        fontWeight: '700',
+        textAlign: 'center',
+    },
+    packagingPillTextActiveGeneral: {
+        color: '#2ecc71',
+        fontWeight: '800',
+    },
+    packagingPillTextActiveRfid: {
+        color: '#7fb3d3',
+        fontWeight: '800',
+    },
+    packagingPillTextActiveNone: {
+        color: '#e74c3c',
+        fontWeight: '800',
+    },
+    packagingInfoBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: '#0a0a0a',
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#1a1a1a',
+    },
+    packagingInfoText: {
+        color: '#888',
+        fontSize: 9,
+        flex: 1,
+    },
+    packagingPriceRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: '#0a0a0a',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#262626',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginBottom: 8,
+    },
+    packagingPriceLabel: {
+        color: '#d4af37',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 0.5,
+    },
+    packagingPriceHelper: {
+        color: '#888',
+        fontSize: 9,
+        marginTop: 2,
+    },
+    packagingInputContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#141414',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#d4af3766',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        minWidth: 90,
+    },
+    packagingInputPrefix: {
+        color: '#d4af37',
+        fontSize: 14,
+        fontWeight: '900',
+        marginRight: 4,
+    },
+    packagingPriceInput: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '900',
+        padding: 0,
+        minWidth: 50,
+        textAlign: 'right',
     },
 });

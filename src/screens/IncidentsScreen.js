@@ -21,6 +21,7 @@ const RETURN_REASONS = [
 
 import { useFinanceStore } from '../store/useFinanceStore';
 import { useProductStore } from '../store/useProductStore';
+import { useClientStore } from '../store/useClientStore';
 import { LocalDbService } from '../services/localDbService';
 import { SyncService } from '../services/syncService';
 
@@ -67,15 +68,61 @@ export default function IncidentsScreen({ navigation }) {
     };
 
     const fetchRecentSales = async (productId) => {
+        if (!productId) {
+            setRecentSales([]);
+            return;
+        }
+
         setLoadingSales(true);
         try {
-            const [sales, saleItems, clients] = await Promise.all([
-                LocalDbService.getAll('sales'),
-                LocalDbService.getAll('sale_items'),
-                LocalDbService.getAll('clients')
-            ]);
-            const clientMap = (clients || []).reduce((acc, c) => ({ ...acc, [c.id]: c }), {});
-            const matchingSaleIds = new Set((saleItems || []).filter(si => si.product_id === productId).map(si => si.sale_id));
+            const finState = useFinanceStore.getState();
+            const clientState = useClientStore.getState();
+
+            const isFinInit = finState.isInitialized;
+            const isClientInit = clientState.isInitialized;
+
+            let sales = finState.sales;
+            let clients = clientState.clients;
+            let saleItems = null;
+
+            if (!isFinInit || !isClientInit) {
+                const results = await Promise.all([
+                    !isFinInit ? LocalDbService.getAll('sales') : Promise.resolve(sales),
+                    !isClientInit ? LocalDbService.getAll('clients') : Promise.resolve(clients)
+                ]);
+                sales = results[0] || [];
+                clients = results[1] || [];
+            }
+
+            if (!sales || sales.length === 0) {
+                setRecentSales([]);
+                setLoadingSales(false);
+                return;
+            }
+
+            // Check if store sales already have sale_items
+            const needsItems = sales.some(s => !Array.isArray(s.sale_items));
+            if (needsItems) {
+                saleItems = (await LocalDbService.getBy?.('sale_items', 'product_id', productId))
+                    || (await LocalDbService.getAll('sale_items')).filter(si => si.product_id === productId);
+            }
+
+            const clientMap = {};
+            for (let i = 0; i < (clients || []).length; i++) {
+                const c = clients[i];
+                clientMap[c.id] = c;
+            }
+
+            let matchingSaleIds;
+            if (saleItems) {
+                matchingSaleIds = new Set(
+                    saleItems.filter(si => si.product_id === productId).map(si => si.sale_id)
+                );
+            } else {
+                matchingSaleIds = new Set(
+                    (sales || []).filter(s => (s.sale_items || []).some(si => (si.product_id || si.id) === productId)).map(s => s.id)
+                );
+            }
 
             const matched = (sales || [])
                 .filter(s => matchingSaleIds.has(s.id))
@@ -102,7 +149,11 @@ export default function IncidentsScreen({ navigation }) {
 
         setSearching(true);
         try {
-            const localProds = (await LocalDbService.getAll('products')) || [];
+            const prodState = useProductStore.getState();
+            let localProds = prodState.products;
+            if (!prodState.isInitialized) {
+                localProds = (await LocalDbService.getAll('products')) || [];
+            }
             const low = query.toLowerCase();
             const res = localProds.filter(p => p.active && p.name?.toLowerCase().includes(low)).slice(0, 5);
             setSearchResults(res);
@@ -176,8 +227,9 @@ export default function IncidentsScreen({ navigation }) {
 
             // 3. Logic for Stock Restock
             if (type === 'devolucion_producto' && returnReason === 'no_gusto' && selectedProduct) {
-                const allProds = (await LocalDbService.getAll('products')) || [];
-                const p = allProds.find(prod => prod.id === selectedProduct.id);
+                const prodState = useProductStore.getState();
+                const p = prodState.products?.find(prod => prod.id === selectedProduct.id)
+                    || (await LocalDbService.getById?.('products', selectedProduct.id));
                 if (p) {
                     const newStockLocal = (p.stock_local || 0) + 1;
                     const updatedProduct = {
@@ -186,8 +238,8 @@ export default function IncidentsScreen({ navigation }) {
                         current_stock: newStockLocal + (p.stock_cordoba || 0)
                     };
                     await LocalDbService.saveItem('products', updatedProduct);
+                    useProductStore.getState().updateProductLocal(updatedProduct);
                     await SyncService.queueAction('products', updatedProduct, {}, 'UPDATE');
-                    useProductStore.getState().fetchProducts();
                 }
             }
 

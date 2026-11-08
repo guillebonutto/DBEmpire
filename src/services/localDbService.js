@@ -7,7 +7,7 @@ const TABLE_COLUMNS = {
     products: ['id', 'name', 'sale_price', 'cost_price', 'current_stock', 'stock_local',
                'category', 'barcode', 'image_url', 'active', 'description',
                'stock_cordoba', 'provider', 'is_individual', 'sale_price_cordoba', 'variants_json',
-               'internet_cost', 'electricity_cost', 'is_packaging'],
+               'internet_cost', 'electricity_cost', 'is_packaging', 'packaging_type', 'packaging_cost', 'packaging_sticker_cost'],
     sales: ['id', 'total_amount', 'profit_generated', 'commission_amount', 'client_id',
             'payment_method', 'status', 'created_at', 'seller_id', 'device_sig',
             'sale_location', 'is_leader_sale', 'notes', 'manual_discount_amount', 'paid_at'],
@@ -46,6 +46,21 @@ let _db = null;
 let _initPromise = null;
 let _queue = [];
 let _processing = false;
+let _writeLock = Promise.resolve();
+
+async function withWriteLock(operation) {
+    let release;
+    const previousWrite = _writeLock;
+    _writeLock = new Promise(resolve => {
+        release = resolve;
+    });
+    await previousWrite;
+    try {
+        return await operation();
+    } finally {
+        release();
+    }
+}
 
 async function processQueue() {
     if (_processing || _queue.length === 0) return;
@@ -54,40 +69,109 @@ async function processQueue() {
         const { tableName, items, replace, resolve, reject } = _queue.shift();
         try {
             if (!_db) throw new Error("Database not initialized");
-            await _db.withTransactionAsync(async () => {
+            await withWriteLock(() => _db.withTransactionAsync(async () => {
+                let pendingIds = new Set();
+                let pendingDeleteIds = new Set();
                 if (replace) {
                     // Check if there are any pending_sync items for this table
-                    let pendingIds = new Set();
                     try {
-                        const pendingRows = await _db.getAllAsync(`SELECT payload FROM pending_sync WHERE table_name = ?`, [tableName]);
+                        const pendingRows = await _db.getAllAsync(`SELECT action, payload FROM pending_sync WHERE table_name = ?`, [tableName]);
                         if (pendingRows) {
                             pendingRows.forEach(r => {
                                 try {
                                     const p = JSON.parse(r.payload);
-                                    if (p && p.id) pendingIds.add(p.id);
+                                    const id = p && (p.id !== undefined ? p.id : p);
+                                    if (id) {
+                                        pendingIds.add(id); pendingIds.add(String(id));
+                                        if (r.action === 'DELETE') {
+                                            pendingDeleteIds.add(id); pendingDeleteIds.add(String(id));
+                                        }
+                                    }
                                 } catch (_) {}
                             });
                         }
                     } catch (_) {}
 
-                    if (pendingIds.size === 0) {
+                    // SPECIAL RECONCILIATION FOR sale_items:
+                    // When replacing sale_items, pending offline sales in pending_sync (table_name = 'sales')
+                    // have local items stored in SQLite sale_items table that must NOT be wiped out.
+                    if (tableName === 'sale_items') {
+                        try {
+                            const pendingSales = await _db.getAllAsync(`SELECT payload, metadata FROM pending_sync WHERE table_name = 'sales'`);
+                            if (pendingSales && pendingSales.length > 0) {
+                                for (const ps of pendingSales) {
+                                    try {
+                                        const p = JSON.parse(ps.payload);
+                                        const m = JSON.parse(ps.metadata);
+                                        const saleId = p && p.id;
+                                        if (saleId) {
+                                            const localItems = await _db.getAllAsync(`SELECT id FROM sale_items WHERE sale_id = ?`, [saleId]);
+                                            if (localItems) {
+                                                localItems.forEach(li => {
+                                                    if (li && li.id) {
+                                                        pendingIds.add(li.id);
+                                                        pendingIds.add(String(li.id));
+                                                    }
+                                                });
+                                            }
+                                        }
+                                        if (m && m.items && Array.isArray(m.items)) {
+                                            m.items.forEach((it, idx) => {
+                                                if (it.item_id) { pendingIds.add(it.item_id); pendingIds.add(String(it.item_id)); }
+                                                if (it.id_sale_item) { pendingIds.add(it.id_sale_item); pendingIds.add(String(it.id_sale_item)); }
+                                                if (saleId) {
+                                                    const legacyId = `${saleId}_${it.id || idx}_${idx}`;
+                                                    pendingIds.add(legacyId);
+                                                }
+                                            });
+                                        }
+                                    } catch (_) {}
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
+                    const keepIds = Array.from(pendingIds).filter(id => !pendingDeleteIds.has(id));
+                    if (keepIds.length === 0) {
                         await _db.runAsync(`DELETE FROM ${tableName}`);
                     } else {
-                        const placeholders = Array.from(pendingIds).map(() => '?').join(',');
-                        await _db.runAsync(`DELETE FROM ${tableName} WHERE id NOT IN (${placeholders})`, Array.from(pendingIds));
+                        const placeholders = keepIds.map(() => '?').join(',');
+                        await _db.runAsync(`DELETE FROM ${tableName} WHERE id NOT IN (${placeholders})`, keepIds);
                     }
                 }
 
-                for (const item of items) {
-                    const clean = sanitizeRow(tableName, item);
-                    const keys = Object.keys(clean);
-                    if (keys.length === 0) continue;
-                    const placeholders = keys.map(() => '?').join(',');
-                    const columns = keys.join(',');
-                    const sql = `INSERT OR REPLACE INTO ${tableName} (${columns}) VALUES (${placeholders})`;
-                    await _db.runAsync(sql, Object.values(clean));
+                const preparedStatements = new Map();
+                try {
+                    for (const item of items) {
+                        if (replace && (pendingIds.has(item.id) || pendingIds.has(String(item.id)))) {
+                            continue;
+                        }
+                        const clean = sanitizeRow(tableName, item);
+                        const keys = Object.keys(clean);
+                        if (keys.length === 0) continue;
+                        const groupKey = keys.join(',');
+
+                        let statement = preparedStatements.get(groupKey);
+                        if (!statement) {
+                            const placeholders = keys.map(() => '?').join(',');
+                            const columns = keys.join(',');
+                            const sql = `INSERT OR REPLACE INTO ${tableName} (${columns}) VALUES (${placeholders})`;
+                            statement = await _db.prepareAsync(sql);
+                            preparedStatements.set(groupKey, statement);
+                        }
+
+                        await statement.executeAsync(Object.values(clean));
+                    }
+                } finally {
+                    for (const statement of preparedStatements.values()) {
+                        try {
+                            await statement.finalizeAsync();
+                        } catch (finalizeErr) {
+                            console.warn(`[LocalDb] Error finalizing statement for ${tableName}:`, finalizeErr);
+                        }
+                    }
                 }
-            });
+            }));
             console.log(`[LocalDb] Saved ${items.length} items to ${tableName} (replace: ${!!replace})`);
             resolve();
         } catch (e) {
@@ -113,6 +197,7 @@ async function init() {
     _initPromise = (async () => {
         try {
             const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+            await db.execAsync('PRAGMA busy_timeout = 5000;');
             
             // 🚀 SCHEMA MIGRATION: Fix sale_items id from INTEGER to TEXT
             const tableInfo = await db.getAllAsync("PRAGMA table_info(sale_items)");
@@ -135,7 +220,7 @@ async function init() {
                         if (!existingCols.has(col)) {
                             console.log(`[LocalDb] Migrating ${tableName}: adding ${col} column...`);
                             let colType = 'TEXT';
-                            if (col === 'total_amount' || col === 'profit_generated' || col === 'commission_amount' || col === 'sale_price' || col === 'cost_price' || col === 'amount' || col === 'total_cost' || col === 'subtotal' || col === 'unit_price_at_sale' || col === 'manual_discount_amount' || col === 'cost_per_unit' || col === 'internet_cost' || col === 'electricity_cost') {
+                            if (col === 'total_amount' || col === 'profit_generated' || col === 'commission_amount' || col === 'sale_price' || col === 'cost_price' || col === 'amount' || col === 'total_cost' || col === 'subtotal' || col === 'unit_price_at_sale' || col === 'manual_discount_amount' || col === 'cost_per_unit' || col === 'internet_cost' || col === 'electricity_cost' || col === 'packaging_cost' || col === 'packaging_sticker_cost') {
                                 colType = 'REAL';
                             } else if (col === 'current_stock' || col === 'stock_local' || col === 'stock_cordoba' || col === 'active' || col === 'is_individual' || col === 'is_leader_sale' || col === 'installments_total' || col === 'installments_paid' || col === 'completed' || col === 'quantity' || col === 'is_packaging') {
                                 colType = 'INTEGER';
@@ -152,7 +237,7 @@ async function init() {
 
             await db.execAsync(`
                 PRAGMA journal_mode = WAL;
-                CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, name TEXT, description TEXT, sale_price REAL, cost_price REAL, current_stock INTEGER, stock_local INTEGER, stock_cordoba INTEGER, category TEXT, barcode TEXT, image_url TEXT, active INTEGER DEFAULT 1, provider TEXT, is_individual INTEGER DEFAULT 0, sale_price_cordoba REAL, variants_json TEXT, internet_cost REAL, electricity_cost REAL, is_packaging INTEGER DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, name TEXT, description TEXT, sale_price REAL, cost_price REAL, current_stock INTEGER, stock_local INTEGER, stock_cordoba INTEGER, category TEXT, barcode TEXT, image_url TEXT, active INTEGER DEFAULT 1, provider TEXT, is_individual INTEGER DEFAULT 0, sale_price_cordoba REAL, variants_json TEXT, internet_cost REAL, electricity_cost REAL, is_packaging INTEGER DEFAULT 0, packaging_type TEXT DEFAULT 'general', packaging_cost REAL DEFAULT 65, packaging_sticker_cost REAL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS sales (id TEXT PRIMARY KEY, total_amount REAL, profit_generated REAL, commission_amount REAL, client_id TEXT, seller_id TEXT, payment_method TEXT, status TEXT, created_at TEXT, device_sig TEXT, sale_location TEXT, is_leader_sale INTEGER DEFAULT 0, notes TEXT, manual_discount_amount REAL DEFAULT 0, paid_at TEXT);
                 CREATE TABLE IF NOT EXISTS sale_items (id TEXT PRIMARY KEY, sale_id TEXT, product_id TEXT, quantity INTEGER, unit_price_at_sale REAL, subtotal REAL, color TEXT);
                 CREATE TABLE IF NOT EXISTS expenses (id TEXT PRIMARY KEY, amount REAL, description TEXT, category TEXT, created_at TEXT, details TEXT);
@@ -162,10 +247,18 @@ async function init() {
                 CREATE TABLE IF NOT EXISTS supplier_orders (id TEXT PRIMARY KEY, provider_name TEXT, total_amount REAL, total_cost REAL, status TEXT, created_at TEXT, notes TEXT, installments_total INTEGER DEFAULT 1, installments_paid INTEGER DEFAULT 0, discount REAL DEFAULT 0, received_at TEXT);
                 CREATE TABLE IF NOT EXISTS supplier_order_items (id TEXT PRIMARY KEY, supplier_order_id TEXT, product_id TEXT, quantity INTEGER, cost_per_unit REAL, color TEXT, temp_product_name TEXT);
                 CREATE TABLE IF NOT EXISTS pending_sync (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT, action TEXT, payload TEXT, metadata TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+                CREATE INDEX IF NOT EXISTS idx_pending_sync_table ON pending_sync(table_name);
                 CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT, notes TEXT, active INTEGER DEFAULT 1, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS reminders (id TEXT PRIMARY KEY, title TEXT, notes TEXT, due_date TEXT, completed INTEGER DEFAULT 0, notification_id TEXT);
                 CREATE TABLE IF NOT EXISTS promotions (id TEXT PRIMARY KEY, title TEXT, description TEXT, type TEXT, value REAL, min_qty INTEGER DEFAULT 1, active INTEGER DEFAULT 1, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS incidents (id TEXT PRIMARY KEY, type TEXT, description TEXT, amount REAL, created_at TEXT, details TEXT);
+                CREATE INDEX IF NOT EXISTS idx_sales_client ON sales(client_id);
+                CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);
+                CREATE INDEX IF NOT EXISTS idx_sales_created ON sales(created_at);
+                CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
+                CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);
+                CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
+                CREATE INDEX IF NOT EXISTS idx_supplier_order_items_order ON supplier_order_items(supplier_order_id);
             `);
             _db = db;
             await runSeeding(db);
@@ -237,13 +330,33 @@ export const LocalDbService = {
         const db = await init();
         return await db.getAllAsync(`SELECT * FROM ${tableName}`);
     },
+    getById: async (tableName, id) => {
+        if (!id) return null;
+        if (!TABLE_COLUMNS[tableName]) {
+            throw new Error(`[LocalDb] Table '${tableName}' is not recognized`);
+        }
+        const db = await init();
+        return await db.getFirstAsync(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
+    },
+    getBy: async (tableName, column, value) => {
+        if (value === undefined) return [];
+        const allowedCols = TABLE_COLUMNS[tableName];
+        if (!allowedCols) {
+            throw new Error(`[LocalDb] Table '${tableName}' is not recognized`);
+        }
+        if (!allowedCols.includes(column)) {
+            throw new Error(`[LocalDb] Column '${column}' is not allowed for table '${tableName}'`);
+        }
+        const db = await init();
+        return await db.getAllAsync(`SELECT * FROM ${tableName} WHERE ${column} = ?`, [value]);
+    },
     deleteItem: async (tableName, id) => {
         const db = await init();
-        await db.runAsync(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+        await withWriteLock(() => db.runAsync(`DELETE FROM ${tableName} WHERE id = ?`, [id]));
     },
     queueForSync: async (tableName, action, payload, metadata = {}) => {
         const db = await init();
-        await db.runAsync(`INSERT INTO pending_sync (table_name, action, payload, metadata) VALUES (?, ?, ?, ?)`, [tableName, action, JSON.stringify(payload), JSON.stringify(metadata)]);
+        await withWriteLock(() => db.runAsync(`INSERT INTO pending_sync (table_name, action, payload, metadata) VALUES (?, ?, ?, ?)`, [tableName, action, JSON.stringify(payload), JSON.stringify(metadata)]));
     },
     getPendingSyncs: async () => {
         const db = await init();
@@ -251,7 +364,7 @@ export const LocalDbService = {
     },
     removeSyncItem: async (id) => {
         const db = await init();
-        await db.runAsync(`DELETE FROM pending_sync WHERE id = ?`, [id]);
+        await withWriteLock(() => db.runAsync(`DELETE FROM pending_sync WHERE id = ?`, [id]));
     },
     getStats: async () => {
         const db = await init();
@@ -259,5 +372,70 @@ export const LocalDbService = {
         const s = await db.getFirstAsync('SELECT COUNT(*) as count FROM sales');
         const d = await db.getFirstAsync('SELECT COUNT(*) as count FROM supplier_orders');
         return { products: p?.count || 0, sales: s?.count || 0, debts: d?.count || 0 };
+    },
+    createOrderAtomic: async ({ sale, saleItems = [], updatedProducts = [], metadata = {} }) => {
+        const db = await init();
+        await withWriteLock(() => db.withTransactionAsync(async () => {
+            // 1. Insert/Replace sale
+            const cleanSale = sanitizeRow('sales', sale);
+            const saleKeys = Object.keys(cleanSale);
+            if (saleKeys.length > 0) {
+                const saleCols = saleKeys.join(',');
+                const salePlaceholders = saleKeys.map(() => '?').join(',');
+                await db.runAsync(`INSERT OR REPLACE INTO sales (${saleCols}) VALUES (${salePlaceholders})`, Object.values(cleanSale));
+            }
+
+            // 2. Insert/Replace sale_items
+            for (const item of saleItems) {
+                const cleanItem = sanitizeRow('sale_items', item);
+                const itemKeys = Object.keys(cleanItem);
+                if (itemKeys.length > 0) {
+                    const itemCols = itemKeys.join(',');
+                    const itemPlaceholders = itemKeys.map(() => '?').join(',');
+                    await db.runAsync(`INSERT OR REPLACE INTO sale_items (${itemCols}) VALUES (${itemPlaceholders})`, Object.values(cleanItem));
+                }
+            }
+
+            // 3. Update products with deducted stock
+            for (const prod of updatedProducts) {
+                const cleanProd = sanitizeRow('products', prod);
+                const prodKeys = Object.keys(cleanProd);
+                if (prodKeys.length > 0) {
+                    const prodCols = prodKeys.join(',');
+                    const prodPlaceholders = prodKeys.map(() => '?').join(',');
+                    await db.runAsync(`INSERT OR REPLACE INTO products (${prodCols}) VALUES (${prodPlaceholders})`, Object.values(cleanProd));
+                }
+            }
+
+            // 4. Queue for sync
+            await db.runAsync(
+                `INSERT INTO pending_sync (table_name, action, payload, metadata) VALUES (?, ?, ?, ?)`,
+                ['sales', 'INSERT', JSON.stringify(sale), JSON.stringify(metadata)]
+            );
+        }));
+    },
+    payDebtAtomic: async ({ saleId, status = 'completed', paidAt, notes }) => {
+        const db = await init();
+        await withWriteLock(() => db.withTransactionAsync(async () => {
+            const existing = await db.getFirstAsync('SELECT * FROM sales WHERE id = ?', [saleId]);
+            const updated = existing ? { ...existing } : { id: saleId };
+            updated.status = status;
+            if (paidAt) updated.paid_at = paidAt;
+            if (notes !== undefined) updated.notes = notes;
+
+            const cleanSale = sanitizeRow('sales', updated);
+            const keys = Object.keys(cleanSale);
+            if (keys.length > 0) {
+                const cols = keys.join(',');
+                const placeholders = keys.map(() => '?').join(',');
+                await db.runAsync(`INSERT OR REPLACE INTO sales (${cols}) VALUES (${placeholders})`, Object.values(cleanSale));
+            }
+
+            // Queue for sync atomically within the same SQLite transaction
+            await db.runAsync(
+                `INSERT INTO pending_sync (table_name, action, payload, metadata) VALUES (?, ?, ?, ?)`,
+                ['sales', 'UPDATE', JSON.stringify(cleanSale), JSON.stringify({})]
+            );
+        }));
     }
 };

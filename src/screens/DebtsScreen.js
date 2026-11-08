@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, Linking, ActivityIn
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { supabase } from '../services/supabase';
+import { LocalDbService } from '../services/localDbService';
+import { SyncService } from '../services/syncService';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import { useFinanceStore } from '../store/useFinanceStore';
@@ -13,11 +15,15 @@ export default function DebtsScreen({ navigation }) {
     const { clients } = useClientStore();
 
     const debts = useMemo(() => {
+        const clientMap = {};
+        for (let i = 0; i < clients.length; i++) {
+            clientMap[clients[i].id] = clients[i];
+        }
         return sales
             .filter(sale => sale.status === 'pending')
             .map(sale => ({
                 ...sale,
-                clients: clients.find(c => c.id === sale.client_id)
+                clients: clientMap[sale.client_id] || null
             }))
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     }, [sales, clients]);
@@ -37,12 +43,23 @@ export default function DebtsScreen({ navigation }) {
                 {
                     text: 'SÍ, PAGADO',
                     onPress: async () => {
-                        const { error } = await supabase
-                            .from('sales')
-                            .update({ status: 'completed', paid_at: new Date().toISOString() })
-                            .eq('id', saleId);
+                        try {
+                            const paidAt = new Date().toISOString();
+                            const existing = sales.find(s => s.id === saleId) || { id: saleId };
+                            const updatedSale = { ...existing, status: 'completed', paid_at: paidAt };
 
-                        if (!error) fetchAllData(true);
+                            // 1. ATOMIC: update SQLite sale and queue UPDATE in pending_sync inside a single transaction
+                            await LocalDbService.payDebtAtomic({ saleId, status: 'completed', paidAt });
+
+                            // 2. Synchronize Zustand in memory after SQLite transaction succeeds
+                            useFinanceStore.getState().updateSaleLocal(updatedSale);
+
+                            // 3. Silent background sync
+                            SyncService.syncPending().catch(e => console.log('Silent debt sync:', e.message));
+                        } catch (err) {
+                            console.error('Error paying debt:', err);
+                            Alert.alert('Error', 'No se pudo registrar el pago de la deuda.');
+                        }
                     }
                 }
             ]

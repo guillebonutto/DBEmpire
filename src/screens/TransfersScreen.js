@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator, StatusBar, ScrollView, TextInput, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator, StatusBar, ScrollView, TextInput, Modal, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,18 +22,52 @@ export default function TransfersScreen({ navigation }) {
         }, [])
     );
 
+    const cordobaProducts = useProductStore(state => state.products || []);
+    const cordobaStock = React.useMemo(() => {
+        return cordobaProducts.filter(p => (Number(p.stock_cordoba) || 0) > 0);
+    }, [cordobaProducts]);
+
     const fetchTransfers = async () => {
         setLoading(true);
         try {
-            const [sales, clients, saleItems, products] = await Promise.all([
-                LocalDbService.getAll('sales'),
-                LocalDbService.getAll('clients'),
-                LocalDbService.getAll('sale_items'),
-                LocalDbService.getAll('products')
-            ]);
+            const finState = useFinanceStore.getState();
+            const clientState = useClientStore.getState();
+            const prodState = useProductStore.getState();
 
-            const clientMap = (clients || []).reduce((acc, c) => ({ ...acc, [c.id]: c }), {});
-            const prodMap = (products || []).reduce((acc, p) => ({ ...acc, [p.id]: p }), {});
+            const isFinInit = finState.isInitialized;
+            const isClientInit = clientState.isInitialized;
+            const isProdInit = prodState.isInitialized;
+
+            let sales = finState.sales;
+            let clients = clientState.clients;
+            let products = prodState.products;
+            let saleItems = null;
+
+            // Only query SQLite if store has not been initialized yet
+            if (!isFinInit || !isClientInit || !isProdInit) {
+                const results = await Promise.all([
+                    !isFinInit ? LocalDbService.getAll('sales') : Promise.resolve(sales),
+                    !isClientInit ? LocalDbService.getAll('clients') : Promise.resolve(clients),
+                    LocalDbService.getAll('sale_items'),
+                    !isProdInit ? LocalDbService.getAll('products') : Promise.resolve(products)
+                ]);
+                sales = results[0] || [];
+                clients = results[1] || [];
+                saleItems = results[2] || [];
+                products = results[3] || [];
+            }
+
+            const clientMap = {};
+            for (let i = 0; i < (clients || []).length; i++) {
+                const c = clients[i];
+                clientMap[c.id] = c;
+            }
+
+            const prodMap = {};
+            for (let i = 0; i < (products || []).length; i++) {
+                const p = products[i];
+                prodMap[p.id] = p;
+            }
 
             // Filter transfers
             const transferSales = (sales || []).filter(s => {
@@ -43,12 +77,30 @@ export default function TransfersScreen({ navigation }) {
                 return isSocio || isTransferStatus;
             });
 
+            // If sale_items weren't loaded yet and sales don't have them preloaded
+            if (!saleItems && transferSales.length > 0 && transferSales.some(s => !Array.isArray(s.sale_items))) {
+                saleItems = await LocalDbService.getAll('sale_items');
+            }
+
+            // Group saleItems by sale_id in a single pass O(Items)
+            const itemsBySale = {};
+            if (saleItems) {
+                for (let i = 0; i < saleItems.length; i++) {
+                    const it = saleItems[i];
+                    if (!it || !it.sale_id) continue;
+                    if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
+                    itemsBySale[it.sale_id].push({
+                        ...it,
+                        products: prodMap[it.product_id] || { name: 'Producto' }
+                    });
+                }
+            }
+
             const enriched = transferSales.map(s => {
-                const items = (saleItems || []).filter(it => it.sale_id === s.id).map(it => ({
-                    ...it,
-                    products: prodMap[it.product_id] || { name: 'Producto' }
-                }));
-                return { ...s, sale_items: items };
+                if (Array.isArray(s.sale_items) && s.sale_items.length > 0) {
+                    return s;
+                }
+                return { ...s, sale_items: itemsBySale[s.id] || [] };
             });
 
             setTransfers(enriched);
@@ -57,6 +109,12 @@ export default function TransfersScreen({ navigation }) {
         } finally {
             setLoading(false);
         }
+    };
+
+    const getSaleById = async (saleId) => {
+        const fromMemory = useFinanceStore.getState().sales?.find(s => s.id === saleId);
+        if (fromMemory) return fromMemory;
+        return (await LocalDbService.getById?.('sales', saleId)) || { id: saleId };
     };
 
     const handleUpdateStatus = async (saleId, currentStatus) => {
@@ -81,21 +139,28 @@ export default function TransfersScreen({ navigation }) {
                     onPress: async () => {
                         setLoading(true);
                         try {
-                            const currentSale = (await LocalDbService.getAll('sales'))?.find(s => s.id === saleId) || { id: saleId };
+                            const currentSale = await getSaleById(saleId);
                             const updatedSale = { ...currentSale, status: nextStatus };
 
-                            // 1. Optimistic Sale Update
+                            // 1. Optimistic Sale Update in SQLite and Memory Store
                             await LocalDbService.saveItem('sales', updatedSale);
+                            useFinanceStore.getState().updateSaleLocal(updatedSale);
                             await SyncService.queueAction('sales', updatedSale, {}, 'UPDATE');
 
                             // 2. If received, add to Cordoba stock
                             if (nextStatus === 'transfer_completed') {
-                                const allItems = await LocalDbService.getAll('sale_items');
-                                const allProds = await LocalDbService.getAll('products');
-                                const items = (allItems || []).filter(i => i.sale_id === saleId);
+                                const transfer = transfers.find(t => t.id === saleId);
+                                let items = transfer?.sale_items;
+                                if (!items || items.length === 0) {
+                                    const fetched = (await LocalDbService.getBy?.('sale_items', 'sale_id', saleId))
+                                        || (await LocalDbService.getAll('sale_items')).filter(i => i.sale_id === saleId);
+                                    items = fetched || [];
+                                }
 
+                                const prodState = useProductStore.getState();
                                 for (const item of items) {
-                                    const p = (allProds || []).find(prod => prod.id === item.product_id);
+                                    const p = prodState.products?.find(prod => prod.id === item.product_id)
+                                        || (await LocalDbService.getById?.('products', item.product_id));
                                     if (p) {
                                         const newCordobaStock = (p.stock_cordoba || 0) + (parseInt(item.quantity) || 1);
                                         const updatedProd = {
@@ -104,10 +169,10 @@ export default function TransfersScreen({ navigation }) {
                                             current_stock: (p.stock_local || 0) + newCordobaStock
                                         };
                                         await LocalDbService.saveItem('products', updatedProd);
+                                        useProductStore.getState().updateProductLocal(updatedProd);
                                         await SyncService.queueAction('products', updatedProd, {}, 'UPDATE');
                                     }
                                 }
-                                useProductStore.getState().fetchProducts();
                             }
 
                             SyncService.syncPending().catch(e => console.log('Silent transfer sync:', e.message));
@@ -127,10 +192,11 @@ export default function TransfersScreen({ navigation }) {
 
     const handleUpdateTracking = async (saleId, trackingNumber) => {
         try {
-            const currentSale = (await LocalDbService.getAll('sales'))?.find(s => s.id === saleId) || { id: saleId };
+            const currentSale = await getSaleById(saleId);
             const updatedSale = { ...currentSale, tracking_number: trackingNumber };
 
             await LocalDbService.saveItem('sales', updatedSale);
+            useFinanceStore.getState().updateSaleLocal(updatedSale);
             await SyncService.queueAction('sales', updatedSale, {}, 'UPDATE');
             SyncService.syncPending().catch(e => console.log('Silent tracking sync:', e.message));
 
@@ -219,7 +285,7 @@ export default function TransfersScreen({ navigation }) {
             <View style={styles.stockSummaryContainer}>
                 <Text style={styles.summaryTitle}>STOCK ACTUAL EN CÓRDOBA:</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.summaryScroll}>
-                    {GlobalDataService.getProducts().filter(p => (p.stock_cordoba || 0) > 0).map(p => (
+                    {cordobaStock.map(p => (
                         <View key={p.id} style={styles.summaryCard}>
                             <Text style={styles.summaryName}>{p.name}</Text>
                             <Text style={styles.summaryQty}>{p.stock_cordoba} uni.</Text>
@@ -235,6 +301,10 @@ export default function TransfersScreen({ navigation }) {
                     data={transfers}
                     keyExtractor={item => item.id}
                     renderItem={renderTransferItem}
+                    initialNumToRender={8}
+                    maxToRenderPerBatch={8}
+                    windowSize={5}
+                    removeClippedSubviews={Platform.OS === 'android'}
                     contentContainerStyle={{ padding: 20, paddingBottom: 100 }}
                     ListEmptyComponent={
                         <View style={{ alignItems: 'center', marginTop: 100 }}>

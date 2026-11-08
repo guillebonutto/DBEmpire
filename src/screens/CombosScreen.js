@@ -24,6 +24,13 @@ export default function CombosScreen({ navigation }) {
     const [productSearch, setProductSearch] = useState('');
     const [showProductPicker, setShowProductPicker] = useState(false);
 
+    const filteredPickerProducts = React.useMemo(() => {
+        const list = products || [];
+        if (!productSearch) return list;
+        const low = productSearch.toLowerCase();
+        return list.filter(p => p.name?.toLowerCase().includes(low));
+    }, [products, productSearch]);
+
     // Initial default combos (saved once)
     const DEFAULT_COMBOS = [
         {
@@ -460,6 +467,10 @@ Devuelve estrictamente un objeto JSON con las siguientes claves:
                     data={combos}
                     keyExtractor={item => item.id}
                     renderItem={renderComboCard}
+                    initialNumToRender={5}
+                    maxToRenderPerBatch={5}
+                    windowSize={5}
+                    removeClippedSubviews={Platform.OS === 'android'}
                     contentContainerStyle={styles.listContainer}
                     refreshing={loading}
                     onRefresh={loadCombos}
@@ -595,8 +606,12 @@ Devuelve estrictamente un objeto JSON con las siguientes claves:
                         </View>
 
                         <FlatList
-                            data={products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))}
+                            data={filteredPickerProducts}
                             keyExtractor={item => item.id}
+                            initialNumToRender={10}
+                            maxToRenderPerBatch={10}
+                            windowSize={5}
+                            removeClippedSubviews={Platform.OS === 'android'}
                             renderItem={({ item }) => (
                                 <TouchableOpacity style={styles.pickerItem} onPress={() => handleSelectProduct(item)}>
                                     <Text style={styles.pickerItemName} numberOfLines={2}>{item.name}</Text>

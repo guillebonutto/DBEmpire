@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, ScrollView, StatusBar, Linking, Modal, TextInput, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, ScrollView, StatusBar, Linking, Modal, TextInput, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../services/supabase';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -23,34 +24,72 @@ export default function ClientDetailScreen({ route, navigation }) {
     });
     const [updating, setUpdating] = useState(false);
 
-    useEffect(() => {
-        fetchClientSales();
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            fetchClientSales();
+        }, [currentClient.id])
+    );
 
     const [expandedSale, setExpandedSale] = useState(null);
 
     const fetchClientSales = async () => {
         try {
-            // 1. Try memory store first
-            const allSales = useFinanceStore.getState().sales || [];
-            let clientSales = allSales.filter(s => s.client_id === currentClient.id);
+            const finState = useFinanceStore.getState();
 
-            if (clientSales.length === 0) {
-                const localSales = await LocalDbService.getAll('sales');
-                clientSales = (localSales || []).filter(s => s.client_id === currentClient.id);
+            // 1. Fast-path: If finance store is initialized, use in-memory sales directly
+            if (finState.isInitialized) {
+                const clientSales = (finState.sales || []).filter(s => s.client_id === currentClient.id);
+                // When store is hydrated, sale_items array is attached (even if 0 items)
+                const hasValidItemArrays = clientSales.every(s => Array.isArray(s.sale_items));
+                if (clientSales.length === 0 || hasValidItemArrays) {
+                    setSales(clientSales);
+                    return;
+                }
             }
 
-            // Get items for enriched display
-            const allItems = await LocalDbService.getAll('sale_items');
-            const allProducts = await LocalDbService.getAll('products');
-            const prodMap = (allProducts || []).reduce((acc, p) => ({ ...acc, [p.id]: p }), {});
+            // 2. Fallback: Initialize finance store if not yet initialized
+            let clientSales = [];
+            if (!finState.isInitialized) {
+                await useFinanceStore.getState().initStore();
+                const refreshedSales = useFinanceStore.getState().sales || [];
+                clientSales = refreshedSales.filter(s => s.client_id === currentClient.id);
+                if (clientSales.length === 0 || clientSales.every(s => Array.isArray(s.sale_items))) {
+                    setSales(clientSales);
+                    return;
+                }
+            } else {
+                clientSales = (finState.sales || []).filter(s => s.client_id === currentClient.id);
+            }
 
-            const enrichedSales = clientSales.map(s => {
-                const items = (allItems || []).filter(it => it.sale_id === s.id).map(it => ({
+            // If legitimately no sales for this client, return immediately without SQLite table scans
+            if (clientSales.length === 0) {
+                setSales([]);
+                return;
+            }
+
+            // 3. Enrich only if items are missing
+            const prodState = useProductStore.getState();
+            const [allItems, allProducts] = await Promise.all([
+                LocalDbService.getAll('sale_items'),
+                prodState.isInitialized ? Promise.resolve(prodState.products) : LocalDbService.getAll('products')
+            ]);
+            const prodMap = {};
+            (allProducts || []).forEach(p => { prodMap[p.id] = p; });
+
+            // Group items by sale_id in a single O(I) pass instead of O(S * I)
+            const itemsBySale = {};
+            (allItems || []).forEach(it => {
+                if (!it || !it.sale_id) return;
+                if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
+                itemsBySale[it.sale_id].push({
                     ...it,
                     products: prodMap[it.product_id] || { name: 'Producto' }
-                }));
-                return { ...s, sale_items: items };
+                });
+            });
+
+            const enrichedSales = clientSales.map(s => {
+                if (Array.isArray(s.sale_items) && s.sale_items.length > 0) return s;
+                return { ...s, sale_items: itemsBySale[s.id] || [] };
             });
 
             setSales(enrichedSales);
@@ -93,15 +132,25 @@ export default function ClientDetailScreen({ route, navigation }) {
         }
     };
 
-    const getVIPLabel = () => {
-        const spent = currentClient.totalSpent || 0;
-        if (spent > 5000) return { label: 'DIAMANTE', color: '#b9f2ff', icon: 'diamond-stone' };
-        if (spent > 2000) return { label: 'ORO', color: '#ffd700', icon: 'crown' };
-        if (spent > 500) return { label: 'PLATA', color: '#c0c0c0', icon: 'medal' };
-        return { label: 'BRONCE', color: '#cd7f32', icon: 'account' };
-    };
+    // Derive totalSpent dynamically: prefer client.totalSpent if passed, otherwise compute from completed sales
+    const totalSpent = React.useMemo(() => {
+        if (typeof currentClient.totalSpent === 'number' && !isNaN(currentClient.totalSpent)) {
+            return currentClient.totalSpent;
+        }
+        return (sales || []).reduce((acc, s) => {
+            if (s.status === 'completed' || !s.status) {
+                return acc + (Number(s.total_amount) || 0);
+            }
+            return acc;
+        }, 0);
+    }, [currentClient.totalSpent, sales]);
 
-    const vip = getVIPLabel();
+    const vip = React.useMemo(() => {
+        if (totalSpent > 5000) return { label: 'DIAMANTE', color: '#b9f2ff', icon: 'diamond-stone' };
+        if (totalSpent > 2000) return { label: 'ORO', color: '#ffd700', icon: 'crown' };
+        if (totalSpent > 500) return { label: 'PLATA', color: '#c0c0c0', icon: 'medal' };
+        return { label: 'BRONCE', color: '#cd7f32', icon: 'account' };
+    }, [totalSpent]);
 
     const renderSaleItem = ({ item }) => {
         const isExpanded = expandedSale === item.id;
@@ -181,7 +230,7 @@ export default function ClientDetailScreen({ route, navigation }) {
             <View style={styles.statsRow}>
                 <View style={styles.statBox}>
                     <Text style={styles.statLabel}>INVERSIÓN TOTAL</Text>
-                    <Text style={styles.statValue}>${currentClient.totalSpent?.toFixed(2)}</Text>
+                    <Text style={styles.statValue}>${totalSpent.toFixed(2)}</Text>
                 </View>
                 <View style={[styles.statBox, { borderLeftWidth: 1, borderLeftColor: '#222' }]}>
                     <Text style={styles.statLabel}>VISITAS</Text>
@@ -223,6 +272,10 @@ export default function ClientDetailScreen({ route, navigation }) {
                         data={sales}
                         keyExtractor={item => item.id.toString()}
                         renderItem={renderSaleItem}
+                        initialNumToRender={8}
+                        maxToRenderPerBatch={8}
+                        windowSize={5}
+                        removeClippedSubviews={Platform.OS === 'android'}
                         ListEmptyComponent={<Text style={styles.empty}>No hay compras registradas aún.</Text>}
                         contentContainerStyle={{ paddingBottom: 40 }}
                     />

@@ -5,6 +5,17 @@ jest.mock('react-native', () => ({
     Alert: { alert: jest.fn() },
 }));
 
+// Mock supabase
+jest.mock('../services/supabase', () => ({
+    supabase: {
+        from: jest.fn().mockReturnValue({
+            select: jest.fn().mockReturnValue({
+                order: jest.fn().mockResolvedValue({ data: null, error: new Error('offline') })
+            })
+        })
+    }
+}));
+
 // Mock syncService
 jest.mock('../services/syncService', () => ({
     SyncService: {

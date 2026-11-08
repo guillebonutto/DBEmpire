@@ -150,6 +150,10 @@ export default function SuppliersScreen({ navigation }) {
                 <FlatList
                     data={filteredSuppliers}
                     keyExtractor={(item) => item.id}
+                    initialNumToRender={10}
+                    maxToRenderPerBatch={10}
+                    windowSize={5}
+                    removeClippedSubviews={Platform.OS === 'android'}
                     contentContainerStyle={styles.listContent}
                     ListEmptyComponent={
                         <View style={styles.emptyContainer}>

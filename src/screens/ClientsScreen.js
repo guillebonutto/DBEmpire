@@ -13,8 +13,6 @@ export default function ClientsScreen({ navigation }) {
     const { clients: storeClients, fetchClients: fetchStoreClients, addClientLocally, initStore } = useClientStore();
     const { sales: storeSales, fetchAllData: fetchFinanceData } = useFinanceStore();
 
-    const [clients, setClients] = useState([]);
-    const [filteredClients, setFilteredClients] = useState([]);
     const [loading, setLoading] = useState(false);
     const [modalVisible, setModalVisible] = useState(false);
     const [newClient, setNewClient] = useState({ name: '', phone: '', notes: '' });
@@ -29,29 +27,8 @@ export default function ClientsScreen({ navigation }) {
             fetchStoreClients();
             fetchFinanceData();
 
-            const currentClients = useClientStore.getState().clients || [];
-            const sales = useFinanceStore.getState().sales || [];
-
-            // Group sales by client
-            const salesByClient = sales.reduce((acc, sale) => {
-                if (sale.client_id && (sale.status === 'completed' || !sale.status)) {
-                    acc[sale.client_id] = (acc[sale.client_id] || 0) + (sale.total_amount || 0);
-                }
-                return acc;
-            }, {});
-
-            const clientMap = currentClients.map(client => ({
-                ...client,
-                totalSpent: salesByClient[client.id] || 0
-            }));
-
-            // Sort by Total Spent (Ranking)
-            const sortedClients = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
-            setClients(sortedClients);
-            setFilteredClients(sortedClients);
-
-            // CRM Inactive
-            CRMService.getInactiveClients(30).then(inactive => {
+            // CRM Inactive (fast path: using in-memory store data)
+            CRMService.getInactiveClients(30, storeClients, storeSales).then(inactive => {
                 if (inactive) setInactiveClients(inactive.slice(0, 5));
             });
         } catch (err) {
@@ -61,25 +38,34 @@ export default function ClientsScreen({ navigation }) {
         }
     }, [initStore, fetchStoreClients, fetchFinanceData]);
 
-    useEffect(() => {
-        // When storeClients changes, re-rank
+    // Compute ranked clients with useMemo (O(N) aggregation, zero cascading renders)
+    const rankedClients = React.useMemo(() => {
         const sales = storeSales || [];
-        const salesByClient = sales.reduce((acc, sale) => {
+        const salesByClient = {};
+        for (let i = 0; i < sales.length; i++) {
+            const sale = sales[i];
             if (sale.client_id && (sale.status === 'completed' || !sale.status)) {
-                acc[sale.client_id] = (acc[sale.client_id] || 0) + (sale.total_amount || 0);
+                salesByClient[sale.client_id] = (salesByClient[sale.client_id] || 0) + (sale.total_amount || 0);
             }
-            return acc;
-        }, {});
+        }
 
-        const clientMap = (storeClients || []).map(client => ({
+        const list = (storeClients || []).map(client => ({
             ...client,
             totalSpent: salesByClient[client.id] || 0
         }));
 
-        const sorted = clientMap.sort((a, b) => b.totalSpent - a.totalSpent);
-        setClients(sorted);
-        setFilteredClients(sorted);
+        return list.sort((a, b) => b.totalSpent - a.totalSpent);
     }, [storeClients, storeSales]);
+
+    // Filter logic derived directly with useMemo
+    const filteredClients = React.useMemo(() => {
+        if (!searchQuery.trim()) return rankedClients;
+        const lowQuery = searchQuery.toLowerCase();
+        return rankedClients.filter(c =>
+            (c.name && c.name.toLowerCase().includes(lowQuery)) ||
+            (c.phone && c.phone.includes(searchQuery))
+        );
+    }, [searchQuery, rankedClients]);
 
     const handleRecoverClient = async (client) => {
         setGeneratingMsg(client.id);
@@ -142,19 +128,6 @@ export default function ClientsScreen({ navigation }) {
             loadClientsData();
         }, [loadClientsData])
     );
-
-    // Filter logic
-    useEffect(() => {
-        if (searchQuery) {
-            const filtered = clients.filter(c =>
-                c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                (c.phone && c.phone.includes(searchQuery))
-            );
-            setFilteredClients(filtered);
-        } else {
-            setFilteredClients(clients);
-        }
-    }, [searchQuery, clients]);
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>

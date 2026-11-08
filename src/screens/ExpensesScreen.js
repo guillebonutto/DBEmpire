@@ -291,6 +291,10 @@ export default function ExpensesScreen({ navigation }) {
                         data={expenses}
                         keyExtractor={item => item.id}
                         renderItem={renderExpenseItem}
+                        initialNumToRender={10}
+                        maxToRenderPerBatch={10}
+                        windowSize={5}
+                        removeClippedSubviews={true}
                         contentContainerStyle={styles.listContent}
                         ListEmptyComponent={
                             <View style={styles.emptyBox}>
@@ -307,6 +311,10 @@ export default function ExpensesScreen({ navigation }) {
                         data={orders}
                         keyExtractor={item => item.id}
                         renderItem={renderOrderItem}
+                        initialNumToRender={10}
+                        maxToRenderPerBatch={10}
+                        windowSize={5}
+                        removeClippedSubviews={true}
                         contentContainerStyle={styles.listContent}
                         ListEmptyComponent={
                             <View style={styles.emptyBox}>

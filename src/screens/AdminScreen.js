@@ -96,6 +96,7 @@ export default function AdminScreen({ navigation }) {
     };
 
     const { sales, expenses, supplierOrders, saleItems, settings, isLoading: storeLoading, fetchAllData } = useFinanceStore();
+    const hasHandledInitialFocus = useRef(false);
 
     // ── Keep a ref copy of filter state so processLocalData can read them sync ─
     const dateFilterRef = useRef('month');
@@ -128,7 +129,11 @@ export default function AdminScreen({ navigation }) {
 
     useFocusEffect(
         useCallback(() => {
-            fetchAllData(true); // Force refresh from cloud/local on focus
+            if (!hasHandledInitialFocus.current) {
+                hasHandledInitialFocus.current = true;
+                return;
+            }
+            fetchAllData();
             useProductStore.getState().fetchProducts();
             fetchAIPerformance();
         }, [])
@@ -473,7 +478,8 @@ export default function AdminScreen({ navigation }) {
         })).sort((a, b) => b.total - a.total));
 
         // ── Products ───────────────────────────────────────────────────────────
-        const currentSaleItems = saleItems.filter(item => finalSales.some(s => s.id === item.sale_id));
+        const finalSaleIdSet = new Set(finalSales.map(s => s.id));
+        const currentSaleItems = saleItems.filter(item => finalSaleIdSet.has(item.sale_id));
         if (currentSaleItems.length > 0) {
             const productMap = {};
             currentSaleItems.forEach(item => {

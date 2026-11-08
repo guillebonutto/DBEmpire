@@ -141,6 +141,57 @@ describe('useProductStore', () => {
             expect(p2.variants).toEqual([]); // Parsed from string
         });
         
+        it('should correctly reconcile multiple repeated lines of the same product with distinct variants in pending sales', async () => {
+            NetInfo.fetch.mockResolvedValue({ isConnected: true });
+            const mockSupabaseData = [
+                {
+                    id: 'prod_multi',
+                    name: 'Campera Bomber',
+                    stock_local: 20,
+                    stock_cordoba: 0,
+                    variants: [
+                        { color: 'negro', stock: '5' },
+                        { color: 'blanco', stock: '5' }
+                    ]
+                }
+            ];
+
+            const supabaseMock = {
+                select: jest.fn().mockReturnThis(),
+                eq: jest.fn().mockReturnThis(),
+                order: jest.fn().mockResolvedValue({ data: mockSupabaseData, error: null })
+            };
+            supabase.from.mockReturnValue(supabaseMock);
+
+            const mockPendingSyncs = [
+                {
+                    table_name: 'sales',
+                    action: 'INSERT',
+                    payload: JSON.stringify({ sale_location: 'local' }),
+                    metadata: JSON.stringify({
+                        items: [
+                            { product_id: 'prod_multi', qty: 2, color: 'negro' },
+                            { product_id: 'prod_multi', qty: 3, color: 'blanco' }
+                        ]
+                    })
+                }
+            ];
+            LocalDbService.getPendingSyncs.mockResolvedValue(mockPendingSyncs);
+
+            await act(async () => {
+                await useProductStore.getState().fetchProducts(true);
+            });
+
+            const state = useProductStore.getState();
+            const prod = state.products.find(p => p.id === 'prod_multi');
+            expect(prod).toBeDefined();
+            // Total deduction: 2 (negro) + 3 (blanco) = 5
+            expect(prod.stock_local).toBe(15);
+            expect(prod.current_stock).toBe(15);
+            expect(prod.variants.find(v => v.color === 'negro').stock).toBe('3');
+            expect(prod.variants.find(v => v.color === 'blanco').stock).toBe('2');
+        });
+
         it('should handle supabase error', async () => {
             NetInfo.fetch.mockResolvedValue({ isConnected: true });
             

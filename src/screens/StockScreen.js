@@ -177,7 +177,7 @@ export default function StockScreen({ navigation, route }) {
             setScreenReady(true);
             
             InteractionManager.runAfterInteractions(() => {
-                doFetchProducts(true); 
+                doFetchProducts();
             });
         }, [])
     );
@@ -402,13 +402,7 @@ export default function StockScreen({ navigation, route }) {
         );
     }, [searchQuery, storeProducts]);
 
-    useFocusEffect(
-        useCallback(() => {
-            if (screenReady) {
-                fetchProducts(true); // Keep data fresh silently
-            }
-        }, [showHiddenStock, screenReady, fetchProducts])
-    );
+
 
     // Dummy Skeleton for instant feedback
     const renderSkeleton = () => (
@@ -737,9 +731,9 @@ export default function StockScreen({ navigation, route }) {
                     extraData={storeProducts}
                     keyExtractor={(item) => item.id}
                     renderItem={renderProductItem}
-                    initialNumToRender={1}
-                    maxToRenderPerBatch={2}
-                    windowSize={3}
+                    initialNumToRender={10}
+                    maxToRenderPerBatch={10}
+                    windowSize={5}
                     removeClippedSubviews={true}
                     contentContainerStyle={styles.listContent}
                     alwaysBounceVertical={false}

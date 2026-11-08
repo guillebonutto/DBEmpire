@@ -539,7 +539,7 @@ export default function HomeScreen({ navigation }) {
         navigation.navigate('NewSale', { barcode: data });
     };
 
-    const getStats = () => {
+    const stats = React.useMemo(() => {
         // Get date in YYYY-MM-DD format using local time (Argentina GMT-3)
         const now = new Date();
         const offset = now.getTimezoneOffset() * 60000;
@@ -608,9 +608,7 @@ export default function HomeScreen({ navigation }) {
             profitChange,
             commissionChange
         };
-    };
-
-    const stats = getStats();
+    }, [sales]);
     const formatCurrency = (val) => `$${Math.abs(val || 0).toLocaleString('es-AR', { maximumFractionDigits: 0 })}`;
 
     if (isScanning) {

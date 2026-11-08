@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../services/supabase';
 import { LocalDbService } from '../services/localDbService';
 import NetInfo from '@react-native-community/netinfo';
+import { GlobalDataService } from '../services/GlobalDataService';
 
 export const useProductStore = create((set, get) => ({
     products: [],
@@ -9,8 +10,8 @@ export const useProductStore = create((set, get) => ({
     isInitialized: false,
     lastFetch: null,
 
-    initStore: async () => {
-        if (get().isInitialized) return;
+    initStore: async (forceRefresh = false) => {
+        if (get().isInitialized && !forceRefresh) return;
         try {
             const local = await LocalDbService.getAll('products');
             const parsedLocal = (local || []).map(prod => {
@@ -43,6 +44,9 @@ export const useProductStore = create((set, get) => ({
         if (!get().isInitialized) {
             await get().initStore();
         }
+        // During startup, products are already being downloaded once by the
+        // global sync. Keep navigation responsive instead of duplicating it.
+        if (GlobalDataService.isPreloading()) return;
 
         const netInfo = await NetInfo.fetch();
         if (!netInfo.isConnected) return;
@@ -91,9 +95,9 @@ export const useProductStore = create((set, get) => ({
                         }
 
                         if (metadata.items && Array.isArray(metadata.items)) {
-                            const matchedItem = metadata.items.find(item => item.id === prod.id);
-                            if (matchedItem) {
-                                const qty = parseInt(matchedItem.qty) || 0;
+                            const matchingItems = metadata.items.filter(item => (item.product_id || item.id) === prod.id);
+                            for (const matchedItem of matchingItems) {
+                                const qty = parseInt(matchedItem.qty || matchedItem.quantity) || 0;
                                 const saleLocation = payload.sale_location || 'local';
                                 
                                 // Decrement stock for the location
@@ -104,8 +108,9 @@ export const useProductStore = create((set, get) => ({
                                 }
 
                                 // Decrement stock for variant color
-                                if (matchedItem.color && Array.isArray(variants)) {
-                                    const cleanColor = matchedItem.color.trim().toLowerCase();
+                                const colorVal = matchedItem.color || matchedItem.selectedColor;
+                                if (colorVal && Array.isArray(variants)) {
+                                    const cleanColor = colorVal.trim().toLowerCase();
                                     const vIdx = variants.findIndex(v => v.color?.trim().toLowerCase() === cleanColor);
                                     if (vIdx >= 0) {
                                         const currentVarStock = parseInt(variants[vIdx].stock) || 0;
@@ -192,4 +197,7 @@ export const useProductStore = create((set, get) => ({
             products: state.products.map(p => p.id === productId ? updatedProduct : p)
         }));
     },
+    updateProductLocal: (updatedProduct) => set((state) => ({
+        products: state.products.map(p => p.id === updatedProduct.id ? { ...p, ...updatedProduct } : p)
+    })),
 }));

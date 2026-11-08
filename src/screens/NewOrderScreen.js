@@ -1,28 +1,39 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, ActivityIndicator, StatusBar, TextInput } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '../services/supabase';
-import { SyncService } from '../services/syncService';
+import NetInfo from '@react-native-community/netinfo';
+import { SyncService, getStableItemId } from '../services/syncService';
+import { LocalDbService } from '../services/localDbService';
 import { useProductStore } from '../store/useProductStore';
+import { useClientStore } from '../store/useClientStore';
+import { useFinanceStore } from '../store/useFinanceStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
 export default function NewOrderScreen({ navigation }) {
+    const storeProducts = useProductStore(state => state.products);
+    const storeClients = useClientStore(state => state.clients);
+
+    const activeProducts = useMemo(() => {
+        return (storeProducts || []).filter(p => p.active !== false && p.active !== 0);
+    }, [storeProducts]);
+
     const [cart, setCart] = useState([]);
-    const [products, setProducts] = useState([]);
-    const [clients, setClients] = useState([]);
     const [currentUserRole, setCurrentUserRole] = useState('seller');
 
     // Modals
     const [productModalVisible, setProductModalVisible] = useState(false);
     const [clientModalVisible, setClientModalVisible] = useState(false);
 
-    // New Client Form State
-    const [showNewClientForm, setShowNewClientForm] = useState(false);
-    const [newClientName, setNewClientName] = useState('');
-    const [newClientPhone, setNewClientPhone] = useState('');
+    // Client Search & Inline Create State
     const [searchQuery, setSearchQuery] = useState('');
     const [clientError, setClientError] = useState(false);
     const [creatingClient, setCreatingClient] = useState(false);
@@ -37,6 +48,9 @@ export default function NewOrderScreen({ navigation }) {
     const [expandedProductId, setExpandedProductId] = useState(null);
     const [tempQty, setTempQty] = useState(1);
 
+    // Prevent duplicate concurrent submissions
+    const isSubmittingRef = useRef(false);
+
     useEffect(() => {
         AsyncStorage.getItem('user_role').then(role => {
             if (role) setCurrentUserRole(role);
@@ -47,15 +61,29 @@ export default function NewOrderScreen({ navigation }) {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const productsReq = supabase.from('products').select('*').eq('active', true).order('name');
-            const clientsReq = supabase.from('clients').select('*').order('created_at', { ascending: false });
+            const productStore = useProductStore.getState();
+            const clientStore = useClientStore.getState();
 
-            const [productsRes, clientsRes] = await Promise.all([productsReq, clientsReq]);
+            // 1. Ensure local SQLite hydration
+            const inits = [];
+            if (!productStore.isInitialized) inits.push(productStore.initStore());
+            if (!clientStore.isInitialized) inits.push(clientStore.initStore());
+            if (inits.length > 0) {
+                await Promise.all(inits);
+            }
 
-            if (productsRes.data) setProducts(productsRes.data);
-            if (clientsRes.data) setClients(clientsRes.data || []);
-        } catch (e) { 
-            console.log(e); 
+            // 2. If online, perform background sync without blocking UI
+            const netInfo = await NetInfo.fetch();
+            if (netInfo.isConnected) {
+                Promise.all([
+                    productStore.fetchProducts(true),
+                    clientStore.fetchClients(true)
+                ]).catch(err => {
+                    console.log('[NewOrder] Background refresh error:', err?.message);
+                });
+            }
+        } catch (e) {
+            console.log('[NewOrder] fetchData error:', e?.message);
         } finally {
             setLoading(false);
         }
@@ -69,12 +97,20 @@ export default function NewOrderScreen({ navigation }) {
         setProductModalVisible(true);
     };
 
-    // Calculate dynamic availability
-    const getAvailableStock = (item) => {
-        const inCartItems = cart.filter(c => c.id === item.id);
-        const inCartQty = inCartItems.reduce((acc, curr) => acc + curr.qty, 0);
+    // Precalculate cart quantities map for O(1) stock availability lookup
+    const cartQuantities = useMemo(() => {
+        const map = new Map();
+        for (let i = 0; i < cart.length; i++) {
+            const id = cart[i].id;
+            map.set(id, (map.get(id) || 0) + (cart[i].qty || 0));
+        }
+        return map;
+    }, [cart]);
+
+    const getAvailableStock = useCallback((item) => {
+        const inCartQty = cartQuantities.get(item.id) || 0;
         return (item.current_stock || 0) - inCartQty;
-    };
+    }, [cartQuantities]);
 
     const initiateProductSelection = (item) => {
         const available = getAvailableStock(item);
@@ -106,7 +142,7 @@ export default function NewOrderScreen({ navigation }) {
         }
 
         const uniqueCartId = `${product.id}-${selectedColor || 'none'}`;
-        
+
         setCart(prev => {
             const existing = prev.find(item => item.cartId === uniqueCartId);
             if (existing) {
@@ -120,22 +156,21 @@ export default function NewOrderScreen({ navigation }) {
     };
 
     const removeFromCart = (cartId) => {
-        setCart(prev => prev.filter(item => item.cartId !== cartId));
+        setCart(prev => prev.filter(item => (item.cartId || item.id) !== cartId));
     };
 
-    const calculateTotals = () => {
-        let total = 0;
-        let totalProfit = 0;
-        cart.forEach(item => {
-            const itemTotal = item.sale_price * item.qty;
-            const itemCost = item.cost_price * item.qty;
-            total += itemTotal;
-            totalProfit += (itemTotal - itemCost);
-        });
-        return { total, totalProfit };
-    };
-
-    const { total, totalProfit } = calculateTotals();
+    const { total, totalProfit } = useMemo(() => {
+        let t = 0;
+        let p = 0;
+        for (let i = 0; i < cart.length; i++) {
+            const item = cart[i];
+            const itemTotal = (item.sale_price || 0) * item.qty;
+            const itemCost = (item.cost_price || 0) * item.qty;
+            t += itemTotal;
+            p += (itemTotal - itemCost);
+        }
+        return { total: t, totalProfit: p };
+    }, [cart]);
 
     const handleCheckout = () => {
         if (cart.length === 0) return;
@@ -155,23 +190,28 @@ export default function NewOrderScreen({ navigation }) {
     };
 
     const createClientInline = async (name) => {
+        const trimmed = (name || '').trim();
+        if (!trimmed) return;
         setCreatingClient(true);
         try {
-            const { data, error } = await supabase
-                .from('clients')
-                .insert([{
-                    name: name.trim(),
-                    phone: '',
-                    status: 'active'
-                }])
-                .select()
-                .single();
+            const newClient = {
+                id: generateUUID(),
+                name: trimmed,
+                phone: '',
+                status: 'active',
+                created_at: new Date().toISOString()
+            };
 
-            if (error) throw error;
+            // 1. Optimistic SQLite and Store update
+            await useClientStore.getState().addClientLocally(newClient);
 
-            setClients(prev => [data, ...prev]);
-            setSelectedClient(data);
+            // 2. Queue for background remote sync
+            await SyncService.queueAction('client', newClient, {}, 'INSERT');
+
+            // 3. Select newly created client and close modal
+            setSelectedClient(newClient);
             setSearchQuery('');
+            setClientModalVisible(false);
         } catch (error) {
             console.log('Error creating client inline:', error);
             Alert.alert('Error', 'No se pudo crear el cliente.');
@@ -180,50 +220,143 @@ export default function NewOrderScreen({ navigation }) {
         }
     };
 
-    const filteredClients = searchQuery.length > 0
-        ? clients.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
-        : [];
+    const filteredClients = useMemo(() => {
+        if (!searchQuery) return storeClients || [];
+        const q = searchQuery.toLowerCase();
+        return (storeClients || []).filter(c => (c.name || '').toLowerCase().includes(q));
+    }, [searchQuery, storeClients]);
 
     const processOrder = async (client) => {
+        if (isSubmittingRef.current) return;
+        isSubmittingRef.current = true;
         setLoading(true);
+
         try {
-            const { data: profiles } = await supabase.from('profiles').select('id').eq('role', currentUserRole).limit(1);
-            let sellerId = profiles && profiles.length > 0 ? profiles[0].id : null;
-            if (!sellerId) {
-                const { data: allProfiles } = await supabase.from('profiles').select('id').limit(1);
-                if (allProfiles && allProfiles.length > 0) sellerId = allProfiles[0].id;
+            // 1. Business rules & dependency checks
+            if (!client || !client.id) {
+                Alert.alert('Error', 'Seleccione un cliente válido.');
+                return;
+            }
+            if (!cart || cart.length === 0) {
+                Alert.alert('Error', 'El carrito está vacío.');
+                return;
             }
 
-            // Insert Sale with PENDING status
-            const saleId = 'local-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            const currentProducts = useProductStore.getState().products;
+            for (const item of cart) {
+                const prod = currentProducts.find(p => p.id === item.id);
+                if (!prod) {
+                    Alert.alert('Error', `Producto no disponible: ${item.name || item.id}`);
+                    return;
+                }
+                const available = prod.current_stock || 0;
+                if (item.qty > available) {
+                    Alert.alert('Stock Insuficiente', `Stock insuficiente para ${prod.name}. Disponible: ${available}, solicitado: ${item.qty}`);
+                    return;
+                }
+                if (item.selectedColor && prod.variants && Array.isArray(prod.variants)) {
+                    const cleanColor = item.selectedColor.trim().toLowerCase();
+                    const v = prod.variants.find(v => v.color?.trim().toLowerCase() === cleanColor);
+                    if (v && parseInt(v.stock) < item.qty) {
+                        Alert.alert('Stock Insuficiente', `No hay suficiente stock del color ${item.selectedColor} para ${prod.name}.`);
+                        return;
+                    }
+                }
+            }
+
+            // 2. Seller ID from local session cache
+            let sellerId = await AsyncStorage.getItem('user_id');
+            if (!sellerId) sellerId = await AsyncStorage.getItem('profile_id');
+            if (!sellerId) sellerId = '00000000-0000-0000-0000-000000000000';
+
+            // 3. Stable UUID v4 for the sale
+            const saleId = generateUUID();
             const salePayload = {
                 id: saleId,
                 seller_id: sellerId,
-                client_id: client ? client.id : null,
+                client_id: client.id,
                 total_amount: total,
                 profit_generated: totalProfit,
                 commission_amount: 0,
                 status: 'pending',
-                tracking_number: trackingNumber || null,
+                payment_method: 'Efectivo',
+                sale_location: 'local',
+                notes: trackingNumber ? `Tracking: ${trackingNumber}` : null,
                 created_at: new Date().toISOString()
             };
 
-            await SyncService.queueSale(salePayload, cart);
-
-            // Update Stock (Reserve it)
-            const { products } = useProductStore.getState();
+            // 4. Calculate updated products for stock deduction (handles repeated product lines and color variants)
+            const productDeductionMap = new Map();
             for (const item of cart) {
-                const prod = products.find(p => p.id === item.id);
-                if (prod) {
-                    const newStock = Math.max(0, (prod.current_stock || 0) - item.qty);
-                    const newLocStock = Math.max(0, (prod.stock_local || 0) - item.qty);
-                    await SyncService.queueAction('product', { 
-                        id: item.id, 
-                        current_stock: newStock,
-                        stock_local: newLocStock
-                    }, {}, 'UPDATE');
+                let prod = productDeductionMap.get(item.id);
+                if (!prod) {
+                    const found = currentProducts.find(p => p.id === item.id);
+                    if (!found) continue;
+                    prod = JSON.parse(JSON.stringify(found));
+                    productDeductionMap.set(item.id, prod);
+                }
+
+                const qty = parseInt(item.qty) || 0;
+                const currentLoc = parseInt(prod.stock_local) || 0;
+                prod.stock_local = Math.max(0, currentLoc - qty);
+                prod.current_stock = (parseInt(prod.stock_local) || 0) + (parseInt(prod.stock_cordoba) || 0);
+
+                if (item.selectedColor && prod.variants) {
+                    let variants = Array.isArray(prod.variants)
+                        ? prod.variants
+                        : (typeof prod.variants === 'string' ? JSON.parse(prod.variants) : []);
+                    const cleanColor = item.selectedColor.trim().toLowerCase();
+                    const vIdx = variants.findIndex(v => v.color?.trim().toLowerCase() === cleanColor);
+                    if (vIdx >= 0) {
+                        const currentVarStock = parseInt(variants[vIdx].stock) || 0;
+                        variants[vIdx].stock = Math.max(0, currentVarStock - qty).toString();
+                        prod.variants = variants;
+                    }
                 }
             }
+            const updatedProductsList = Array.from(productDeductionMap.values());
+
+            // 5. Build optimistic items with stable deterministic UUIDs for in-memory Finance Store and SQLite
+            const optimisticSaleItems = cart.map((item, idx) => {
+                const stableId = getStableItemId(saleId, item, idx);
+                return {
+                    id: stableId,
+                    sale_id: saleId,
+                    product_id: item.id,
+                    quantity: item.qty,
+                    unit_price_at_sale: item.sale_price || 0,
+                    subtotal: (item.sale_price || 0) * item.qty,
+                    color: item.selectedColor || null,
+                    products: { name: item.name }
+                };
+            });
+
+            // 6. ATOMIC WRITE: Write sale, sale_items, product stock updates and pending_sync in a SINGLE SQLite transaction
+            await LocalDbService.createOrderAtomic({
+                sale: salePayload,
+                saleItems: optimisticSaleItems,
+                updatedProducts: updatedProductsList,
+                metadata: {
+                    items: cart.map((item, idx) => ({
+                        ...item,
+                        item_id: getStableItemId(saleId, item, idx)
+                    }))
+                }
+            });
+
+            // 7. Synchronize Zustand in-memory state ONLY AFTER successful SQLite transaction
+            useProductStore.setState(state => ({
+                products: state.products.map(p => productDeductionMap.get(p.id) || p)
+            }));
+
+            useFinanceStore.getState().addSaleLocal({
+                ...salePayload,
+                clients: { name: client.name },
+                sale_items: optimisticSaleItems
+            }, optimisticSaleItems);
+
+            // 8. Silent background sync attempt
+            SyncService.syncPending().catch(e => console.log('[NewOrder] Silent sync error:', e?.message));
 
             Alert.alert(
                 '✅ Pedido Creado',
@@ -241,6 +374,7 @@ export default function NewOrderScreen({ navigation }) {
             console.log('Order Error:', error);
             Alert.alert('Error', 'No se pudo crear el pedido.');
         } finally {
+            isSubmittingRef.current = false;
             setLoading(false);
         }
     };
@@ -307,7 +441,7 @@ export default function NewOrderScreen({ navigation }) {
 
             <FlatList
                 data={cart}
-                keyExtractor={item => item.id}
+                keyExtractor={item => item.cartId || item.id}
                 contentContainerStyle={{ padding: 15, paddingBottom: 100 }}
                 renderItem={({ item }) => (
                     <View style={styles.cartItem}>
@@ -323,7 +457,7 @@ export default function NewOrderScreen({ navigation }) {
                             </View>
                         </View>
                         <Text style={styles.itemTotal}>${(item.sale_price * item.qty).toFixed(2)}</Text>
-                        <TouchableOpacity onPress={() => removeFromCart(item.id)} style={styles.removeBtn}>
+                        <TouchableOpacity onPress={() => removeFromCart(item.cartId || item.id)} style={styles.removeBtn}>
                             <MaterialCommunityIcons name="delete-outline" size={24} color="#e74c3c" />
                         </TouchableOpacity>
                     </View>
@@ -360,12 +494,10 @@ export default function NewOrderScreen({ navigation }) {
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>Agregar al Pedido</Text>
                     <FlatList
-                        data={products}
+                        data={activeProducts}
                         keyExtractor={item => item.id}
                         renderItem={({ item }) => {
-                            const inCartItem = cart.find(c => c.id === item.id);
-                            const inCartQty = inCartItem ? inCartItem.qty : 0;
-                            const available = (item.current_stock || 0) - inCartQty;
+                            const available = getAvailableStock(item);
                             const isExpanded = expandedProductId === item.id;
 
                             return (
@@ -441,12 +573,11 @@ export default function NewOrderScreen({ navigation }) {
                 </View>
             </Modal>
 
-            {/* CLIENT MODAL (Reused logic) */}
+            {/* CLIENT MODAL */}
             <Modal visible={clientModalVisible} animationType="slide" presentationStyle="pageSheet">
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>Cliente del Pedido</Text>
 
-                    {/* Simplified Search in Modal */}
                     <TextInput
                         style={styles.input}
                         placeholder="Buscar cliente..."
@@ -456,13 +587,21 @@ export default function NewOrderScreen({ navigation }) {
                     />
 
                     {searchQuery.length > 0 && filteredClients.length === 0 && (
-                        <TouchableOpacity style={styles.createOption} onPress={() => createClientInline(searchQuery)}>
-                            <Text style={styles.createText}>Crear "{searchQuery}"</Text>
+                        <TouchableOpacity
+                            style={styles.createOption}
+                            onPress={() => createClientInline(searchQuery)}
+                            disabled={creatingClient}
+                        >
+                            {creatingClient ? (
+                                <ActivityIndicator color="#000" />
+                            ) : (
+                                <Text style={styles.createText}>Crear "{searchQuery}"</Text>
+                            )}
                         </TouchableOpacity>
                     )}
 
                     <FlatList
-                        data={searchQuery ? filteredClients : clients}
+                        data={filteredClients}
                         keyExtractor={item => item.id}
                         renderItem={({ item }) => (
                             <TouchableOpacity style={styles.productRow} onPress={() => {

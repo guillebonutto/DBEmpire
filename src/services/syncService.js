@@ -2,6 +2,39 @@ import { supabase } from './supabase';
 import NetInfo from '@react-native-community/netinfo';
 import { LocalDbService } from './localDbService';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const deterministicUUID = (str) => {
+    let hex = '';
+    for (let i = 0; i < 4; i++) {
+        let v = 0;
+        for (let j = 0; j < str.length; j++) {
+            v = ((v << 5) - v + str.charCodeAt((j + i * 7) % str.length) + (i * 31)) | 0;
+        }
+        hex += (v >>> 0).toString(16).padStart(8, '0');
+    }
+    const part1 = hex.substring(0, 8);
+    const part2 = hex.substring(8, 12);
+    const part3 = '4' + hex.substring(13, 16);
+    const part4 = ((parseInt(hex.substring(16, 17), 16) & 0x3) | 0x8).toString(16) + hex.substring(17, 20);
+    const part5 = hex.substring(20, 32);
+    return `${part1}-${part2}-${part3}-${part4}-${part5}`;
+};
+
+export function getStableItemId(saleId, item, idx) {
+    const explicitId = item.item_id || item.id_sale_item || item.sale_item_id;
+    if (explicitId && typeof explicitId === 'string' && UUID_REGEX.test(explicitId)) {
+        return explicitId;
+    }
+    if (item.id && typeof item.id === 'string' && UUID_REGEX.test(item.id)) {
+        // If product_id is specified and distinct from item.id, item.id is the sale_item id
+        if (item.product_id && item.product_id !== item.id) {
+            return item.id;
+        }
+    }
+    return deterministicUUID(`${saleId}_item_${idx}`);
+}
+
 export const SyncService = {
     _isSyncing: false,
 
@@ -27,7 +60,7 @@ export const SyncService = {
                 'supplier_order_item': 'supplier_order_items',
                 'street_test_result': 'street_test_results'
             };
-            
+
             const tableName = tableMap[type] || type;
 
             // 1. Save locally for immediate UI consistency (Optimistic)
@@ -37,9 +70,12 @@ export const SyncService = {
                 } else {
                     await LocalDbService.saveItem(tableName, payload);
                     if (type === 'sale' && metadata.items && action === 'INSERT') {
-                        // Save items locally too if they exist
-                        for (const item of metadata.items) {
+                        // Save items locally too if they exist with valid primary key
+                        for (let idx = 0; idx < metadata.items.length; idx++) {
+                            const item = metadata.items[idx];
+                            const itemId = item.item_id || item.id_sale_item || `${payload.id}_${item.id || idx}_${idx}`;
                             await LocalDbService.saveItem('sale_items', {
+                                id: itemId,
                                 sale_id: payload.id,
                                 product_id: item.id,
                                 quantity: item.qty,
@@ -54,12 +90,15 @@ export const SyncService = {
 
             // 2. Queue for remote sync
             await LocalDbService.queueForSync(tableName, action, payload, metadata);
-            
+
             console.log(`[SyncService] Queued ${type} ${action} action in SQLite.`);
-            
-            // 3. Try to sync immediately
-            SyncService.syncPending();
-            
+
+            // 3. Try to sync immediately. The queue remains durable if the
+            // connectivity check itself fails, so don't leave an unhandled rejection.
+            SyncService.syncPending().catch(syncError => {
+                console.warn('[SyncService] Immediate sync deferred:', syncError?.message);
+            });
+
             return payload.id;
         } catch (err) {
             console.error('[SyncService] Failed to queue action:', err);
@@ -77,7 +116,7 @@ export const SyncService = {
         const state = await NetInfo.fetch();
         if (!state.isConnected) return;
         if (SyncService._isSyncing) return;
-        
+
         SyncService._isSyncing = true;
 
         try {
@@ -93,22 +132,17 @@ export const SyncService = {
                 try {
                     const payload = JSON.parse(item.payload);
                     const metadata = JSON.parse(item.metadata);
-                    
-                    // --- AUTO-FIX INVALID IDS ---
-                    // If the payload has a non-UUID ID (e.g. legacy 'rem_...' or 'local-...'),
-                    // Supabase will reject it as a UUID. We replace it with a valid UUID v4 on the fly.
-                    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-                    if (payload && payload.id && typeof payload.id === 'string' && !uuidRegex.test(payload.id)) {
-                        const generateUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-                            const r = Math.random() * 16 | 0;
-                            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-                        });
+
+                    // --- AUTO-FIX INVALID IDS (INSERT ONLY) ---
+                    // If an INSERT payload has a non-UUID ID (e.g. legacy 'rem_...' or 'local-...'),
+                    // Supabase will reject it as a UUID. We replace it with a deterministic valid UUID v4
+                    // so that subsequent retries maintain stable IDs and do not duplicate rows.
+                    // For UPDATE or DELETE, mutating the ID would target a nonexistent remote row.
+                    if (item.action === 'INSERT' && payload && payload.id && typeof payload.id === 'string' && !UUID_REGEX.test(payload.id)) {
                         const oldId = payload.id;
-                        const newId = generateUUID();
+                        const newId = deterministicUUID(oldId);
                         payload.id = newId;
                         console.log(`[SyncService] Auto-fixing invalid ID ${oldId} -> ${newId}`);
-                        
-                        // If it's a sale, we might need to fix it in metadata too, though usually processed in _processSaleSync
                     }
 
                     let success = false;
@@ -144,85 +178,54 @@ export const SyncService = {
     },
 
     _processSaleSync: async (payload, metadata) => {
-        // Remove payment_method since it only exists in local SQLite, not in Supabase schema
+        // Remove payment_method and joined relation fields not in Supabase schema
         const cleanPayload = { ...payload };
         delete cleanPayload.payment_method;
+        delete cleanPayload.clients;
+        delete cleanPayload.profiles;
+        delete cleanPayload.sale_items;
 
-        // Insert sale
-        const { data: saleData, error: saleError } = await supabase
-            .from('sales')
-            .insert(cleanPayload)
-            .select()
-            .single();
-
-        if (saleError) throw saleError;
-
-        // Insert items
-        if (metadata.items && metadata.items.length > 0) {
-            const items = metadata.items.map(item => ({
-                sale_id: saleData.id,
-                product_id: item.id,
-                quantity: item.qty,
-                unit_price_at_sale: item.sale_price || item.unit_price || 0,
-                subtotal: (item.sale_price || item.unit_price || 0) * item.qty,
-                color: item.color || item.selectedColor || null
-            }));
-
-            const { error: itemsError } = await supabase.from('sale_items').insert(items);
-            if (itemsError) throw itemsError;
-
-            // --- ROBUST REMOTE STOCK DEDUCTION ---
-            for (const item of metadata.items) {
-                // Fetch fresh product data from Supabase
-                const { data: prod, error: fetchErr } = await supabase
-                    .from('products')
-                    .select('stock_local, stock_cordoba, current_stock, variants')
-                    .eq('id', item.id)
-                    .single();
-                
-                if (!fetchErr && prod) {
-                    const updatePayload = {};
-                    const qty = parseInt(item.qty) || 0;
-
-                    // 1. Location based deduction
-                    if (payload.sale_location === 'cordoba') {
-                        updatePayload.stock_cordoba = Math.max(0, (prod.stock_cordoba || 0) - qty);
-                        updatePayload.stock_local = prod.stock_local || 0;
-                    } else {
-                        updatePayload.stock_local = Math.max(0, (prod.stock_local || 0) - qty);
-                        updatePayload.stock_cordoba = prod.stock_cordoba || 0;
-                    }
-
-                    // Recalculate total
-                    updatePayload.current_stock = updatePayload.stock_local + updatePayload.stock_cordoba;
-
-                    // 2. Variants deduction
-                    if (item.color && prod.variants) {
-                        let variants = [];
-                        try {
-                            variants = Array.isArray(prod.variants)
-                                ? prod.variants
-                                : (typeof prod.variants === 'string' ? JSON.parse(prod.variants) : []);
-                        } catch (e) {
-                            console.log('Error parsing prod.variants in syncService:', e);
-                        }
-
-                        if (Array.isArray(variants)) {
-                            const cleanColor = item.color.trim().toLowerCase();
-                            const vIdx = variants.findIndex(v => v.color?.trim().toLowerCase() === cleanColor);
-                            if (vIdx >= 0) {
-                                const currentVarStock = parseInt(variants[vIdx].stock) || 0;
-                                variants[vIdx].stock = Math.max(0, currentVarStock - qty).toString();
-                                updatePayload.variants = variants;
-                            }
-                        }
-                    }
-
-                    // Perform update in Supabase
-                    await supabase.from('products').update(updatePayload).eq('id', item.id);
-                }
-            }
+        // Prepare line items with stable, deterministic UUIDs for idempotency
+        let preparedItems = [];
+        if (metadata && Array.isArray(metadata.items) && metadata.items.length > 0) {
+            preparedItems = metadata.items.map((item, idx) => {
+                const stableId = getStableItemId(cleanPayload.id, item, idx);
+                return {
+                    id: String(stableId),
+                    sale_id: String(cleanPayload.id),
+                    product_id: String(item.product_id || item.id),
+                    quantity: parseInt(item.qty || item.quantity) || 1,
+                    unit_price_at_sale: Number(item.sale_price || item.unit_price || 0),
+                    subtotal: Number(item.sale_price || item.unit_price || 0) * (parseInt(item.qty || item.quantity) || 1),
+                    color: item.color || item.selectedColor || null
+                };
+            });
         }
+
+        // Call transactional atomic RPC in Supabase
+        const { data, error } = await supabase.rpc('process_sale_atomic', {
+            p_sale: cleanPayload,
+            p_items: preparedItems,
+            p_location: cleanPayload.sale_location || 'local',
+            p_allow_oversell: false
+        });
+
+        if (error) {
+            const errorMsg = error.message || error.code || 'RPC process_sale_atomic failed';
+            console.error("[SyncService] RPC process_sale_atomic failed for sale " + cleanPayload.id + ":", errorMsg);
+            const err = new Error(errorMsg);
+            err.code = error.code;
+            err.details = error;
+            err.isRpcError = true;
+            throw err;
+        }
+
+        if (!data || !data.success) {
+            const errorMsg = [data?.error, data?.message].filter(Boolean).join(': ') || 'Unknown error in process_sale_atomic';
+            console.error(`[SyncService] Transaction rejected in process_sale_atomic for sale ${cleanPayload.id}:`, errorMsg);
+            throw new Error(`RPC_TRANSACTION_FAILED: ${errorMsg}`);
+        }
+
         return true;
     },
 
@@ -259,6 +262,12 @@ export const SyncService = {
         const { id, ...updateData } = payload;
         if (tableName === 'supplier_orders') {
             delete updateData.total_amount;
+        }
+        if (tableName === 'sales') {
+            delete updateData.clients;
+            delete updateData.profiles;
+            delete updateData.sale_items;
+            delete updateData.payment_method;
         }
         if (tableName === 'products') {
             delete updateData.variants_json;

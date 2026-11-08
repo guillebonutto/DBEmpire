@@ -3,14 +3,15 @@ import { supabase } from '../services/supabase';
 import { LocalDbService } from '../services/localDbService';
 import { NotificationService } from '../services/notificationService';
 import { SyncService } from '../services/syncService';
+import { GlobalDataService } from '../services/GlobalDataService';
 
 export const useReminderStore = create((set, get) => ({
     reminders: [],
     loadingReminders: false,
     isInitialized: false,
 
-    initStore: async () => {
-        if (get().isInitialized) return;
+    initStore: async (forceRefresh = false) => {
+        if (get().isInitialized && !forceRefresh) return;
         set({ loadingReminders: true });
         try {
             const cached = await LocalDbService.getAll('reminders');
@@ -19,8 +20,6 @@ export const useReminderStore = create((set, get) => ({
                 const sorted = cached.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
                 set({ reminders: sorted, isInitialized: true });
             }
-            // Trigger fresh background fetch from Supabase
-            get().fetchReminders().catch(() => {});
         } catch (err) {
             console.error('[ReminderStore] Init error:', err);
         } finally {
@@ -29,6 +28,7 @@ export const useReminderStore = create((set, get) => ({
     },
 
     fetchReminders: async () => {
+        if (GlobalDataService.isPreloading()) return;
         set({ loadingReminders: true });
         try {
             // 1. Fetch fresh data from Supabase
