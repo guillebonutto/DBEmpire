@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, Switch } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, Switch, useWindowDimensions, Modal, ScrollView } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -153,8 +153,21 @@ export const IdentitySection = ({
  * SECCIÓN: PRECIO (lo más importante)
  * Costo, Margen, Precios por ciudad + Indicador de rentabilidad
  */
-export const PriceSection = ({ productId, formData, handleChange, pendingPurchases, onShowPPPModal, queueItem }) => {
+export const PriceSection = ({
+    productId,
+    formData,
+    handleChange,
+    pendingPurchases,
+    onShowPPPModal,
+    queueItem,
+    calculatorVisible = true,
+    onCloseCalculator = () => {},
+}) => {
     const costPrice = parseFloat(formData.cost_price) || 0;
+    const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+    const isNarrowCalculator = screenWidth < 800;
+    const isCompactLandscape = screenWidth >= 1000 && screenHeight <= 800;
+    const calcGridItemStyle = isCompactLandscape ? styles.calcColItemGridCompact : styles.calcColItemGrid;
 
     // Calcular margen e indicador por ciudad (INDEPENDIENTES)
     const jujuyPrice = parseFloat(formData.sale_price) || 0;
@@ -201,9 +214,6 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
     const [electricityJujuy, setElectricityJujuy] = useState('5000');
     const [internetJujuy, setInternetJujuy] = useState('3000');
     const [unitsMonthlyJujuy, setUnitsMonthlyJujuy] = useState('50');
-    const [electricityCordoba, setElectricityCordoba] = useState('5000');
-    const [internetCordoba, setInternetCordoba] = useState('3000');
-    const [unitsMonthlyCordoba, setUnitsMonthlyCordoba] = useState('50');
     // Transporte y packaging
     const [transportCordoba, setTransportCordoba] = useState('0');
     const [packagingCostGeneral, setPackagingCostGeneral] = useState('65');
@@ -236,9 +246,6 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                     if (config.electricityJujuy) setElectricityJujuy(config.electricityJujuy);
                     if (config.internetJujuy) setInternetJujuy(config.internetJujuy);
                     if (config.unitsMonthlyJujuy) setUnitsMonthlyJujuy(config.unitsMonthlyJujuy);
-                    if (config.electricityCordoba) setElectricityCordoba(config.electricityCordoba);
-                    if (config.internetCordoba) setInternetCordoba(config.internetCordoba);
-                    if (config.unitsMonthlyCordoba) setUnitsMonthlyCordoba(config.unitsMonthlyCordoba);
                     if (config.transportCordoba) setTransportCordoba(config.transportCordoba);
                 }
 
@@ -273,9 +280,6 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                 electricityJujuy,
                 internetJujuy,
                 unitsMonthlyJujuy,
-                electricityCordoba,
-                internetCordoba,
-                unitsMonthlyCordoba,
                 transportCordoba,
                 ...updatedFields
             };
@@ -331,9 +335,8 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
 
         // Servicios propios por ubicación (Jujuy usa sus servicios, Córdoba los suyos)
         const unitsJ = parseFloat(unitsMonthlyJujuy) || 1;
-        const unitsC = parseFloat(unitsMonthlyCordoba) || 1;
         const serviciosJujuy = ((parseFloat(electricityJujuy) || 0) + (parseFloat(internetJujuy) || 0)) / unitsJ;
-        const serviciosCordoba = ((parseFloat(electricityCordoba) || 0) + (parseFloat(internetCordoba) || 0)) / unitsC;
+        const serviciosCordoba = 2800;
         const transport = parseFloat(transportCordoba) || 0;
 
         const margin = parseFloat(suggestedMargin) || 50;
@@ -559,15 +562,44 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                 </View>
             </View>
 
+            <Modal
+                visible={calculatorVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={onCloseCalculator}
+            >
+                <View style={styles.calculatorModalOverlay}>
+                    <View style={[
+                        styles.calculatorModalCard,
+                        { width: screenWidth >= 900 ? '94%' : '100%' },
+                    ]}>
+                        <View style={styles.calculatorModalHeader}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <MaterialCommunityIcons name="calculator-variant" size={18} color="#d4af37" />
+                                <Text style={styles.calculatorModalTitle}>CALCULADORA DE PRECIOS</Text>
+                            </View>
+                            <TouchableOpacity
+                                style={styles.calculatorModalClose}
+                                onPress={onCloseCalculator}
+                                accessibilityLabel="Cerrar calculadora de precios"
+                            >
+                                <MaterialCommunityIcons name="close" size={20} color="#fff" />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView
+                            style={styles.calculatorModalScroll}
+                            contentContainerStyle={styles.calculatorModalScrollContent}
+                            keyboardShouldPersistTaps="handled"
+                        >
             {/* CÁLCULOS DEL PRODUCTO (UNIFICADO) */}
             <View style={styles.calcHeroCard}>
                 {/* Encabezado con selector de perspectiva y botón de configuración */}
-                <View style={styles.calcRoleHeader}>
+                <View style={[styles.calcRoleHeader, isNarrowCalculator && styles.calcRoleHeaderNarrow]}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                         <MaterialCommunityIcons name="calculator-variant" size={16} color="#d4af37" />
                         <Text style={styles.calcRoleTitle}>CÁLCULOS DEL PRODUCTO</Text>
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <View style={[styles.calcRoleActions, isNarrowCalculator && styles.calcRoleActionsNarrow]}>
                         <View style={styles.roleToggleGroup}>
                             <TouchableOpacity
                                 style={[styles.rolePill, selectedRoleView === 'admin' && styles.rolePillActiveAdmin]}
@@ -601,11 +633,18 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                 </View>
 
                 {/* Fila con Columna izquierda de cálculos y Columna derecha Margen Bruto */}
-                <View style={styles.calcColumnsRow}>
+                <View style={[
+                    styles.calcColumnsRow,
+                    isNarrowCalculator && styles.calcColumnsNarrow,
+                    isCompactLandscape && styles.calcColumnsCompact,
+                ]}>
                     {/* COLUMNA IZQUIERDA: Cálculos acomodados en columna */}
-                    <View style={styles.calcLeftCol}>
+                    <View style={[
+                        styles.calcLeftCol,
+                        (isNarrowCalculator || isCompactLandscape) && styles.calcLeftColGrid,
+                    ]}>
                         {/* 1. Precio Base */}
-                        <View style={styles.calcColItem}>
+                        <View style={[styles.calcColItem, (isNarrowCalculator || isCompactLandscape) && calcGridItemStyle]}>
                             <Text style={styles.calcColItemLabel}>PRECIO BASE</Text>
                             <Text style={styles.calcColItemValue}>
                                 ${precioBase.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -614,7 +653,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         </View>
 
                         {/* 2. Gastos Necesarios (Luz, Transporte, etc.) */}
-                        <View style={styles.calcColItem}>
+                        <View style={[styles.calcColItem, (isNarrowCalculator || isCompactLandscape) && calcGridItemStyle]}>
                             <Text style={styles.calcColItemLabel}>MANO DE OBRA</Text>
                             <Text style={[styles.calcColItemValue, { color: '#e8924f' }]}>
                                 ${calculated.laborCost.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -624,7 +663,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                             </Text>
                         </View>
 
-                        <View style={styles.calcColItem}>
+                        <View style={[styles.calcColItem, (isNarrowCalculator || isCompactLandscape) && calcGridItemStyle]}>
                             <Text style={styles.calcColItemLabel}>GASTOS NECESARIOS</Text>
                             <Text style={[styles.calcColItemValue, { color: selectedRoleView === 'admin' ? '#7fb3d3' : '#e8924f' }]}>
                                 ${(calculated.laborCost + calculated.packagingCost + gastosOpActivo).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -642,7 +681,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         </View>
 
                         {/* 3. Margen de Ganancia (%) que escribe el usuario */}
-                        <View style={styles.calcColItem}>
+                        <View style={[styles.calcColItem, (isNarrowCalculator || isCompactLandscape) && calcGridItemStyle]}>
                             <Text style={styles.calcColItemLabel}>MARGEN DE GANANCIA (%)</Text>
                             <View style={styles.marginInputRow}>
                                 <TextInput
@@ -659,7 +698,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         </View>
 
                         {/* 4. Precio c/ todo sumado (con margen de ganancia incluido) */}
-                        <View style={[styles.calcColItem, { borderLeftColor: '#f39c12' }]}>
+                        <View style={[styles.calcColItem, (isNarrowCalculator || isCompactLandscape) && calcGridItemStyle, { borderLeftColor: '#f39c12' }]}>
                             <Text style={styles.calcColItemLabel}>PRECIO C/ TODO SUMADO</Text>
                             <Text style={[styles.calcColItemValue, { color: '#f39c12', fontSize: 15 }]}>
                                 ${precioTodoSumadoActivo.toLocaleString('es-AR')}
@@ -670,7 +709,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         </View>
 
                         {/* 5. Precio con comisión, added after costs and product margin */}
-                        <View style={[styles.calcColItem, { borderLeftColor: '#d4af37', backgroundColor: '#18150a' }]}>
+                        <View style={[styles.calcColItem, (isNarrowCalculator || isCompactLandscape) && calcGridItemStyle, { borderLeftColor: '#d4af37', backgroundColor: '#18150a' }]}>
                             <Text style={[styles.calcColItemLabel, { color: '#d4af37' }]}>
                                 PRECIO CON COMISIÓN
                             </Text>
@@ -694,10 +733,14 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                     </View>
 
                     {/* Divisor vertical */}
-                    <View style={styles.calcVerticalDivider} />
+                    <View style={[styles.calcVerticalDivider, isCompactLandscape && styles.calcVerticalDividerCompact]} />
 
                     {/* COLUMNA DERECHA: Más en grande y más en el medio el cálculo de margen bruto */}
-                    <View style={styles.calcRightCol}>
+                    <View style={[
+                        styles.calcRightCol,
+                        isNarrowCalculator && styles.calcRightColNarrow,
+                        isCompactLandscape && styles.calcRightColCompact,
+                    ]}>
                         <View style={styles.margenHeaderRow}>
                             <MaterialCommunityIcons name="chart-line-variant" size={14} color="#2ecc71" />
                             <Text style={styles.margenTitle}>MARGEN BRUTO</Text>
@@ -816,7 +859,7 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         </View>
 
                         <View style={[styles.breakdownRow, { marginTop: 6, borderTopWidth: 1, borderTopColor: '#5a301022', paddingTop: 6 }]}>
-                            <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>🟠 Servicios Córdoba (Luz + Net):</Text>
+                            <Text style={[styles.breakdownLabel, { color: '#e8924f' }]}>🟠 Servicios Córdoba (fijo por producto):</Text>
                             <Text style={[styles.breakdownValue, { color: '#e8924f' }]}>${calculated.serviciosCordoba.toFixed(2)}</Text>
                         </View>
                         {calculated.transportCost > 0 && (
@@ -1002,23 +1045,11 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                         {activeConfigTab === 'cordoba' && (
                             <View style={{ gap: 10 }}>
                                 <Text style={{ fontSize: 11, color: '#e8924f', marginBottom: 4 }}>
-                                    Los gastos se prorratean dividiendo por las unidades estimadas/mes.
+                                    Los servicios de Córdoba se suman como un costo fijo de $2.800 por producto.
                                 </Text>
-                                <View style={styles.configFieldRow}>
-                                    <Text style={styles.configLabel}>💡 Electricidad Córdoba ($/mes):</Text>
-                                    <TextInput style={styles.configInput} value={electricityCordoba} onChangeText={(val) => handleUpdateField('electricityCordoba', val, setElectricityCordoba)} keyboardType="numeric" />
-                                </View>
-                                <View style={styles.configFieldRow}>
-                                    <Text style={styles.configLabel}>🌐 Internet Córdoba ($/mes):</Text>
-                                    <TextInput style={styles.configInput} value={internetCordoba} onChangeText={(val) => handleUpdateField('internetCordoba', val, setInternetCordoba)} keyboardType="numeric" />
-                                </View>
-                                <View style={styles.configFieldRow}>
-                                    <Text style={styles.configLabel}>📦 Unidades vendidas/mes (est.):</Text>
-                                    <TextInput style={styles.configInput} value={unitsMonthlyCordoba} onChangeText={(val) => handleUpdateField('unitsMonthlyCordoba', val, setUnitsMonthlyCordoba)} keyboardType="numeric" />
-                                </View>
                                 <View style={{ backgroundColor: '#1a0f00', borderRadius: 8, padding: 8 }}>
                                     <Text style={{ fontSize: 12, color: '#e8924f' }}>
-                                        Servicios/unidad: ${(((parseFloat(electricityCordoba) || 0) + (parseFloat(internetCordoba) || 0)) / (parseFloat(unitsMonthlyCordoba) || 1)).toFixed(2)}
+                                        Servicios fijos por producto: $2.800,00
                                     </Text>
                                 </View>
                             </View>
@@ -1117,6 +1148,10 @@ export const PriceSection = ({ productId, formData, handleChange, pendingPurchas
                     </View>
                 )}
             </View>
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -1328,7 +1363,7 @@ export const OperativeSection = ({
                                 styles.packagingPillText,
                                 activePackaging === 'none' && styles.packagingPillTextActiveNone
                             ]}
-                        >
+>
                             Sin Bolsita
                         </Text>
                     </TouchableOpacity>
@@ -2145,6 +2180,53 @@ const styles = StyleSheet.create({
         paddingVertical: 2,
         borderRadius: 4,
     },
+    calculatorModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.82)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 12,
+    },
+    calculatorModalCard: {
+        maxWidth: 1360,
+        maxHeight: '94%',
+        flexShrink: 1,
+        overflow: 'hidden',
+        backgroundColor: '#080808',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#d4af3766',
+    },
+    calculatorModalHeader: {
+        minHeight: 52,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 14,
+        borderBottomWidth: 1,
+        borderBottomColor: '#252525',
+    },
+    calculatorModalTitle: {
+        color: '#d4af37',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 0.8,
+    },
+    calculatorModalClose: {
+        width: 34,
+        height: 34,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 17,
+        backgroundColor: '#1b1b1b',
+    },
+    calculatorModalScroll: {
+        flexShrink: 1,
+    },
+    calculatorModalScrollContent: {
+        padding: 8,
+        paddingBottom: 16,
+    },
     // === CÁLCULOS ADICIONALES (COLUMNA + MARGEN BRUTO) ===
     calcHeroCard: {
         backgroundColor: '#0c0c0c',
@@ -2163,6 +2245,19 @@ const styles = StyleSheet.create({
         marginBottom: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#1e1e1e',
+    },
+    calcRoleHeaderNarrow: {
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 8,
+    },
+    calcRoleActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    calcRoleActionsNarrow: {
+        justifyContent: 'space-between',
     },
     calcRoleTitle: {
         color: '#d4af37',
@@ -2211,10 +2306,21 @@ const styles = StyleSheet.create({
         gap: 10,
         alignItems: 'stretch',
     },
+    calcColumnsNarrow: {
+        flexDirection: 'column',
+    },
+    calcColumnsCompact: {
+        flexDirection: 'column',
+    },
     calcLeftCol: {
         flex: 1.15,
         justifyContent: 'space-between',
         gap: 8,
+    },
+    calcLeftColGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
     },
     calcColItem: {
         backgroundColor: '#141414',
@@ -2222,6 +2328,16 @@ const styles = StyleSheet.create({
         padding: 8,
         borderLeftWidth: 3,
         borderLeftColor: '#d4af37',
+    },
+    calcColItemGrid: {
+        flexBasis: '47%',
+        flexGrow: 1,
+        minWidth: 0,
+    },
+    calcColItemGridCompact: {
+        flexBasis: '31%',
+        flexGrow: 1,
+        minWidth: 180,
     },
     calcColItemLabel: {
         color: '#888',
@@ -2287,6 +2403,11 @@ const styles = StyleSheet.create({
         backgroundColor: '#1e1e1e',
         marginVertical: 2,
     },
+    calcVerticalDividerCompact: {
+        width: '100%',
+        height: 1,
+        marginVertical: 0,
+    },
     calcRightCol: {
         flex: 1,
         backgroundColor: '#121212',
@@ -2296,6 +2417,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 1,
         borderColor: '#222',
+    },
+    calcRightColNarrow: {
+        flex: 0,
+        paddingVertical: 16,
+    },
+    calcRightColCompact: {
+        flex: 0,
+        paddingVertical: 12,
     },
     margenHeaderRow: {
         flexDirection: 'row',

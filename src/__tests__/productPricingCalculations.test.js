@@ -17,6 +17,21 @@ describe('Product Pricing and Calculations Section', () => {
         AsyncStorage.getItem.mockImplementation(() => Promise.resolve(null));
     });
 
+    test('hides the price calculator when its floating launcher has not been used', () => {
+        const { queryByText, getByText } = render(
+            <PriceSection
+                productId="test_hidden_calculator"
+                formData={{ cost_price: '5000', sale_price: '10000', sale_price_cordoba: '12000' }}
+                handleChange={jest.fn()}
+                calculatorVisible={false}
+                onCloseCalculator={jest.fn()}
+            />
+        );
+
+        expect(getByText('Costo')).toBeTruthy();
+        expect(queryByText('CALCULADORA DE PRECIOS')).toBeNull();
+    });
+
     test('renders calculation section with base price, costs, margin, and final price', () => {
         const formData = {
             cost_price: '5000',
@@ -391,6 +406,49 @@ describe('Product Pricing and Calculations Section', () => {
         fireEvent.press(getByText('Socio (Córdoba)'));
         expect(getByText('PRECIO CON COMISIÓN')).toBeTruthy();
         expect(getByText('Aplicar Córdoba ($17.294)')).toBeTruthy();
+    });
+
+    test('uses fixed Cordoba services and includes labor in every product cost', async () => {
+        AsyncStorage.getItem.mockImplementation(async (key) => (
+            key === 'global_calc_params'
+                ? JSON.stringify({
+                    laborType: 'fijo',
+                    customLaborCost: '600',
+                    electricityCordoba: '0',
+                    internetCordoba: '0',
+                    unitsMonthlyCordoba: '1',
+                    transportCordoba: '517.31',
+                })
+                : null
+        ));
+
+        const { getByText } = render(
+            <PriceSection
+                productId="test_fixed_cordoba_services"
+                formData={{
+                    name: 'Cable rotativo tipo C',
+                    cost_price: '8134',
+                    sale_price: '0',
+                    sale_price_cordoba: '0',
+                    profit_margin_percent: '50',
+                    packaging_type: 'general',
+                    packaging_cost: '65',
+                    packaging_sticker_cost: '115',
+                }}
+                handleChange={jest.fn()}
+            />
+        );
+
+        fireEvent.press(getByText('Socio (Córdoba)'));
+        fireEvent.press(getByText('Ver desglose detallado de gastos'));
+
+        await waitFor(() => {
+            expect(getByText('$600,00')).toBeTruthy();
+            expect(getByText('$4.097,31')).toBeTruthy();
+            expect(getByText('🟠 Servicios Córdoba (fijo por producto):')).toBeTruthy();
+            expect(getByText('$2800.00')).toBeTruthy();
+            expect(getByText('Aplicar Córdoba ($20.793)')).toBeTruthy();
+        });
     });
 
     test('commission rates are editable separately from the product margin', async () => {

@@ -37,6 +37,7 @@ export default function AddProductScreen({ navigation, route }) {
     const isWizardMode = !!route.params?.importQueue;
 
     const [loading, setLoading] = useState(false);
+    const [showPriceCalculator, setShowPriceCalculator] = useState(false);
     const labelRef = useRef(null);
     const labelGridRef = useRef(null);
     const labelGrid2xRef = useRef(null);
@@ -1149,6 +1150,8 @@ export default function AddProductScreen({ navigation, route }) {
                 pendingPurchases={pendingPurchases}
                 queueItem={queueItem}
                 onShowPPPModal={() => setShowPPPModal(true)}
+                calculatorVisible={showPriceCalculator}
+                onCloseCalculator={() => setShowPriceCalculator(false)}
             />
 
             <StockSection formData={formData} handleChange={handleChange} />
@@ -1170,27 +1173,38 @@ export default function AddProductScreen({ navigation, route }) {
 
             </ScrollView>
 
-            {/* BOTÓN FLOTANTE DE GUARDAR/ACTUALIZAR */}
-            <TouchableOpacity
-                style={styles.saveButtonFloating}
-                onPress={saveProduct}
-                disabled={loading}
-            >
-                {loading ? (
-                    <ActivityIndicator color="#000" />
-                ) : (
-                    <>
-                        <MaterialCommunityIcons
-                            name={productToEdit ? 'content-save-edit' : 'plus-circle'}
-                            size={20}
-                            color="#000"
-                        />
-                        <Text style={styles.saveButtonText}>
-                            {productToEdit ? 'ACTUALIZAR PRODUCTO' : 'GUARDAR PRODUCTO IMPERIAL'}
-                        </Text>
-                    </>
-                )}
-            </TouchableOpacity>
+            <View style={styles.floatingFormActions}>
+                <TouchableOpacity
+                    style={styles.calculatorButtonFloating}
+                    onPress={() => setShowPriceCalculator(true)}
+                    accessibilityLabel="Abrir calculadora de precios"
+                    activeOpacity={0.85}
+                >
+                    <MaterialCommunityIcons name="calculator-variant" size={20} color="#d4af37" />
+                    <Text style={styles.calculatorButtonFloatingText}>CALCULADORA</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={styles.saveButtonFloating}
+                    onPress={saveProduct}
+                    disabled={loading}
+                    activeOpacity={0.85}
+                >
+                    {loading ? (
+                        <ActivityIndicator color="#000" />
+                    ) : (
+                        <>
+                            <MaterialCommunityIcons
+                                name={productToEdit ? 'content-save-edit' : 'plus-circle'}
+                                size={20}
+                                color="#000"
+                            />
+                            <Text style={styles.saveButtonText} numberOfLines={1}>
+                                {productToEdit ? 'ACTUALIZAR PRODUCTO' : 'GUARDAR PRODUCTO'}
+                            </Text>
+                        </>
+                    )}
+                </TouchableOpacity>
+            </View>
 
             {/* Modal Imperial de Foto de Producto */}
             <Modal
@@ -1914,15 +1928,46 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         elevation: 10,
     },
-    saveButtonFloating: {
+    floatingFormActions: {
         position: 'absolute',
-        bottom: 20,
+        bottom: 16,
         left: 16,
         right: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        zIndex: 100,
+    },
+    calculatorButtonFloating: {
+        minHeight: 58,
+        minWidth: 132,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingHorizontal: 14,
+        borderRadius: 16,
+        backgroundColor: '#17140a',
+        borderWidth: 1,
+        borderColor: '#d4af37',
+        shadowColor: '#d4af37',
+        shadowOpacity: 0.35,
+        shadowOffset: { width: 0, height: -3 },
+        elevation: 18,
+    },
+    calculatorButtonFloatingText: {
+        color: '#d4af37',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 0.4,
+    },
+    saveButtonFloating: {
+        flex: 1,
+        minHeight: 58,
         borderRadius: 16,
         backgroundColor: '#d4af37',
-        paddingVertical: 15,
-        paddingHorizontal: 24,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1931,9 +1976,8 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.5,
         shadowOffset: { width: 0, height: -4 },
         elevation: 20,
-        zIndex: 100,
     },
-    saveButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+    saveButtonText: { color: '#000', fontSize: 14, fontWeight: '900', letterSpacing: 0.6, flexShrink: 1 },
 
     // Image Picker Styles
     imagePicker: {
