@@ -2,7 +2,15 @@ import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { PriceSection, OperativeSection } from '../components/ProductFormSections';
 import { useAuthStore } from '../store/useAuthStore';
+import { GlobalDataService } from '../services/GlobalDataService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+jest.mock('../services/GlobalDataService', () => ({
+    GlobalDataService: {
+        loadSettings: jest.fn(() => Promise.resolve({})),
+        saveSettings: jest.fn(() => Promise.resolve()),
+    },
+}));
 
 // Mock AsyncStorage
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -15,6 +23,8 @@ describe('Product Pricing and Calculations Section', () => {
     beforeEach(() => {
         useAuthStore.setState({ userRole: 'admin' });
         AsyncStorage.getItem.mockImplementation(() => Promise.resolve(null));
+        GlobalDataService.loadSettings.mockResolvedValue({});
+        GlobalDataService.saveSettings.mockResolvedValue();
     });
 
     test('hides the price calculator when its floating launcher has not been used', () => {
@@ -496,6 +506,46 @@ describe('Product Pricing and Calculations Section', () => {
             'global_calc_params',
             expect.stringContaining('"adminCommissionPercent":"50"')
         );
+        await waitFor(() => {
+            expect(GlobalDataService.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+                global_calc_params: expect.stringContaining('"adminCommissionPercent":"50"')
+            }));
+        });
+    });
+
+    test('admin and partner use the same shared commission rate for Cordoba pricing', async () => {
+        GlobalDataService.loadSettings.mockResolvedValue({
+            global_calc_params: JSON.stringify({
+                laborType: 'fijo',
+                customLaborCost: '0',
+                suggestedMargin: '50',
+                partnerCommissionPercent: '60',
+            }),
+        });
+        const formData = {
+            cost_price: '10000',
+            sale_price: '0',
+            sale_price_cordoba: '0',
+            profit_margin_percent: '50',
+            packaging_type: 'none',
+        };
+
+        const adminView = render(
+            <PriceSection productId="shared-pricing-test" formData={formData} handleChange={jest.fn()} />
+        );
+        await waitFor(() => {
+            expect(adminView.getByText('Aplicar Córdoba ($23.040)')).toBeTruthy();
+        });
+        fireEvent.press(adminView.getByText('Socio (Córdoba)'));
+        expect(adminView.getByText('Aplicar Córdoba ($23.040)')).toBeTruthy();
+
+        useAuthStore.setState({ userRole: 'seller' });
+        const partnerView = render(
+            <PriceSection productId="shared-pricing-test" formData={formData} handleChange={jest.fn()} />
+        );
+        await waitFor(() => {
+            expect(partnerView.getByText('Aplicar Córdoba ($23.040)')).toBeTruthy();
+        });
     });
 
     test('PriceSection does not charge stickers when packaging is disabled', async () => {

@@ -132,6 +132,36 @@ export const GlobalDataService = {
     getPromotions: () => memoryCache.promotions || [],
     getSetting: (key) => memoryCache.settings[key],
     getAllSettings: () => memoryCache.settings,
+    loadSettings: async (keys) => {
+        const { data, error } = await supabase
+            .from('settings')
+            .select('key, value')
+            .in('key', keys);
+        if (error) throw error;
+
+        const settings = {};
+        (data || []).forEach(setting => {
+            settings[setting.key] = setting.value;
+            memoryCache.settings[setting.key] = setting.value;
+        });
+        if (data?.length) await LocalDbService.saveItems('settings', data);
+        return settings;
+    },
+    saveSettings: async (values) => {
+        const settings = Object.entries(values).map(([key, value]) => ({
+            key,
+            value: String(value)
+        }));
+        const { error } = await supabase
+            .from('settings')
+            .upsert(settings, { onConflict: 'key' });
+        if (error) throw error;
+
+        settings.forEach(setting => {
+            memoryCache.settings[setting.key] = setting.value;
+        });
+        await LocalDbService.saveItems('settings', settings);
+    },
 
     // Manual Refresh
     refreshTable: async (table) => {
@@ -146,4 +176,3 @@ export const GlobalDataService = {
         }
     }
 };
-

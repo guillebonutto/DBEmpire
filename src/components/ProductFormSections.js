@@ -4,6 +4,9 @@ import { Image as ExpoImage } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuthStore } from '../store/useAuthStore';
+import { GlobalDataService } from '../services/GlobalDataService';
+
+let calculatorConfigSaveQueue = Promise.resolve();
 
 /**
  * SECCIÓN: IDENTIDAD DEL PRODUCTO
@@ -223,10 +226,47 @@ export const PriceSection = ({
         const loadConfig = async () => {
             try {
                 const key = `price_calc_params_${productId || 'new'}`;
-                let data = await AsyncStorage.getItem(key);
-                if (!data) {
-                    data = await AsyncStorage.getItem('global_calc_params');
+                let remoteConfig = {};
+                let remoteLoadSucceeded = false;
+                try {
+                    remoteConfig = await GlobalDataService.loadSettings([key, 'global_calc_params']);
+                    remoteLoadSucceeded = true;
+                } catch (error) {
+                    console.error('Error loading shared calculator settings:', error);
                 }
+                const [localProductConfig, localGlobalConfig] = await Promise.all([
+                    AsyncStorage.getItem(key),
+                    AsyncStorage.getItem('global_calc_params')
+                ]);
+                const remoteProductConfig = remoteConfig[key];
+                const configData = remoteProductConfig
+                    || (isCurrentAdmin && localProductConfig)
+                    || remoteConfig.global_calc_params
+                    || localProductConfig
+                    || localGlobalConfig;
+
+                if (isCurrentAdmin && remoteLoadSucceeded) {
+                    const settingsToMigrate = {};
+                    if (!remoteProductConfig && localProductConfig) {
+                        settingsToMigrate[key] = localProductConfig;
+                    }
+                    if (!remoteConfig.global_calc_params && localGlobalConfig) {
+                        settingsToMigrate.global_calc_params = localGlobalConfig;
+                    }
+                    if (Object.keys(settingsToMigrate).length > 0) {
+                        try {
+                            await GlobalDataService.saveSettings(settingsToMigrate);
+                        } catch (error) {
+                            console.error('Error syncing existing calculator settings:', error);
+                        }
+                    }
+                }
+
+                if (configData) {
+                    await AsyncStorage.setItem(key, configData);
+                    await AsyncStorage.setItem('global_calc_params', configData);
+                }
+                const data = configData;
                 if (data) {
                     const config = JSON.parse(data);
                     if (config.laborType) {
@@ -259,7 +299,7 @@ export const PriceSection = ({
             }
         };
         loadConfig();
-    }, [productId]);
+    }, [productId, isCurrentAdmin]);
 
     const saveConfig = async (updatedFields) => {
         try {
@@ -283,10 +323,18 @@ export const PriceSection = ({
                 transportCordoba,
                 ...updatedFields
             };
-            await AsyncStorage.setItem(key, JSON.stringify(currentConfig));
-            await AsyncStorage.setItem('global_calc_params', JSON.stringify(currentConfig));
+            const serializedConfig = JSON.stringify(currentConfig);
+            await AsyncStorage.setItem(key, serializedConfig);
+            await AsyncStorage.setItem('global_calc_params', serializedConfig);
+            calculatorConfigSaveQueue = calculatorConfigSaveQueue
+                .catch(() => {})
+                .then(() => GlobalDataService.saveSettings({
+                    [key]: serializedConfig,
+                    global_calc_params: serializedConfig
+                }));
+            await calculatorConfigSaveQueue;
         } catch (e) {
-            console.warn('Error saving calculator config:', e);
+            console.error('Error saving shared calculator settings:', e);
         }
     };
 
