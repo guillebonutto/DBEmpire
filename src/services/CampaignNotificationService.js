@@ -38,6 +38,9 @@ const getSeasonalEvents = (year) => [
     { id: 'christmas', name: 'Navidad 🎄', month: 11, day: 25, isFixed: true }
 ];
 
+const MAX_CAMPAIGN_NOTIFICATIONS = 40;
+let campaignSchedulePromise = null;
+
 const calculateEventDetails = (event) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -94,7 +97,17 @@ export const CampaignNotificationService = {
     },
 
     // Clean previous scheduled notifications and schedule new ones autonomously
-    scheduleCampaignReminders: async () => {
+    scheduleCampaignReminders: () => {
+        if (campaignSchedulePromise) return campaignSchedulePromise;
+
+        campaignSchedulePromise = scheduleCampaignReminders().finally(() => {
+            campaignSchedulePromise = null;
+        });
+        return campaignSchedulePromise;
+    }
+};
+
+async function scheduleCampaignReminders() {
         if (Platform.OS === 'web') return;
 
         try {
@@ -104,18 +117,31 @@ export const CampaignNotificationService = {
                 return;
             }
 
-            // Cancel previously scheduled campaign notifications
+            // Cancel stored IDs and recover campaign reminders left behind by a partial run.
             const savedIdsJson = await AsyncStorage.getItem('campaign_notification_ids');
-            if (savedIdsJson) {
-                const savedIds = JSON.parse(savedIdsJson);
-                for (const id of savedIds) {
-                    try {
-                        await Notifications.cancelScheduledNotificationAsync(id);
-                    } catch (e) {
-                        // Ignore if it was already triggered or does not exist
-                    }
+            const savedIds = savedIdsJson ? JSON.parse(savedIdsJson) : [];
+            const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
+            const campaignNotificationIds = scheduledNotifications
+                .filter(({ content }) => (
+                    content?.data?.source === 'campaign-reminder'
+                    || content?.data?.screen === 'CampaignPlanner'
+                    || content?.title?.startsWith('📅 Planificar Campaña:')
+                    || content?.title?.startsWith('⚠️ Campaña Urgente:')
+                ))
+                .map(({ identifier }) => identifier);
+            const campaignNotificationIdSet = new Set(campaignNotificationIds);
+            const unrelatedNotificationCount = scheduledNotifications
+                .filter(({ identifier }) => !campaignNotificationIdSet.has(identifier))
+                .length;
+            const idsToCancel = new Set([...savedIds, ...campaignNotificationIds]);
+            for (const id of idsToCancel) {
+                try {
+                    await Notifications.cancelScheduledNotificationAsync(id);
+                } catch (error) {
+                    console.warn(`[CampaignNotificationService] Could not cancel old campaign notification ${id}:`, error);
                 }
             }
+            await AsyncStorage.setItem('campaign_notification_ids', JSON.stringify([]));
 
             // Load Custom Events
             let customEvents = [];
@@ -139,9 +165,9 @@ export const CampaignNotificationService = {
 
             const allEvents = [...baseCalculated, ...customCalculated];
 
-            const newNotificationIds = [];
             const today = new Date();
             today.setHours(0, 0, 0, 0);
+            const notificationCandidates = [];
 
             for (const event of allEvents) {
                 const targetDate = new Date(event.date);
@@ -152,18 +178,11 @@ export const CampaignNotificationService = {
                 date30DaysPrior.setDate(date30DaysPrior.getDate() - 30);
 
                 if (date30DaysPrior > today) {
-                    const id30 = await Notifications.scheduleNotificationAsync({
-                        content: {
-                            title: `📅 Planificar Campaña: ${event.name}`,
-                            body: `Faltan 30 días para el evento. Ingresá a la app y usá la IA para definir tus promociones y stock.`,
-                            data: { screen: 'CampaignPlanner' },
-                        },
-                        trigger: {
-                            type: Notifications.SchedulableTriggerInputTypes.DATE,
-                            date: date30DaysPrior,
-                        },
+                    notificationCandidates.push({
+                        title: `📅 Planificar Campaña: ${event.name}`,
+                        body: 'Faltan 30 días para el evento. Ingresá a la app y usá la IA para definir tus promociones y stock.',
+                        date: date30DaysPrior,
                     });
-                    newNotificationIds.push(id30);
                 }
 
                 // Alert 15 days before
@@ -171,26 +190,37 @@ export const CampaignNotificationService = {
                 date15DaysPrior.setDate(date15DaysPrior.getDate() - 15);
 
                 if (date15DaysPrior > today) {
-                    const id15 = await Notifications.scheduleNotificationAsync({
-                        content: {
-                            title: `⚠️ Campaña Urgente: ${event.name}`,
-                            body: `¡Faltan 15 días! Límite para subir tus promociones y combos al Imperio.`,
-                            data: { screen: 'CampaignPlanner' },
-                        },
-                        trigger: {
-                            type: Notifications.SchedulableTriggerInputTypes.DATE,
-                            date: date15DaysPrior,
-                        },
+                    notificationCandidates.push({
+                        title: `⚠️ Campaña Urgente: ${event.name}`,
+                        body: '¡Faltan 15 días! Límite para subir tus promociones y combos al Imperio.',
+                        date: date15DaysPrior,
                     });
-                    newNotificationIds.push(id15);
                 }
             }
 
-            // Save new IDs to storage
-            await AsyncStorage.setItem('campaign_notification_ids', JSON.stringify(newNotificationIds));
-            console.log(`[CampaignNotificationService] Autonomous scheduled ${newNotificationIds.length} campaign reminders.`);
+            notificationCandidates.sort((a, b) => a.date - b.date);
+            const newNotificationIds = [];
+            const alarmBudget = Platform.OS === 'android'
+                ? Math.max(0, 450 - unrelatedNotificationCount)
+                : MAX_CAMPAIGN_NOTIFICATIONS;
+            const notificationLimit = Math.min(MAX_CAMPAIGN_NOTIFICATIONS, alarmBudget);
+            for (const candidate of notificationCandidates.slice(0, notificationLimit)) {
+                const id = await Notifications.scheduleNotificationAsync({
+                    content: {
+                        title: candidate.title,
+                        body: candidate.body,
+                        data: { screen: 'CampaignPlanner', source: 'campaign-reminder' },
+                    },
+                    trigger: {
+                        type: Notifications.SchedulableTriggerInputTypes.DATE,
+                        date: candidate.date,
+                    },
+                });
+                newNotificationIds.push(id);
+                await AsyncStorage.setItem('campaign_notification_ids', JSON.stringify(newNotificationIds));
+            }
+            console.log(`[CampaignNotificationService] Scheduled ${newNotificationIds.length} campaign reminders (limit ${notificationLimit}).`);
         } catch (error) {
             console.error('[CampaignNotificationService] Error scheduling notifications:', error);
         }
-    }
-};
+}
